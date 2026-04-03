@@ -1,0 +1,35 @@
+resources:
+  - ansible-runner-deployment.yaml
+  - ansible-cluster-config.yaml
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: ansible-cluster-config
+      fieldPath: data.ANSIBLE_RUNNER_IMAGE
+    targets:
+      - select:
+          kind: Deployment
+          name: ansible-runner
+        fieldPaths:
+          - spec.template.spec.containers.[name=ansible-runner].image
+  - source:
+      kind: ConfigMap
+      name: ansible-cluster-config
+      fieldPath: data.TAILSCALE_DOMAIN
+    targets:
+      - select:
+          kind: Deployment
+          name: ansible-runner
+        fieldPaths:
+          - spec.template.spec.containers.[name=ansible-runner].env.[name=TAILSCALE_DOMAIN].value
+  - source:
+      kind: ConfigMap
+      name: ansible-cluster-config
+      fieldPath: data.TAILSCALE_CLUSTER_TAG
+    targets:
+      - select:
+          kind: Deployment
+          name: ansible-runner
+        fieldPaths:
+          - spec.template.spec.containers.[name=ansible-runner].env.[name=TAILSCALE_CLUSTER_TAG].value

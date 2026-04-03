@@ -1,0 +1,947 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# shellcheck disable=SC1091
+. "${script_dir}/diagnostics.sh"
+
+ANSIBLE_INVENTORY="${ANSIBLE_INVENTORY:-ansible/node-inventory.yml}"
+ANSIBLE_PLAYBOOK="${ANSIBLE_PLAYBOOK:-ansible/playbooks/healthcheck.yml}"
+BOOTSTRAP_BREAKGLASS="${BOOTSTRAP_BREAKGLASS:-1}"
+BOOTSTRAP_PHASE90_LOCAL_ONLY="${BOOTSTRAP_PHASE90_LOCAL_ONLY:-1}"
+BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
+OPENBAO_NAMESPACE="${OPENBAO_NAMESPACE:-openbao}"
+OPENBAO_POD="${OPENBAO_POD:-openbao-0}"
+phase90_log_root="${BOOTSTRAP_PHASE_LOG_DIR:-/var/log/bootstrap}"
+PHASE90_LOG_FILE="${PHASE90_LOG_FILE:-${phase90_log_root}/phase90.log}"
+BOOTSTRAP_DIAG_PHASE="phase90"
+BOOTSTRAP_DIAG_LOG_PATH="${PHASE90_LOG_FILE}"
+bootstrap_diag_init
+phase90_start_ts="$(date +%s)"
+phase90_last_error_cmd=""
+phase90_last_error_line=""
+
+if [[ -z "${BUNDLE_BOOTSTRAP_LOG_FILE:-}" ]]; then
+  mkdir -p "$(dirname "${PHASE90_LOG_FILE}")"
+  exec >>"${PHASE90_LOG_FILE}" 2>&1
+fi
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)"
+cd "${repo_root}"
+
+if [[ -z "${ANSIBLE_CONFIG:-}" && -f "${repo_root}/ansible/ansible.cfg" ]]; then
+  export ANSIBLE_CONFIG="${repo_root}/ansible/ansible.cfg"
+fi
+export ANSIBLE_ROLES_PATH="${repo_root}/ansible/automation-roles:${repo_root}/ansible/playbooks/roles:/etc/ansible/roles:/usr/share/ansible/roles"
+
+if [[ -z "${KUBECONFIG:-}" && -f /etc/rancher/rke2/rke2.yaml ]]; then
+  export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+fi
+
+kubectl_bin=""
+if command -v kubectl >/dev/null 2>&1; then
+  kubectl_bin="$(command -v kubectl)"
+elif [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
+  kubectl_bin="/var/lib/rancher/rke2/bin/kubectl"
+fi
+
+read_secret_file() {
+  local path="${1:-}"
+  if [[ -z "${path}" || ! -f "${path}" ]]; then
+    return 0
+  fi
+  tr -d '\r' <"${path}" | awk 'NF{line=$0} END{printf "%s", line}'
+}
+
+retry_cmd() {
+  local attempts="${1:-5}"
+  local sleep_seconds="${2:-5}"
+  shift 2
+  local i=1
+  while (( i <= attempts )); do
+    if "$@"; then
+      return 0
+    fi
+    if (( i == attempts )); then
+      return 1
+    fi
+    sleep "${sleep_seconds}"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+phase90_failures=0
+phase90_critical_failures=0
+
+phase90_exit_trap() {
+  local rc=$?
+  local end_ts duration
+  end_ts="$(date +%s)"
+  duration="$((end_ts - phase90_start_ts))"
+  if [[ "${rc}" -eq 0 ]]; then
+    bootstrap_diag_record \
+      "phase=phase90" \
+      "step=phase90" \
+      "component=phase90" \
+      "operation=run-complete" \
+      "severity=info" \
+      "exit_code=0" \
+      "duration_seconds=${duration}" \
+      "summary=phase90 complete" \
+      "log_path=${PHASE90_LOG_FILE}"
+  else
+    bootstrap_diag_record \
+      "phase=phase90" \
+      "step=phase90" \
+      "component=phase90" \
+      "operation=run-failed" \
+      "severity=error" \
+      "exit_code=${rc}" \
+      "duration_seconds=${duration}" \
+      "failure_kind=$(bootstrap_diag_classify_failure_kind "${phase90_last_error_cmd}")" \
+      "summary=phase90 failed at line ${phase90_last_error_line:-unknown}: ${phase90_last_error_cmd:-unknown}" \
+      "log_path=${PHASE90_LOG_FILE}"
+  fi
+  exit "${rc}"
+}
+trap 'phase90_exit_trap' EXIT
+trap 'phase90_last_error_line="${BASH_LINENO[0]:-unknown}"; phase90_last_error_cmd="${BASH_COMMAND:-unknown}"' ERR
+
+bootstrap_diag_record \
+  "phase=phase90" \
+  "step=phase90" \
+  "component=phase90" \
+  "operation=run-start" \
+  "severity=info" \
+  "summary=phase90 starting" \
+  "log_path=${PHASE90_LOG_FILE}"
+
+run_phase90_step() {
+  local label="${1:-}"
+  local severity="${2:-critical}"
+  shift 2
+
+  echo "[phase90] step start: ${label}"
+
+  set +e
+  "$@"
+  local rc=$?
+  set -e
+
+  if (( rc == 0 )); then
+    echo "[phase90] step ok: ${label}"
+    return 0
+  fi
+
+  echo "[phase90] step failed: ${label} (rc=${rc})" >&2
+  phase90_failures=$((phase90_failures + 1))
+  if [[ "${severity}" == "critical" ]]; then
+    phase90_critical_failures=$((phase90_critical_failures + 1))
+  fi
+  return 0
+}
+
+read_openbao_platform_field() {
+  local field="${1:-}"
+  local token="${2:-}"
+  if [[ -z "${field}" || -z "${token}" || -z "${kubectl_bin}" ]]; then
+    return 0
+  fi
+  "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${token}" \
+    bao kv get -field="${field}" secret/bootstrap/platform 2>/dev/null | tr -d '\r\n' || true
+}
+
+read_k8s_secret_key() {
+  local namespace="${1:-}"
+  local secret_name="${2:-}"
+  local key="${3:-}"
+  if [[ -z "${kubectl_bin}" || -z "${namespace}" || -z "${secret_name}" || -z "${key}" ]]; then
+    return 0
+  fi
+  "${kubectl_bin}" -n "${namespace}" get secret "${secret_name}" -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null || true
+}
+
+read_phase90_bootstrap_field() {
+  local field="${1:-}"
+  local openbao_token="${2:-}"
+  local openbao_value=""
+  local backup_value=""
+  if [[ -n "${openbao_token}" ]]; then
+    openbao_value="$(read_openbao_platform_field "${field}" "${openbao_token}")"
+    if [[ -n "${openbao_value}" ]]; then
+      printf '%s' "${openbao_value}"
+      return 0
+    fi
+  fi
+  backup_value="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/${field}")"
+  if [[ -n "${backup_value}" ]]; then
+    printf '%s' "${backup_value}"
+  fi
+}
+
+write_phase90_bootstrap_field() {
+  local field="${1:-}"
+  local value="${2:-}"
+  local openbao_token="${3:-}"
+
+  if [[ -z "${field}" ]]; then
+    return 0
+  fi
+  if [[ -n "${BOOTSTRAP_SECRET_DIR:-}" && -d "${BOOTSTRAP_SECRET_DIR}" ]]; then
+    printf '%s\n' "${value}" > "${BOOTSTRAP_SECRET_DIR}/${field}"
+    chmod 0600 "${BOOTSTRAP_SECRET_DIR}/${field}" 2>/dev/null || true
+  fi
+  if [[ -n "${openbao_token}" ]]; then
+    "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+      env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
+      bao kv patch secret/bootstrap/platform "${field}=${value}" >/dev/null 2>&1 || true
+  fi
+}
+
+log_widget_field_phase90() {
+  local field="${1:-}"
+  local status="${2:-}"
+  local detail="${3:-}"
+  if [[ -n "${detail}" ]]; then
+    echo "[phase90] homepage field ${field}: ${status} (${detail})"
+  else
+    echo "[phase90] homepage field ${field}: ${status}"
+  fi
+}
+
+persist_widget_field_phase90() {
+  local field="${1:-}"
+  local value="${2:-}"
+  local openbao_token="${3:-}"
+  if [[ -z "${field}" || -z "${value}" ]]; then
+    return 0
+  fi
+  write_phase90_bootstrap_field "${field}" "${value}" "${openbao_token}"
+}
+
+build_homepage_widget_secret_manifest_phase90() {
+  python3 - <<'PY' "$@"
+import json
+import sys
+
+pairs = [arg.split("=", 1) for arg in sys.argv[1:] if "=" in arg]
+string_data = {k: v for k, v in pairs if v}
+doc = {
+    "apiVersion": "v1",
+    "kind": "Secret",
+    "metadata": {"name": "homepage-widget-secrets", "namespace": "homepage"},
+    "type": "Opaque",
+    "stringData": string_data,
+}
+print(json.dumps(doc), end="")
+PY
+}
+
+service_cluster_ip_phase90() {
+  local namespace="${1:-}"
+  local service_name="${2:-}"
+  local cluster_ip=""
+  local endpoint_ip=""
+  if [[ -z "${kubectl_bin}" || -z "${namespace}" || -z "${service_name}" ]]; then
+    return 0
+  fi
+  cluster_ip="$("${kubectl_bin}" -n "${namespace}" get svc "${service_name}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  if [[ -n "${cluster_ip}" && "${cluster_ip}" != "None" ]]; then
+    printf '%s' "${cluster_ip}"
+    return 0
+  fi
+  endpoint_ip="$("${kubectl_bin}" -n "${namespace}" get endpoints "${service_name}" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
+  printf '%s' "${endpoint_ip}"
+}
+
+validate_argocd_widget_key_phase90() {
+  local token="${1:-}"
+  local service_host=""
+  local status=""
+
+  if [[ -z "${token}" ]]; then
+    return 1
+  fi
+  service_host="$(service_cluster_ip_phase90 argocd argocd-server)"
+  if [[ -z "${service_host}" ]]; then
+    return 1
+  fi
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+      -H "Authorization: Bearer ${token}" \
+      "http://${service_host}:80/api/v1/applications" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+validate_grafana_admin_password_phase90() {
+  local password="${1:-}"
+  local service_host=""
+  local status=""
+
+  if [[ -z "${password}" ]]; then
+    return 1
+  fi
+  service_host="$(service_cluster_ip_phase90 observability grafana)"
+  if [[ -z "${service_host}" ]]; then
+    return 1
+  fi
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+      -u "admin:${password}" \
+      "http://${service_host}:80/api/admin/stats" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+validate_gitea_widget_auth_phase90() {
+  local token="${1:-}"
+  local service_host=""
+  local status=""
+
+  if [[ -z "${token}" ]]; then
+    return 1
+  fi
+  service_host="$(service_cluster_ip_phase90 gitea gitea-http)"
+  if [[ -z "${service_host}" ]]; then
+    return 1
+  fi
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+      -H "Authorization: token ${token}" \
+      "http://${service_host}:3000/api/v1/user" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+validate_authentik_widget_key_phase90() {
+  local token="${1:-}"
+  local service_host=""
+  local status=""
+
+  if [[ -z "${token}" ]]; then
+    return 1
+  fi
+  service_host="$(service_cluster_ip_phase90 authentik authentik-server)"
+  if [[ -z "${service_host}" ]]; then
+    return 1
+  fi
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+      -H "Authorization: Bearer ${token}" \
+      "http://${service_host}:80/api/v3/core/users/me/" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+validate_headlamp_admin_token_phase90() {
+  local token="${1:-}"
+  if [[ -z "${token}" || -z "${kubectl_bin}" || -z "${KUBECONFIG:-}" ]]; then
+    return 1
+  fi
+  "${kubectl_bin}" --token="${token}" auth can-i get pods --all-namespaces >/dev/null 2>&1
+}
+
+discover_tailscale_device_id_phase90() {
+  if ! command -v tailscale >/dev/null 2>&1; then
+    return 0
+  fi
+  tailscale status --json 2>/dev/null | python3 -c 'import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("", end="")
+    raise SystemExit(0)
+self_data = data.get("Self") or {}
+  print((self_data.get("ID") or "").strip(), end="")'
+}
+
+secret_data_json_phase90() {
+  if [[ -z "${kubectl_bin}" ]]; then
+    return 0
+  fi
+  "${kubectl_bin}" -n homepage get secret homepage-widget-secrets -o json 2>/dev/null | python3 -c 'import json, sys
+try:
+    print(json.dumps(json.load(sys.stdin).get("data", {}), sort_keys=True))
+except Exception:
+    print("")'
+}
+
+mint_argocd_widget_key_phase90() {
+  local admin_password=""
+  local token=""
+  local openbao_token="${1:-}"
+  local readonly_capability=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    return 1
+  fi
+
+  admin_password="${HOMEPAGE_ARGOCD_WIDGET_KEY_PASSWORD:-${ARGOCD_ADMIN_PASSWORD:-}}"
+  if [[ -z "${admin_password}" ]]; then
+    admin_password="$(read_phase90_bootstrap_field argocd_admin_password "${openbao_token}")"
+  fi
+  if [[ -z "${admin_password}" ]]; then
+    echo "[phase90] Argo CD widget token mint skipped: admin password unavailable" >&2
+    return 1
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n argocd rollout status deploy/argocd-server --timeout=30s >/dev/null; then
+    echo "[phase90] Argo CD widget token mint failed: argocd-server not ready in time" >&2
+    return 1
+  fi
+
+  readonly_capability="$("${kubectl_bin}" -n argocd get cm argocd-cm -o jsonpath='{.data.accounts\.readonly}' 2>/dev/null || true)"
+  if [[ "${readonly_capability}" != *"apiKey"* ]]; then
+    echo "[phase90] Argo CD widget token mint failed: readonly apiKey account not configured yet" >&2
+    return 1
+  fi
+
+  token="$(
+    "${kubectl_bin}" -n argocd exec -i deploy/argocd-server -- env \
+      ARGOCD_WIDGET_ADMIN_PASSWORD="${admin_password}" \
+      /bin/sh -lc '
+        argocd login 127.0.0.1:8080 --plaintext --username admin --password "$ARGOCD_WIDGET_ADMIN_PASSWORD" >/dev/null 2>&1 &&
+        argocd account generate-token --account readonly
+      ' 2>/dev/null | tr -d '\r\n'
+  )"
+
+  if [[ -z "${token}" ]]; then
+    echo "[phase90] Argo CD widget token mint failed: unable to generate readonly account token" >&2
+    return 1
+  fi
+
+  if ! validate_argocd_widget_key_phase90 "${token}"; then
+    echo "[phase90] Argo CD widget token mint failed: minted token did not pass API validation" >&2
+    return 1
+  fi
+
+  printf '%s' "${token}"
+}
+
+mint_authentik_widget_key_phase90() {
+  local openbao_token="${1:-}"
+  local admin_username=""
+  local token=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    return 1
+  fi
+
+  admin_username="$(read_phase90_bootstrap_field authentik_admin_username "${openbao_token}")"
+  if [[ -z "${admin_username}" ]]; then
+    admin_username="akadmin"
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n authentik rollout status deploy/authentik-server --timeout=30s >/dev/null; then
+    echo "[phase90] Authentik widget token mint failed: authentik-server not ready in time" >&2
+    return 1
+  fi
+
+  token="$(
+    "${kubectl_bin}" exec -i -n authentik deploy/authentik-server -- env \
+      HOMEPAGE_AUTHENTIK_WIDGET_USERNAME="${admin_username}" \
+      /ak-root/.venv/bin/python -c \
+      'import os; os.environ.setdefault("DJANGO_SETTINGS_MODULE","authentik.root.settings"); import django; django.setup(); from authentik.core.models import Token, User; username=os.environ["HOMEPAGE_AUTHENTIK_WIDGET_USERNAME"]; user=User.objects.get(username=username); token=Token.objects.filter(identifier="homepage-widget", user=user).first(); token = token or Token(identifier="homepage-widget", user=user, intent="api", description="Homepage widget token"); token.expiring=False; token.expires=None; token.save(); print(token.key, end="")' \
+      2>/dev/null | tr -d "\r\n"
+  )"
+
+  if [[ -z "${token}" ]]; then
+    echo "[phase90] Authentik widget token mint failed: unable to generate API token" >&2
+    return 1
+  fi
+  if ! validate_authentik_widget_key_phase90 "${token}"; then
+    echo "[phase90] Authentik widget token mint failed: minted token did not pass API validation" >&2
+    return 1
+  fi
+
+  printf '%s' "${token}"
+}
+
+mint_gitea_widget_auth_phase90() {
+  local openbao_token="${1:-}"
+  local admin_username=""
+  local token=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    return 1
+  fi
+
+  admin_username="$(read_phase90_bootstrap_field gitea_admin_username "${openbao_token}")"
+  if [[ -z "${admin_username}" ]]; then
+    admin_username="gitea-admin"
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n gitea rollout status deploy/gitea --timeout=30s >/dev/null; then
+    echo "[phase90] Gitea widget token mint failed: gitea deployment not ready in time" >&2
+    return 1
+  fi
+
+  token="$("${kubectl_bin}" -n gitea exec deploy/gitea -c gitea -- sh -lc '
+    gitea admin user generate-access-token \
+      --username "'"${admin_username}"'" \
+      --token-name "homepage-widget" \
+      --scopes "all" \
+      --raw 2>/dev/null \
+    || gitea admin user generate-access-token \
+      --username "'"${admin_username}"'" \
+      --token-name "homepage-widget-$(date +%s)" \
+      --scopes "all" \
+      --raw 2>/dev/null
+  ' 2>/dev/null | tr -d '\r\n' || true)"
+
+  if [[ -z "${token}" ]]; then
+    echo "[phase90] Gitea widget token mint failed: unable to generate API token" >&2
+    return 1
+  fi
+  if ! validate_gitea_widget_auth_phase90 "${token}"; then
+    echo "[phase90] Gitea widget token mint failed: minted token did not pass API validation" >&2
+    return 1
+  fi
+
+  printf '%s' "${token}"
+}
+
+resolve_grafana_admin_password_phase90() {
+  local openbao_token="${1:-}"
+  local password=""
+  password="${HOMEPAGE_GRAFANA_ADMIN_PASSWORD:-}"
+  if [[ -z "${password}" ]]; then
+    password="$(read_phase90_bootstrap_field grafana_admin_password "${openbao_token}")"
+  fi
+  printf '%s' "${password}"
+}
+
+ensure_grafana_admin_password_phase90() {
+  local openbao_token="${1:-}"
+  local desired_password=""
+  local patch_json=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase90] kubectl not available; cannot reconcile Grafana admin password" >&2
+    return 1
+  fi
+
+  desired_password="$(resolve_grafana_admin_password_phase90 "${openbao_token}")"
+  if [[ -z "${desired_password}" ]]; then
+    echo "[phase90] Grafana admin password unavailable from bootstrap backup/OpenBao" >&2
+    return 1
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n observability rollout status deploy/grafana --timeout=30s >/dev/null; then
+    echo "[phase90] Grafana deployment did not become ready in time" >&2
+    return 1
+  fi
+
+  "${kubectl_bin}" -n observability exec deploy/grafana -- env \
+    TARGET_PW="${desired_password}" \
+    /bin/sh -lc '/usr/share/grafana/bin/grafana cli --homepath /usr/share/grafana admin reset-admin-password "$TARGET_PW"' >/dev/null
+
+  patch_json="$(
+    python3 - <<'PY' "${desired_password}"
+import json
+import sys
+print(json.dumps({"stringData": {"admin-password": sys.argv[1], "admin-user": "admin"}}))
+PY
+  )"
+  "${kubectl_bin}" -n observability patch secret grafana --type merge -p "${patch_json}" >/dev/null
+
+  if ! validate_grafana_admin_password_phase90 "${desired_password}"; then
+    echo "[phase90] Grafana admin password reconcile failed API validation" >&2
+    return 1
+  fi
+
+  echo "[phase90] reconciled Grafana admin password to bootstrap/OpenBao value"
+}
+
+ensure_headlamp_admin_token_phase90() {
+  local openbao_token="${1:-}"
+  local sa_name="headlamp"
+  local secret_name="headlamp-admin-token"
+  local token=""
+  local existing_secret_token=""
+  local attempt=0
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase90] kubectl not available; cannot reconcile Headlamp admin token" >&2
+    return 1
+  fi
+
+  token="$(read_phase90_bootstrap_field headlamp_admin_token "${openbao_token}")"
+  if validate_headlamp_admin_token_phase90 "${token}"; then
+    write_phase90_bootstrap_field headlamp_admin_username "${sa_name}" "${openbao_token}"
+    write_phase90_bootstrap_field headlamp_admin_token "${token}" "${openbao_token}"
+    echo "[phase90] reconciled Headlamp admin token from OpenBao/bootstrap backup"
+    return 0
+  fi
+
+  "${kubectl_bin}" create namespace headlamp --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
+  for attempt in $(seq 1 90); do
+    if "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+
+  if ! "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
+    echo "[phase90] Headlamp service account not ready in time" >&2
+    return 1
+  fi
+
+  existing_secret_token="$(read_k8s_secret_key headlamp "${secret_name}" token)"
+  if ! validate_headlamp_admin_token_phase90 "${existing_secret_token}"; then
+    cat <<EOF | "${kubectl_bin}" -n headlamp apply -f - >/dev/null
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${secret_name}
+  namespace: headlamp
+  annotations:
+    kubernetes.io/service-account.name: ${sa_name}
+type: kubernetes.io/service-account-token
+EOF
+  fi
+
+  for attempt in $(seq 1 45); do
+    token="$(read_k8s_secret_key headlamp "${secret_name}" token)"
+    if validate_headlamp_admin_token_phase90 "${token}"; then
+      write_phase90_bootstrap_field headlamp_admin_username "${sa_name}" "${openbao_token}"
+      write_phase90_bootstrap_field headlamp_admin_token "${token}" "${openbao_token}"
+      echo "[phase90] reconciled Headlamp admin token from live service-account token"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "[phase90] Headlamp admin token did not become valid in time" >&2
+  return 1
+}
+
+ensure_homepage_widget_secrets_phase90() {
+  local openbao_token=""
+  local argocd_widget_key=""
+  local authentik_widget_key=""
+  local gitea_widget_auth=""
+  local grafana_admin_password=""
+  local cloudflare_account_id=""
+  local cloudflare_tunnel_id=""
+  local cloudflare_api_auth=""
+  local tailscale_api_auth=""
+  local tailscale_device_id=""
+  local secret_before=""
+  local secret_after=""
+  local live_grafana_admin_password=""
+  local existing_argocd_widget_key=""
+  local existing_authentik_widget_key=""
+  local existing_gitea_widget_auth=""
+  local existing_grafana_admin_password=""
+  local existing_cloudflare_account_id=""
+  local existing_cloudflare_tunnel_id=""
+  local existing_cloudflare_api_auth=""
+  local existing_tailscale_api_auth=""
+  local existing_tailscale_device_id=""
+  local secret_manifest=""
+  local failure=0
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase90] kubectl not available; skipping Homepage widget reconcile" >&2
+    return 0
+  fi
+
+  if ! "${kubectl_bin}" get namespace homepage >/dev/null 2>&1; then
+    echo "[phase90] homepage namespace missing; skipping Homepage widget reconcile"
+    return 0
+  fi
+
+  if "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token >/dev/null 2>&1; then
+    openbao_token="$(
+      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token \
+        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true
+    )"
+  fi
+
+  existing_argocd_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_ARGOCD_WIDGET_KEY)"
+  existing_authentik_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_AUTHENTIK_WIDGET_KEY)"
+  existing_gitea_widget_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GITEA_WIDGET_AUTH)"
+  existing_grafana_admin_password="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GRAFANA_ADMIN_PASSWORD)"
+  existing_cloudflare_account_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_ACCOUNT_ID)"
+  existing_cloudflare_tunnel_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_TUNNEL_ID)"
+  existing_cloudflare_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_API_AUTH)"
+  existing_tailscale_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_API_AUTH)"
+  existing_tailscale_device_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_DEVICE_ID)"
+
+  argocd_widget_key="$(mint_argocd_widget_key_phase90 "${openbao_token}" || true)"
+  if [[ -n "${argocd_widget_key}" ]]; then
+    log_widget_field_phase90 homepage_argocd_widget_key minted "validated via Argo CD API"
+  else
+    argocd_widget_key="$(read_phase90_bootstrap_field homepage_argocd_widget_key "${openbao_token}")"
+    if validate_argocd_widget_key_phase90 "${argocd_widget_key}"; then
+      log_widget_field_phase90 homepage_argocd_widget_key reused "validated from backup/OpenBao"
+    elif validate_argocd_widget_key_phase90 "${existing_argocd_widget_key}"; then
+      argocd_widget_key="${existing_argocd_widget_key}"
+      log_widget_field_phase90 homepage_argocd_widget_key reused "validated from existing secret"
+    else
+      argocd_widget_key=""
+      log_widget_field_phase90 homepage_argocd_widget_key invalid "no validated token available"
+      failure=1
+    fi
+  fi
+
+  authentik_widget_key="$(mint_authentik_widget_key_phase90 "${openbao_token}" || true)"
+  if [[ -n "${authentik_widget_key}" ]]; then
+    log_widget_field_phase90 homepage_authentik_widget_key minted "validated via Authentik API"
+  else
+    authentik_widget_key="$(read_phase90_bootstrap_field homepage_authentik_widget_key "${openbao_token}")"
+    if validate_authentik_widget_key_phase90 "${authentik_widget_key}"; then
+      log_widget_field_phase90 homepage_authentik_widget_key reused "validated from backup/OpenBao"
+    elif validate_authentik_widget_key_phase90 "${existing_authentik_widget_key}"; then
+      authentik_widget_key="${existing_authentik_widget_key}"
+      log_widget_field_phase90 homepage_authentik_widget_key reused "validated from existing secret"
+    else
+      authentik_widget_key=""
+      log_widget_field_phase90 homepage_authentik_widget_key invalid "no validated token available"
+      failure=1
+    fi
+  fi
+
+  gitea_widget_auth="$(mint_gitea_widget_auth_phase90 "${openbao_token}" || true)"
+  if [[ -n "${gitea_widget_auth}" ]]; then
+    log_widget_field_phase90 homepage_gitea_widget_auth minted "validated via Gitea API"
+  else
+    gitea_widget_auth="$(read_phase90_bootstrap_field homepage_gitea_widget_auth "${openbao_token}")"
+    if validate_gitea_widget_auth_phase90 "${gitea_widget_auth}"; then
+      log_widget_field_phase90 homepage_gitea_widget_auth reused "validated from backup/OpenBao"
+    elif validate_gitea_widget_auth_phase90 "${existing_gitea_widget_auth}"; then
+      gitea_widget_auth="${existing_gitea_widget_auth}"
+      log_widget_field_phase90 homepage_gitea_widget_auth reused "validated from existing secret"
+    else
+      gitea_widget_auth=""
+      log_widget_field_phase90 homepage_gitea_widget_auth invalid "no validated token available"
+      failure=1
+    fi
+  fi
+
+  grafana_admin_password="$(resolve_grafana_admin_password_phase90 "${openbao_token}")"
+  live_grafana_admin_password="$(read_k8s_secret_key observability grafana admin-password)"
+  if [[ -n "${live_grafana_admin_password}" ]]; then
+    grafana_admin_password="${live_grafana_admin_password}"
+  fi
+  if validate_grafana_admin_password_phase90 "${grafana_admin_password}"; then
+    log_widget_field_phase90 grafana_admin_password reused "validated from live Grafana state"
+  elif validate_grafana_admin_password_phase90 "${existing_grafana_admin_password}"; then
+    grafana_admin_password="${existing_grafana_admin_password}"
+    log_widget_field_phase90 grafana_admin_password reused "validated from existing secret"
+  else
+    grafana_admin_password=""
+    log_widget_field_phase90 grafana_admin_password invalid "no validated password available"
+    failure=1
+  fi
+
+  cloudflare_account_id="${CLOUDFLARE_ACCOUNT_ID:-}"
+  if [[ -z "${cloudflare_account_id}" ]]; then
+    cloudflare_account_id="$(read_phase90_bootstrap_field cloudflare_account_id "${openbao_token}")"
+  fi
+  cloudflare_tunnel_id="${RANCHER_CLOUDFLARED_TUNNEL_ID:-}"
+  if [[ -z "${cloudflare_tunnel_id}" ]]; then
+    cloudflare_tunnel_id="$(read_phase90_bootstrap_field rancher_cloudflared_tunnel_id "${openbao_token}")"
+  fi
+  cloudflare_api_auth="${CLOUDFLARE_API_TOKEN:-}"
+  if [[ -z "${cloudflare_api_auth}" ]]; then
+    cloudflare_api_auth="$(read_phase90_bootstrap_field cloudflare_api_token "${openbao_token}")"
+  fi
+  if [[ -z "${cloudflare_account_id}" ]]; then
+    cloudflare_account_id="${existing_cloudflare_account_id}"
+  fi
+  if [[ -z "${cloudflare_tunnel_id}" ]]; then
+    cloudflare_tunnel_id="${existing_cloudflare_tunnel_id}"
+  fi
+  if [[ -z "${cloudflare_api_auth}" ]]; then
+    cloudflare_api_auth="${existing_cloudflare_api_auth}"
+  fi
+  if [[ -n "${cloudflare_account_id}" && -n "${cloudflare_tunnel_id}" && -n "${cloudflare_api_auth}" ]]; then
+    log_widget_field_phase90 cloudflare_widget_fields reused "stable operator-provided values present"
+  else
+    log_widget_field_phase90 cloudflare_widget_fields unavailable "keeping incomplete values out of secret/OpenBao"
+    cloudflare_account_id=""
+    cloudflare_tunnel_id=""
+    cloudflare_api_auth=""
+  fi
+
+  tailscale_api_auth="${HOMEPAGE_TAILSCALE_API_AUTH:-${TAILSCALE_USER_API_TOKEN:-}}"
+  if [[ -z "${tailscale_api_auth}" ]]; then
+    tailscale_api_auth="$(read_phase90_bootstrap_field homepage_tailscale_api_auth "${openbao_token}")"
+  fi
+  tailscale_device_id="${HOMEPAGE_TAILSCALE_DEVICE_ID:-}"
+  if [[ -z "${tailscale_device_id}" ]]; then
+    tailscale_device_id="$(read_phase90_bootstrap_field homepage_tailscale_device_id "${openbao_token}")"
+  fi
+  if [[ -z "${tailscale_api_auth}" ]]; then
+    tailscale_api_auth="${existing_tailscale_api_auth}"
+  fi
+  if [[ -z "${tailscale_device_id}" ]]; then
+    tailscale_device_id="${existing_tailscale_device_id}"
+  fi
+  if [[ -n "${tailscale_api_auth}" && -z "${tailscale_device_id}" ]]; then
+    tailscale_device_id="$(discover_tailscale_device_id_phase90)"
+  fi
+  if [[ -n "${tailscale_api_auth}" && -n "${tailscale_device_id}" ]]; then
+    log_widget_field_phase90 homepage_tailscale_device_id reused "tailscale API auth and device id available"
+  else
+    log_widget_field_phase90 homepage_tailscale_device_id unavailable "keeping incomplete values out of secret/OpenBao"
+    tailscale_api_auth=""
+    tailscale_device_id=""
+  fi
+
+  persist_widget_field_phase90 homepage_argocd_widget_key "${argocd_widget_key}" "${openbao_token}"
+  persist_widget_field_phase90 homepage_authentik_widget_key "${authentik_widget_key}" "${openbao_token}"
+  persist_widget_field_phase90 homepage_gitea_widget_auth "${gitea_widget_auth}" "${openbao_token}"
+  persist_widget_field_phase90 grafana_admin_password "${grafana_admin_password}" "${openbao_token}"
+  persist_widget_field_phase90 cloudflare_account_id "${cloudflare_account_id}" "${openbao_token}"
+  persist_widget_field_phase90 rancher_cloudflared_tunnel_id "${cloudflare_tunnel_id}" "${openbao_token}"
+  persist_widget_field_phase90 cloudflare_api_token "${cloudflare_api_auth}" "${openbao_token}"
+  persist_widget_field_phase90 homepage_tailscale_api_auth "${tailscale_api_auth}" "${openbao_token}"
+  persist_widget_field_phase90 homepage_tailscale_device_id "${tailscale_device_id}" "${openbao_token}"
+
+  secret_before="$(secret_data_json_phase90)"
+
+  secret_manifest="$(build_homepage_widget_secret_manifest_phase90 \
+    "HOMEPAGE_ARGOCD_WIDGET_KEY=${argocd_widget_key}" \
+    "HOMEPAGE_AUTHENTIK_WIDGET_KEY=${authentik_widget_key}" \
+    "HOMEPAGE_GITEA_WIDGET_AUTH=${gitea_widget_auth}" \
+    "HOMEPAGE_GRAFANA_ADMIN_PASSWORD=${grafana_admin_password}" \
+    "HOMEPAGE_CLOUDFLARE_ACCOUNT_ID=${cloudflare_account_id}" \
+    "HOMEPAGE_CLOUDFLARE_TUNNEL_ID=${cloudflare_tunnel_id}" \
+    "HOMEPAGE_CLOUDFLARE_API_AUTH=${cloudflare_api_auth}" \
+    "HOMEPAGE_TAILSCALE_API_AUTH=${tailscale_api_auth}" \
+    "HOMEPAGE_TAILSCALE_DEVICE_ID=${tailscale_device_id}")"
+  printf '%s\n' "${secret_manifest}" | "${kubectl_bin}" -n homepage apply -f - >/dev/null
+
+  secret_after="$(secret_data_json_phase90)"
+
+  if [[ "${secret_before}" != "${secret_after}" ]]; then
+    "${kubectl_bin}" -n homepage rollout restart deploy/homepage >/dev/null
+    retry_cmd 30 10 \
+      "${kubectl_bin}" -n homepage rollout status deploy/homepage --timeout=30s >/dev/null || true
+    echo "[phase90] restarted Homepage deployment to pick up refreshed widget secrets"
+  fi
+
+  if (( failure > 0 )); then
+    echo "[phase90] Homepage widget reconciliation failed validation for one or more critical fields" >&2
+    return 1
+  fi
+
+  echo "[phase90] reconciled Homepage widget secrets from validated live app state"
+}
+
+ensure_authentik_admin_password_phase90() {
+  local deployment_name="authentik-server"
+  local openbao_token=""
+  local admin_username=""
+  local admin_password=""
+  local attempt=0
+  local reconcile_output=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase90] kubectl not available; cannot reconcile Authentik admin password" >&2
+    return 1
+  fi
+
+  admin_username="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
+  admin_password="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_password")"
+
+  if "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token >/dev/null 2>&1; then
+    openbao_token="$(
+      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token \
+        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true
+    )"
+  fi
+
+  if [[ -z "${admin_username}" && -n "${openbao_token}" ]]; then
+    admin_username="$(read_openbao_platform_field authentik_admin_username "${openbao_token}")"
+  fi
+  if [[ -z "${admin_password}" && -n "${openbao_token}" ]]; then
+    admin_password="$(read_openbao_platform_field authentik_admin_password "${openbao_token}")"
+    if [[ -n "${admin_password}" ]]; then
+      echo "[phase90] restored Authentik admin password from OpenBao platform secret"
+    fi
+  fi
+
+  if [[ -z "${admin_username}" ]]; then
+    admin_username="akadmin"
+  fi
+  if [[ -z "${admin_password}" ]]; then
+    echo "[phase90] Authentik admin password missing from bootstrap backup and OpenBao" >&2
+    return 1
+  fi
+
+  echo "[phase90] waiting for deploy/${deployment_name} before applying final Authentik admin password"
+  for attempt in $(seq 1 60); do
+    if "${kubectl_bin}" -n authentik get deployment "${deployment_name}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 10
+  done
+  if ! "${kubectl_bin}" -n authentik get deployment "${deployment_name}" >/dev/null 2>&1; then
+    echo "[phase90] Authentik deployment ${deployment_name} was not created in time" >&2
+    return 1
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n authentik rollout status "deploy/${deployment_name}" --timeout=30s >/dev/null; then
+    echo "[phase90] Authentik deployment ${deployment_name} did not become ready in time" >&2
+    return 1
+  fi
+
+  echo "[phase90] applying final Authentik admin password for ${admin_username}"
+  reconcile_output="$(
+    AUTHENTIK_BOOTSTRAP_ADMIN_USERNAME="${admin_username}" \
+    AUTHENTIK_BOOTSTRAP_ADMIN_PASSWORD="${admin_password}" \
+    "${kubectl_bin}" exec -i -n authentik "deploy/${deployment_name}" -- env \
+      AUTHENTIK_BOOTSTRAP_ADMIN_USERNAME="${admin_username}" \
+      AUTHENTIK_BOOTSTRAP_ADMIN_PASSWORD="${admin_password}" \
+      /ak-root/.venv/bin/python /manage.py shell -c \
+      'import os; from authentik.core.models import User; username=os.environ["AUTHENTIK_BOOTSTRAP_ADMIN_USERNAME"]; password=os.environ["AUTHENTIK_BOOTSTRAP_ADMIN_PASSWORD"]; email=f"{username}@bootstrap.invalid"; user=User.objects.filter(username=username).first(); created=user is None; user=user or User.objects.create_superuser(username=username, email=email, password=password); user.set_password(password); user.is_active=True; user.save(); user.refresh_from_db(); assert user.check_password(password), f"password verification failed for {username}"; print(f"created_authentik_user_for {username}" if created else f"using_existing_authentik_user_for {username}"); print(f"reconciled_password_for {username}")' \
+      2>&1 || true
+  )"
+  printf '%s\n' "${reconcile_output}"
+  if [[ "${reconcile_output}" != *"reconciled_password_for ${admin_username}"* ]]; then
+    echo "[phase90] Authentik admin password reconcile did not emit success marker for ${admin_username}" >&2
+    return 1
+  fi
+  return 0
+}
+
+echo "[phase90] repo: ${repo_root}"
+echo "[phase90] running post-bootstrap healthcheck playbook"
+
+mode_raw="$(printf '%s' "${BOOTSTRAP_BREAKGLASS}" | tr '[:upper:]' '[:lower:]')"
+local_only_raw="$(printf '%s' "${BOOTSTRAP_PHASE90_LOCAL_ONLY}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${local_only_raw}" == "1" || "${local_only_raw}" == "true" || "${local_only_raw}" == "yes" || "${local_only_raw}" == "on" ]]; then
+  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}" -e break_glass=true
+elif [[ "${mode_raw}" == "1" || "${mode_raw}" == "true" || "${mode_raw}" == "yes" || "${mode_raw}" == "on" ]]; then
+  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}" -e break_glass=true
+else
+  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}"
+fi
+
+run_phase90_step "reconcile Authentik admin password" critical ensure_authentik_admin_password_phase90
+run_phase90_step "reconcile Grafana admin password" warning ensure_grafana_admin_password_phase90
+run_phase90_step "reconcile Headlamp admin token" critical ensure_headlamp_admin_token_phase90
+run_phase90_step "reconcile Homepage widget secrets" critical ensure_homepage_widget_secrets_phase90
+
+if (( phase90_failures > 0 )); then
+  echo "[phase90] completed with ${phase90_failures} failed step(s); critical=${phase90_critical_failures}" >&2
+  exit 1
+fi
+
+cat <<'INFO'
+
+Phase 90 complete (late live-state reconciliation).
+
+INFO

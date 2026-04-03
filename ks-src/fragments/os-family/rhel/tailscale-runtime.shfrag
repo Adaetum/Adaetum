@@ -1,0 +1,33 @@
+os_family_tailscale_ensure_installed() {
+  if command -v tailscale >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! retry_cmd "install dnf plugins" bootstrap_pkg_install dnf-plugins-core; then
+    return 1
+  fi
+  if ! dnf config-manager --add-repo https://pkgs.tailscale.com/stable/fedora/tailscale.repo; then
+    return 1
+  fi
+  if ! rpm --import https://pkgs.tailscale.com/stable/fedora/repo.gpg; then
+    return 1
+  fi
+  retry_cmd "install tailscale" dnf -y --enablerepo=tailscale-stable install tailscale
+}
+
+os_family_tailscale_service_name() {
+  printf 'tailscaled'
+}
+
+os_family_platform_os_tag() {
+  local os_id=""
+  local version_id=""
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release || true
+    os_id="${ID:-}"
+    version_id="${VERSION_ID:-}"
+  fi
+  if [ -n "${os_id}" ] && [ -n "${version_id}" ]; then
+    printf 'tag:%s%s' "${os_id}" "${version_id%%.*}"
+  fi
+}

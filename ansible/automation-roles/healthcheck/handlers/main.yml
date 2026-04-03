@@ -1,0 +1,5 @@
+---
+# Handlers for healthcheck
+- name: Healthcheck report written
+  ansible.builtin.debug:
+    msg: "Healthcheck report written to {{ healthcheck_report_path }}"

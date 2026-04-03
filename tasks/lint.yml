@@ -1,0 +1,42 @@
+version: "3"
+
+tasks:
+  yaml:
+    internal: true
+    desc: Validate YAML files parse cleanly
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -e
+        python3 - <<'PY'
+        import pathlib
+        import sys
+
+        try:
+          import yaml
+        except Exception as exc:
+          print("PyYAML is required for lint:yaml (pip install pyyaml).", file=sys.stderr)
+          raise
+
+        skip_parts = {".git", "dist", ".venv", ".tox", "node_modules"}
+        scanned = 0
+        failed = False
+
+        for path in pathlib.Path(".").rglob("*"):
+          if not path.is_file():
+            continue
+          if path.suffix not in {".yml", ".yaml"}:
+            continue
+          if any(part in skip_parts for part in path.parts):
+            continue
+          scanned += 1
+          try:
+            yaml.safe_load(path.read_text())
+          except Exception as exc:
+            print(f"YAML error: {path}: {exc}", file=sys.stderr)
+            failed = True
+
+        if failed:
+          sys.exit(1)
+        print(f"YAML ok: {scanned} files")
+        PY

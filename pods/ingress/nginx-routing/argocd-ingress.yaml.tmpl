@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-ui-internal
+  namespace: argocd
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: __AUTHENTIK_FORWARD_AUTH_URL__
+    nginx.ingress.kubernetes.io/auth-snippet: __AUTHENTIK_AUTH_SNIPPET__
+    nginx.ingress.kubernetes.io/auth-signin: __AUTHENTIK_LOCAL_AUTH_SIGNIN__
+    nginx.ingress.kubernetes.io/auth-response-headers: __AUTHENTIK_AUTH_RESPONSE_HEADERS__
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: argocd.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80

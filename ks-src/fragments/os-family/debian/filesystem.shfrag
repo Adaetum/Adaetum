@@ -1,0 +1,3 @@
+os_family_bootstrap_root() {
+  printf '/opt/ansible-runner'
+}

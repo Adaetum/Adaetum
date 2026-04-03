@@ -1,0 +1,22 @@
+resources:
+  - serviceaccount.yaml
+  - secret.yaml
+  - clusterrole.yaml
+  - clusterrolebinding.yaml
+  - homepage-cluster-config.yaml
+  - deployment.yaml
+  - service.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: homepage-templates
+    files:
+      - config/custom.css
+      - config/custom.js
+      - config/bookmarks.yaml
+      - config/kubernetes.yaml
+      - config/services.yaml
+      - config/settings.yaml
+      - config/widgets.yaml

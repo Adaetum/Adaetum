@@ -1,0 +1,202 @@
+version: "3"
+silent: true
+
+dotenv:
+  - .env
+
+vars:
+  IMAGE: '{{default "registry.example.services/platform/ansible-runner:latest" .IMAGE}}'
+  KS_SRC_DIR: '{{default "dist/ks-templates" .KS_SRC_DIR}}'
+  KS_TEMPLATE_FILE_NAME: '{{default .LOCAL_KS_TEMPLATE_FILE_NAME .KS_TEMPLATE_FILE_NAME}}'
+  KS_OUT_DIR: '{{default "dist/ks-templates" .KS_OUT_DIR}}'
+  ANSIBLE_ENV: .env
+  ISO_PATH: '{{default "" .ISO_PATH | default .LOCAL_ISO_PATH}}'
+  ISO_OUT: '{{default "" .ISO_OUT | default .LOCAL_ISO_OUT}}'
+  KS_FILE_URL: '{{default "" .KS_FILE_URL}}'
+  BUNDLE_OUT: dist/ansible-runner-bundle.tar.gz
+  BUNDLE_INCLUDE: 'Taskfile.yml setup.md ansible/Dockerfile ansible/ansible.cfg ansible/ansible-scripts ansible/playbooks ansible/automation-roles ansible/templates ansible/ansible-host-config-sync.yaml pods ks-src tasks .validator'
+  BUNDLE_URL: '{{default "" .BUNDLE_URL}}'
+
+includes:
+  lint:
+    taskfile: ./tasks/lint.yml
+    dir: .
+  hooks:
+    taskfile: ./tasks/hooks.yml
+    dir: .
+  ks:
+    taskfile: ./tasks/ks.yml
+    dir: .
+  iso:
+    taskfile: ./tasks/iso.yml
+    dir: .
+  bundle:
+    taskfile: ./tasks/bundle.yml
+    dir: .
+  env:
+    taskfile: ./tasks/env.yml
+    dir: .
+tasks:
+  list:
+    desc: Show the supported task list
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - |
+        set -eu
+        if [ -t 1 ]; then
+          c_title="$(printf '\033[1;36m')"
+          c_task="$(printf '\033[1;32m')"
+          c_reset="$(printf '\033[0m')"
+        else
+          c_title=""
+          c_task=""
+          c_reset=""
+        fi
+        printf '%sSupported tasks:%s\n' "${c_title}" "${c_reset}"
+        printf '  %stask initialize%s    Run first-time opinionated setup workflow\n' "${c_task}" "${c_reset}"
+        printf '  %stask clean%s         Reset tracked public-safe config and remove derived installer artifacts\n' "${c_task}" "${c_reset}"
+        printf '  %stask maintainer-on%s Enable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
+        printf '  %stask maintainer-off%s Disable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
+        printf '  %stask build-iso%s     Build the local kickstart-enabled ISO\n' "${c_task}" "${c_reset}"
+        printf '  %stask compile-ks%s    Validate and compile kickstart artifacts from ks-src into dist\n' "${c_task}" "${c_reset}"
+        printf '  %stask check-ks%s      Validate kickstart source/compiler inputs without committed rendered files\n' "${c_task}" "${c_reset}"
+        printf '  %stask publish%s       Publish kickstarts and ISO workflows\n' "${c_task}" "${c_reset}"
+        printf '  %stask publish-bundle%s Force rebuild, upload, and verify the first-boot bundle/runtime env\n' "${c_task}" "${c_reset}"
+        printf '  %stask fetch-logs%s    Download logs from bootstrap storage\n' "${c_task}" "${c_reset}"
+        printf '  %stask fetch-backup%s  Download and extract a recovery backup\n' "${c_task}" "${c_reset}"
+        printf '  %stask validate-runtime%s Validate the local bootstrap runtime payload without reinstalling\n' "${c_task}" "${c_reset}"
+        printf '  %stask validate-pods-contract%s Run the full pods contract validator suite\n' "${c_task}" "${c_reset}"
+        printf '  %stask list%s          Show this command list\n' "${c_task}" "${c_reset}"
+
+  initialize:
+    desc: Run the opinionated initial setup workflow
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: env:initialize
+
+  clean:
+    desc: Reset tracked public-safe config and remove derived installer artifacts
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - cmd: python3 ./tasks/scripts/clean-public-safe-config.py
+        platforms: [linux, darwin]
+      - cmd: python ./tasks/scripts/clean-public-safe-config.py
+        platforms: [windows]
+      - cmd: python3 ./tasks/scripts/clean-derived-setup-artifacts.py
+        platforms: [linux, darwin]
+      - cmd: python ./tasks/scripts/clean-derived-setup-artifacts.py
+        platforms: [windows]
+
+  maintainer-on:
+    desc: Enable local maintainer bypass for example-placeholder validators
+    cmds:
+      - cmd: |
+          mkdir -p .git
+          : > .git/adaetum-allow-example-placeholders
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -Command "New-Item -ItemType File -Force .git/adaetum-allow-example-placeholders | Out-Null"
+        platforms: [windows]
+
+  maintainer-off:
+    desc: Disable local maintainer bypass for example-placeholder validators
+    cmds:
+      - cmd: rm -f .git/adaetum-allow-example-placeholders
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -Command "if (Test-Path .git/adaetum-allow-example-placeholders) { Remove-Item .git/adaetum-allow-example-placeholders }"
+        platforms: [windows]
+
+  build-iso:
+    desc: Build the local kickstart-enabled ISO
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: iso:build
+
+  compile-ks:
+    desc: Validate and compile kickstart artifacts from ks-src into dist
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: ks:compile
+
+  check-ks:
+    desc: Validate kickstart source/compiler inputs without committed rendered files
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: ks:compile:check
+
+  publish:
+    desc: Publish kickstarts and ISO workflows
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: bundle:build
+      - task: bundle:upload-r2
+      - task: bundle:runtime-env:build
+      - task: bundle:runtime-env:upload-r2
+      - cmd: bash ./tasks/scripts/publish-artifacts.sh
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/publish-artifacts.sh
+        platforms: [windows]
+
+  publish-bundle:
+    desc: Force rebuild, upload, and verify the first-boot bundle/runtime env
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: bundle:publish:external
+
+  fetch-logs:
+    desc: Interactively download logs from KS storage
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: ks:logs:download:interactive
+
+  fetch-backup:
+    desc: Download and extract a recovery backup
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: ks:backup:download:interactive
+
+  validate-runtime:
+    desc: Validate the local bootstrap runtime payload without reinstalling
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - task: env:validate:runtime
+
+  validate-pods-contract:
+    desc: Run the full pods contract validator suite
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    cmds:
+      - cmd: python3 ./.validator/run-pods-contract.py
+        platforms: [linux, darwin]
+      - cmd: python ./.validator/run-pods-contract.py
+        platforms: [windows]
+
+  bootstrap:phase10:check-ks:
+    desc: Bundle-safe Phase 10 kickstart validation
+    cmds:
+      - cmd: python3 ./tasks/scripts/compile-kickstarts.py --validate-all --self-test
+        platforms: [linux, darwin]
+      - cmd: python ./tasks/scripts/compile-kickstarts.py --validate-all --self-test
+        platforms: [windows]
+
+  bootstrap:phase10:compile-ks:
+    desc: Bundle-safe Phase 10 kickstart compile validation
+    cmds:
+      - cmd: python3 ./tasks/scripts/compile-kickstarts.py --sync --self-test
+        platforms: [linux, darwin]
+      - cmd: python ./tasks/scripts/compile-kickstarts.py --sync --self-test
+        platforms: [windows]
+
+  bootstrap:phase10:validate-runtime:
+    desc: Bundle-safe Phase 10 runtime payload validation
+    cmds:
+      - cmd: bash ./tasks/scripts/validate-bootstrap-runtime-env.sh
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/validate-bootstrap-runtime-env.sh
+        platforms: [windows]
+
+  bootstrap:phase10:validate-pods-contract:
+    desc: Bundle-safe Phase 10 pods contract validation
+    cmds:
+      - cmd: python3 ./.validator/run-pods-contract.py
+        platforms: [linux, darwin]
+      - cmd: python ./.validator/run-pods-contract.py
+        platforms: [windows]

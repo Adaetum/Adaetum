@@ -1,0 +1,122 @@
+# Portable first-boot dependency helpers. Shared fragments should call these
+# wrappers instead of naming a distro package manager or service manager.
+
+bootstrap_detect_os_family() {
+  local os_id=""
+  local os_like=""
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release || true
+    os_id="${ID:-}"
+    os_like="${ID_LIKE:-}"
+  fi
+
+  case " ${os_id} ${os_like} " in
+    *" ubuntu "*|*" debian "*) printf 'debian' ; return 0 ;;
+    *" rocky "*|*" rhel "*|*" centos "*|*" fedora "*) printf 'rhel' ; return 0 ;;
+  esac
+  return 1
+}
+
+bootstrap_require_os_family() {
+  if [ -n "${BOOTSTRAP_OS_FAMILY:-}" ]; then
+    printf '%s' "${BOOTSTRAP_OS_FAMILY}"
+    return 0
+  fi
+  bootstrap_detect_os_family
+}
+
+bootstrap_pkg_install() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_pkg_install "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_service_enable() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_service_enable "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_service_start() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_service_start "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_service_disable() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_service_disable "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_service_status() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_service_status "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_poweroff() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_poweroff ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_tailscale_ensure_installed() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_tailscale_ensure_installed ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_tailscale_service_name() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_tailscale_service_name ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_platform_os_tag() {
+  local family=""
+  family="$(bootstrap_require_os_family)" || return 1
+  case "${family}" in
+    rhel|debian) os_family_platform_os_tag ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_require_commands() {
+  local packages=()
+  local cmd=""
+  for cmd in "$@"; do
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+      packages+=("${cmd}")
+    fi
+  done
+  if [ "${#packages[@]}" -eq 0 ]; then
+    return 0
+  fi
+  bootstrap_pkg_install "${packages[@]}"
+}

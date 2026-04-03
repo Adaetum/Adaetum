@@ -1,0 +1,36 @@
+name: headlamp
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-16"
+source_type: helm
+source_repo_url: https://kubernetes-sigs.github.io/headlamp/
+source_chart: headlamp
+source_target_revision: "0.41.0"
+source_helm_values: |
+  ingress:
+    # Disabled: routing is handled by nginx Ingress manifests in pods/ingress/nginx-routing.
+    enabled: false
+
+  config:
+    watchPlugins: true
+
+  volumeMounts:
+    - name: headlamp-kubeconfigs
+      mountPath: /home/headlamp/.config/Headlamp/kubeconfigs
+
+  volumes:
+    - name: headlamp-kubeconfigs
+      emptyDir: {}
+
+  pluginsManager:
+    enabled: true
+    configContent: |
+      plugins:
+        - name: kubescape
+          source: https://artifacthub.io/packages/headlamp/kubescape-headlamp-plugin/headlamp_kubescape
+          version: 0.10.6
+      installOptions:
+        parallel: true
+        maxConcurrent: 2
+    baseImage: node:lts-alpine
+destination_namespace: headlamp

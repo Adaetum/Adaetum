@@ -1,0 +1,51 @@
+---
+# Gate to keep this role off by default.
+tailscale_user_sync_enabled: false
+
+# Source of truth for allowed users:
+# - tailscale_acl: read the Tailnet ACL policy file and extract group members
+# - static: use tailscale_user_sync_users directly
+tailscale_user_sync_source: "tailscale_acl"
+
+# Tailscale ACL group key to read from the policy file.
+# Example: "group:local-admin"
+tailscale_user_sync_acl_group: "group:local-admin"
+
+# Local OS groups:
+tailscale_user_sync_local_admin_group: "local-admin"
+tailscale_user_sync_managed_group: "tailscale-managed"
+
+# Delete users that are no longer present in the source-of-truth list.
+tailscale_user_sync_remove_absent_users: true
+tailscale_user_sync_remove_home: true
+
+# Account defaults.
+tailscale_user_sync_shell: "/bin/bash"
+tailscale_user_sync_create_home: true
+
+# Sudo policy for the local admin group.
+tailscale_user_sync_sudo_enabled: true
+tailscale_user_sync_sudo_nopasswd: true
+
+# If true, creates sudoers file even if sudo isn't installed (some minimal images).
+tailscale_user_sync_sudoers_manage: true
+tailscale_user_sync_sudoers_path: "/etc/sudoers.d/90-tailscale-local-admin"
+
+# Auth and API settings.
+tailscale_user_sync_tailnet: "{{ lookup('ansible.builtin.env', 'TAILSCALE_TAILNET') | default('-', true) }}"
+tailscale_user_sync_api_base_url: "https://api.tailscale.com/api/v2"
+tailscale_user_sync_api_token: "{{ lookup('ansible.builtin.env', 'TAILSCALE_API_TOKEN') | default('', true) }}"
+
+# Optional: mint an access token each run (client credentials).
+tailscale_user_sync_oauth_client_id: "{{ lookup('ansible.builtin.env', 'TAILSCALE_OAUTH_CLIENT_ID') | default('', true) }}"
+tailscale_user_sync_oauth_client_secret: "{{ lookup('ansible.builtin.env', 'TAILSCALE_OAUTH_CLIENT_SECRET') | default('', true) }}"
+tailscale_user_sync_oauth_scopes: "policy_file:read devices:core:read devices:posture_attributes:read"
+
+# Static source input when tailscale_user_sync_source == "static".
+# Each entry supports:
+# - email (required)
+# - username (optional; derived from email if omitted)
+tailscale_user_sync_users: []
+
+# Optional explicit mappings, for emails that don't map cleanly to usernames.
+tailscale_user_sync_username_overrides: {}

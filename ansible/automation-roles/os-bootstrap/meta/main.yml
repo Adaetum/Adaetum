@@ -1,0 +1,8 @@
+---
+# Role metadata for os-bootstrap
+galaxy_info:
+  role_name: os_bootstrap
+  author: ansible-runner
+  description: Prepare the OS for RKE2 installs (packages, services, swap)
+  license: MIT
+  min_ansible_version: "2.14"

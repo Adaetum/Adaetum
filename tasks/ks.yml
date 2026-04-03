@@ -1,0 +1,1192 @@
+version: "3"
+
+tasks:
+  compile:
+    desc: Compile generated kickstart files from ks-src into dist/ks-templates
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -euo pipefail
+        if command -v uv >/dev/null 2>&1; then
+          uv run --with jinja2 python ./tasks/scripts/compile-kickstarts.py --sync --self-test
+        else
+          python3 ./tasks/scripts/compile-kickstarts.py --sync --self-test
+        fi
+
+  compile:check:
+    desc: Validate ks-src and the kickstart compiler without committed rendered files
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -euo pipefail
+        if command -v uv >/dev/null 2>&1; then
+          uv run --with jinja2 python ./tasks/scripts/compile-kickstarts.py --validate-all --self-test
+        else
+          python3 ./tasks/scripts/compile-kickstarts.py --validate-all --self-test
+        fi
+
+  render:external:
+    desc: External wrapper for kickstart render (used by workflows and scripts)
+    deps: [':hooks:ensure']
+    cmds:
+      - task: render
+
+  render:
+    internal: true
+    desc: Render kickstart files into dist/ks-templates with only the shared bootstrap token embedded
+    deps: [':hooks:ensure', compile]
+    preconditions:
+      - sh: test -n "{{.KS_TEMPLATE_FILE_NAME}}"
+        msg: "Set KS_TEMPLATE_FILE_NAME or LOCAL_KS_TEMPLATE_FILE_NAME (e.g., rocky10.ks) to select the kickstart template."
+    cmds:
+      - |
+        set -e
+        ks_env="${KS_ENV:-.env}"
+        if [ ! -f "${ks_env}" ]; then
+          echo "Missing KS env file: ${ks_env} (copy .env.template or set KS_ENV)"
+          exit 1
+        fi
+        set -a
+        . "${ks_env}"
+        set +a
+
+        # Cluster DNS suffix used for service UIs (e.g., gitea.<cluster_domain>).
+        CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}"
+
+        task_firstboot_no_poweroff="{{.FIRSTBOOT_NO_POWEROFF}}"
+        if [ -n "${task_firstboot_no_poweroff}" ]; then
+          FIRSTBOOT_NO_POWEROFF="${task_firstboot_no_poweroff}"
+        fi
+
+        # Optional convenience: if MONOREPO_GITHUB_* is set, use it as the default
+        # for both Argo CD bootstrap repo settings and kickstart repo fetch settings.
+        MONOREPO_GITHUB_REPO_URL="${MONOREPO_GITHUB_REPO_URL:-}"
+        MONOREPO_GITHUB_REPO_BRANCH="${MONOREPO_GITHUB_REPO_BRANCH:-master}"
+        MONOREPO_GITHUB_USERNAME="${MONOREPO_GITHUB_USERNAME:-}"
+        MONOREPO_GITHUB_TOKEN="${MONOREPO_GITHUB_TOKEN:-}"
+        GITHUB_SYNC_TOKEN="${GITHUB_SYNC_TOKEN:-}"
+        MONOREPO_GITHUB_HOST="${MONOREPO_GITHUB_HOST:-}"
+        GITHUB_APP_ID="${GITHUB_APP_ID:-${MONOREPO_GITHUB_APP_ID:-}}"
+        GITHUB_APP_INSTALLATION_ID="${GITHUB_APP_INSTALLATION_ID:-${MONOREPO_GITHUB_APP_INSTALLATION_ID:-}}"
+        GITHUB_APP_PRIVATE_KEY_B64="${GITHUB_APP_PRIVATE_KEY_B64:-${MONOREPO_GITHUB_APP_PRIVATE_KEY_B64:-}}"
+        repo_auth_fallback_token=""
+        case "${GITHUB_SYNC_TOKEN:-}" in
+          github_pat_*|ghp_*|gho_*|ghu_*|ghs_*) repo_auth_fallback_token="${GITHUB_SYNC_TOKEN}" ;;
+        esac
+        if [ -z "${repo_auth_fallback_token}" ]; then
+          case "${MONOREPO_GITHUB_TOKEN:-}" in
+            github_pat_*|ghp_*|gho_*|ghu_*|ghs_*) repo_auth_fallback_token="${MONOREPO_GITHUB_TOKEN}" ;;
+          esac
+        fi
+
+        ARGOCD_GITHUB_REPO_URL="${ARGOCD_GITHUB_REPO_URL:-${MONOREPO_GITHUB_REPO_URL}}"
+        ARGOCD_GITHUB_REPO_BRANCH="${ARGOCD_GITHUB_REPO_BRANCH:-${MONOREPO_GITHUB_REPO_BRANCH}}"
+        ARGOCD_GITHUB_USERNAME="${ARGOCD_GITHUB_USERNAME:-${MONOREPO_GITHUB_USERNAME}}"
+        if [ -n "${repo_auth_fallback_token}" ]; then
+          ARGOCD_GITHUB_TOKEN="${repo_auth_fallback_token}"
+        else
+          ARGOCD_GITHUB_TOKEN="${ARGOCD_GITHUB_TOKEN:-}"
+        fi
+        if [ -n "${ARGOCD_GITHUB_TOKEN}" ] && [ -z "${ARGOCD_GITHUB_USERNAME}" ]; then
+          ARGOCD_GITHUB_USERNAME="oauth2"
+        fi
+
+        ANSIBLE_RUNNER_REPO="${ANSIBLE_RUNNER_REPO:-${MONOREPO_GITHUB_REPO_URL}}"
+        ANSIBLE_RUNNER_GIT_HOST="${ANSIBLE_RUNNER_GIT_HOST:-${MONOREPO_GITHUB_HOST}}"
+        ANSIBLE_RUNNER_HTTP_TOKEN="${ANSIBLE_RUNNER_HTTP_TOKEN:-${GITHUB_SYNC_TOKEN:-${MONOREPO_GITHUB_TOKEN:-}}}"
+
+        force_local_logs="${KS_FORCE_LOCAL_LOGS:-}"
+        if [ "${force_local_logs}" = "1" ] || [ "${force_local_logs}" = "true" ]; then
+          ip=""
+          if [ -z "${ip}" ] && command -v ipconfig >/dev/null 2>&1; then
+            # On macOS with QEMU/UTM, bridge100 is commonly the VM gateway and
+            # often the most reliable address for guests to reach the host.
+            ip="$(ipconfig getifaddr bridge100 || true)"
+            if [ -z "${ip}" ]; then
+              ip="$(ipconfig getifaddr en0 || true)"
+            fi
+            if [ -z "${ip}" ]; then
+              ip="$(ipconfig getifaddr en1 || true)"
+            fi
+          fi
+          if [ -z "${ip}" ] && command -v hostname >/dev/null 2>&1; then
+            ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+          fi
+          if [ -z "${ip}" ] && command -v ip >/dev/null 2>&1; then
+            ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+          fi
+          if [ -n "${ip}" ]; then
+            KS_LOG_URL="http://${ip}:8000/logs"
+          else
+            echo "Warning: KS_FORCE_LOCAL_LOGS is set but unable to detect local IP for KS_LOG_URL"
+          fi
+        fi
+        if [ -z "${KS_LOG_URL:-}" ]; then
+          if [ -n "${KS_BASE_URL:-}" ]; then
+            KS_LOG_URL="${KS_BASE_URL%/}/logs"
+          elif [ -n "${KS_FILE_URL:-}" ]; then
+            ks_host="$(
+              python3 -c 'import os,urllib.parse; url=os.environ.get("KS_FILE_URL",""); parsed=urllib.parse.urlparse(url); print(f"{parsed.scheme}://{parsed.netloc}") if parsed.scheme and parsed.netloc else None'
+            )"
+            if [ -n "${ks_host}" ]; then
+              KS_LOG_URL="${ks_host}/logs"
+            fi
+          else
+            ip=""
+            if [ -z "${ip}" ] && command -v ipconfig >/dev/null 2>&1; then
+              ip="$(ipconfig getifaddr bridge100 || true)"
+              if [ -z "${ip}" ]; then
+                ip="$(ipconfig getifaddr en0 || true)"
+              fi
+              if [ -z "${ip}" ]; then
+                ip="$(ipconfig getifaddr en1 || true)"
+              fi
+            fi
+            if [ -z "${ip}" ] && command -v hostname >/dev/null 2>&1; then
+              ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+            fi
+            if [ -z "${ip}" ] && command -v ip >/dev/null 2>&1; then
+              ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+            fi
+            if [ -n "${ip}" ]; then
+              KS_LOG_URL="http://${ip}:8000/logs"
+            else
+              echo "Warning: unable to detect local IP for KS_LOG_URL"
+            fi
+          fi
+        fi
+        bootstrap_runtime_env_url_rendered="${BOOTSTRAP_RUNTIME_ENV_URL:-}"
+        if [ -z "${bootstrap_runtime_env_url_rendered}" ] && [ -n "${KS_BASE_URL:-}" ]; then
+          bootstrap_runtime_env_url_rendered="${KS_BASE_URL%/}/iso/firstboot-payload/bootstrap-runtime.env"
+        fi
+        strip_token_param() {
+          python3 -c 'import sys,urllib.parse; value=sys.argv[1] if len(sys.argv) > 1 else ""; parsed=urllib.parse.urlparse(value) if value else None; query=[(k,v) for (k,v) in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != "token"] if parsed else []; print(urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urllib.parse.urlencode(query), parsed.fragment)) if parsed else "")' "${1:-}"
+        }
+        KS_LOG_URL="$(strip_token_param "${KS_LOG_URL:-}")"
+        bootstrap_runtime_env_url_rendered="$(strip_token_param "${bootstrap_runtime_env_url_rendered:-}")"
+        bootstrap_backup_url_rendered="$(strip_token_param "${BOOTSTRAP_BACKUP_URL:-}")"
+        bootstrap_bundle_url_rendered="${BOOTSTRAP_BUNDLE_URL:-}"
+        bootstrap_bundle_url_rendered="$(printf '%s' "${bootstrap_bundle_url_rendered}" | tr -d '\r\n')"
+        bootstrap_runtime_env_url_rendered="$(printf '%s' "${bootstrap_runtime_env_url_rendered}" | tr -d '\r\n')"
+        escape_sed_replacement() {
+          printf '%s' "${1:-}" | sed -e 's/[&\\#]/\\&/g'
+        }
+        gitea_seed_source_repo_url_esc="$(escape_sed_replacement "${GITEA_SEED_SOURCE_REPO_URL:-${ARGOCD_GITHUB_REPO_URL:-}}")"
+        gitea_seed_source_repo_branch_esc="$(escape_sed_replacement "${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH:-master}}")"
+        canonical_seed_source_token="${GITEA_SEED_SOURCE_TOKEN:-}"
+        if [ -n "${repo_auth_fallback_token}" ]; then
+          canonical_seed_source_token="${repo_auth_fallback_token}"
+        elif [ -z "${canonical_seed_source_token}" ]; then
+          canonical_seed_source_token="${ARGOCD_GITHUB_TOKEN:-}"
+        fi
+        gitea_seed_source_token_esc="$(escape_sed_replacement "${canonical_seed_source_token}")"
+        gitea_seed_target_owner_esc="$(escape_sed_replacement "${GITEA_SEED_TARGET_OWNER:-gitea-admin}")"
+        gitea_seed_target_repo_esc="$(escape_sed_replacement "${GITEA_SEED_TARGET_REPO:-cluster}")"
+        mkdir -p "{{.KS_OUT_DIR}}"
+        ks_file="{{.KS_SRC_DIR}}/{{.KS_TEMPLATE_FILE_NAME}}"
+        if [ ! -f "${ks_file}" ]; then
+          echo "Missing kickstart template: ${ks_file}"
+          exit 1
+        fi
+        out="{{.KS_OUT_DIR}}/$(basename "${ks_file}")"
+        mkdir -p "$(dirname "$out")"
+        KS_FILE_PATH="${ks_file}" \
+        KS_OUT_PATH="${out}" \
+        BOOTSTRAP_BUNDLE_URL_RENDERED="${bootstrap_bundle_url_rendered:-}" \
+        BOOTSTRAP_RUNTIME_ENV_URL_RENDERED="${bootstrap_runtime_env_url_rendered:-}" \
+        BOOTSTRAP_BACKUP_URL_RENDERED="${bootstrap_backup_url_rendered:-}" \
+        GITEA_SEED_SOURCE_REPO_URL_RENDERED="${GITEA_SEED_SOURCE_REPO_URL:-${ARGOCD_GITHUB_REPO_URL:-}}" \
+        GITEA_SEED_SOURCE_REPO_BRANCH_RENDERED="${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH:-master}}" \
+        GITEA_SEED_TARGET_OWNER_RENDERED="${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
+        GITEA_SEED_TARGET_REPO_RENDERED="${GITEA_SEED_TARGET_REPO:-cluster}" \
+        python3 - <<'PY'
+        import os
+
+        ks_file = os.environ["KS_FILE_PATH"]
+        out_path = os.environ["KS_OUT_PATH"]
+        with open(ks_file, "r", encoding="utf-8") as fh:
+            content = fh.read()
+
+        def clean(key, default=""):
+            value = os.environ.get(key, default)
+            if value is None:
+                value = default
+            return value.replace("\r", "").replace("\n", "")
+
+        placeholders = {
+            "__TAILSCALE_OAUTH_CLIENT_ID__": clean("TAILSCALE_OAUTH_CLIENT_ID"),
+            "__TAILSCALE_OAUTH_TTL__": clean("TAILSCALE_OAUTH_TTL", "1h"),
+            "__TAILSCALE_ADVERTISE_TAGS__": clean("TAILSCALE_ADVERTISE_TAGS"),
+            "__TAILSCALE_NODE_ROLE__": clean("TAILSCALE_NODE_ROLE"),
+            "__TAILSCALE_CLUSTER_TAG__": clean("TAILSCALE_CLUSTER_TAG", "tag:cluster"),
+            "__TAILSCALE_ENFORCE_EXIT_NODE__": clean("TAILSCALE_ENFORCE_EXIT_NODE"),
+            "__TAILSCALE_EXIT_NODE__": clean("TAILSCALE_EXIT_NODE"),
+            "__TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS__": clean("TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS"),
+            "__KS_BREAKGLASS__": clean("KS_BREAKGLASS"),
+            "__KS_EMBED_REPO__": clean("KS_EMBED_REPO"),
+            "__PLATFORM_DISTRIBUTION__": clean("PLATFORM_DISTRIBUTION"),
+            "__ANSIBLE_RUNNER_IMAGE__": clean("ANSIBLE_RUNNER_IMAGE"),
+            "__ANSIBLE_RUNNER_REPO__": clean("ANSIBLE_RUNNER_REPO"),
+            "__ANSIBLE_RUNNER_GIT_HOST__": clean("ANSIBLE_RUNNER_GIT_HOST"),
+            "__ANSIBLE_RUNNER_GIT_HTTP_VERSION__": clean("ANSIBLE_RUNNER_GIT_HTTP_VERSION"),
+            "__ANSIBLE_RUNNER_UPDATE_FROM_REPO__": clean("ANSIBLE_RUNNER_UPDATE_FROM_REPO"),
+            "__ARGOCD_GITHUB_REPO_URL__": clean("ARGOCD_GITHUB_REPO_URL"),
+            "__ARGOCD_GITHUB_USERNAME__": clean("ARGOCD_GITHUB_USERNAME"),
+            "__ARGOCD_GITHUB_REPO_BRANCH__": clean("ARGOCD_GITHUB_REPO_BRANCH"),
+            "__GITEA_SEED_SOURCE_REPO_URL__": clean("GITEA_SEED_SOURCE_REPO_URL_RENDERED"),
+            "__GITEA_SEED_SOURCE_REPO_BRANCH__": clean("GITEA_SEED_SOURCE_REPO_BRANCH_RENDERED"),
+            "__GITEA_SEED_TARGET_OWNER__": clean("GITEA_SEED_TARGET_OWNER_RENDERED"),
+            "__GITEA_SEED_TARGET_REPO__": clean("GITEA_SEED_TARGET_REPO_RENDERED"),
+            "__GITHUB_APP_ID__": clean("GITHUB_APP_ID"),
+            "__GITHUB_APP_INSTALLATION_ID__": clean("GITHUB_APP_INSTALLATION_ID"),
+            "__RANCHER_PUBLIC_DOMAIN__": clean("RANCHER_PUBLIC_DOMAIN"),
+            "__CLUSTER_DOMAIN__": clean("CLUSTER_DOMAIN"),
+            "__CLUSTER_LOCAL_DOMAIN__": clean("CLUSTER_LOCAL_DOMAIN"),
+            "__RANCHER_ADMIN_PASSWORD_FILE__": clean("RANCHER_ADMIN_PASSWORD_FILE"),
+            "__KS_LOG_UPLOAD_EVENTUAL__": clean("KS_LOG_UPLOAD_EVENTUAL", "1"),
+            "__KS_LOG_UPLOAD_DEBUG__": clean("KS_LOG_UPLOAD_DEBUG", "0"),
+            "__FIRSTBOOT_NO_POWEROFF__": clean("FIRSTBOOT_NO_POWEROFF", "0"),
+            "__KS_STATIC_HOSTNAME__": clean("KS_STATIC_HOSTNAME"),
+            "__KS_STATIC_IPV4__": clean("KS_STATIC_IPV4"),
+            "__KS_STATIC_GW__": clean("KS_STATIC_GW"),
+            "__KS_STATIC_DNS__": clean("KS_STATIC_DNS"),
+            "__BOOTSTRAP_DEBUG_USER__": clean("BOOTSTRAP_DEBUG_USER"),
+            "__BOOTSTRAP_DEBUG_SUDO__": clean("BOOTSTRAP_DEBUG_SUDO", "0"),
+            "__BOOTSTRAP_DIAGNOSTICS_TAILSCALE__": clean("BOOTSTRAP_DIAGNOSTICS_TAILSCALE", "0"),
+            "__BOOTSTRAP_BUNDLE_URL__": clean("BOOTSTRAP_BUNDLE_URL_RENDERED"),
+            "__BOOTSTRAP_BUNDLE_SHA256__": clean("BOOTSTRAP_BUNDLE_SHA256"),
+            "__BOOTSTRAP_BUNDLE_FORCE__": clean("BOOTSTRAP_BUNDLE_FORCE"),
+            "__BOOTSTRAP_PLAYBOOK__": clean("BOOTSTRAP_PLAYBOOK"),
+            "__BOOTSTRAP_RUN_PHASE40__": clean("BOOTSTRAP_RUN_PHASE40"),
+            "__BOOTSTRAP_PHASE40_MODE__": clean("BOOTSTRAP_PHASE40_MODE"),
+            "__BOOTSTRAP_RUN_PHASE50__": clean("BOOTSTRAP_RUN_PHASE50"),
+            "__BOOTSTRAP_RUN_PHASE60__": clean("BOOTSTRAP_RUN_PHASE60"),
+            "__BOOTSTRAP_INTRODUCE_OPENBAO__": clean("BOOTSTRAP_INTRODUCE_OPENBAO"),
+            "__BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET__": clean("BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET"),
+            "__BOOTSTRAP_DISABLE_PRE_OPENBAO__": clean("BOOTSTRAP_DISABLE_PRE_OPENBAO"),
+            "__BOOTSTRAP_OPENBAO_AUTO_UNSEAL__": clean("BOOTSTRAP_OPENBAO_AUTO_UNSEAL"),
+            "__BOOTSTRAP_BURN_LADDER__": clean("BOOTSTRAP_BURN_LADDER"),
+            "__BOOTSTRAP_BACKUP_TO_R2__": clean("BOOTSTRAP_BACKUP_TO_R2"),
+            "__BOOTSTRAP_BACKUP_URL__": clean("BOOTSTRAP_BACKUP_URL_RENDERED"),
+            "__BOOTSTRAP_BACKUP_FORMAT__": clean("BOOTSTRAP_BACKUP_FORMAT"),
+            "__BOOTSTRAP_BACKUP_FILE__": clean("BOOTSTRAP_BACKUP_FILE"),
+            "__BOOTSTRAP_BACKUP_FILE_OPENSSL__": clean("BOOTSTRAP_BACKUP_FILE_OPENSSL"),
+            "__BOOTSTRAP_BACKUP_FILE_7Z__": clean("BOOTSTRAP_BACKUP_FILE_7Z"),
+            "__INGRESS_INTERNAL_VIP__": clean("INGRESS_INTERNAL_VIP"),
+            "__INGRESS_EXTERNAL_VIP__": clean("INGRESS_EXTERNAL_VIP"),
+            "__BOOTSTRAP_RUNTIME_ENV_URL__": clean("BOOTSTRAP_RUNTIME_ENV_URL_RENDERED"),
+            "__BOOTSTRAP_SHARED_TOKEN__": clean("KS_SHARED_TOKEN"),
+            "__KS_LOG_URL__": clean("KS_LOG_URL"),
+        }
+        for placeholder, value in placeholders.items():
+            content = content.replace(placeholder, value)
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
+        with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(content)
+        PY
+
+        # Fail fast on missing critical substitutions so we do not produce a
+        # "successful" ISO that has no first-boot telemetry.
+        if rg -n "__KS_LOG_URL__|__TAILSCALE_OAUTH_CLIENT_ID__|__TAILSCALE_CLUSTER_TAG__|__BOOTSTRAP_RUNTIME_ENV_URL__|__BOOTSTRAP_SHARED_TOKEN__" "${out}" >/dev/null 2>&1; then
+          echo "Kickstart render failed: unresolved placeholders remain in ${out}"
+          rg -n "__KS_LOG_URL__|__TAILSCALE_OAUTH_CLIENT_ID__|__TAILSCALE_CLUSTER_TAG__|__BOOTSTRAP_RUNTIME_ENV_URL__|__BOOTSTRAP_SHARED_TOKEN__" "${out}" || true
+          exit 1
+        fi
+        if rg -n '^LOG_UPLOAD_URL=""$' "${out}" >/dev/null 2>&1; then
+          echo "Kickstart render failed: LOG_UPLOAD_URL is empty in ${out}."
+          echo "Set KS_LOG_URL (or KS_BASE_URL) in .env before building the ISO."
+          exit 1
+        fi
+        if rg -n '^TAILSCALE_OAUTH_CLIENT_ID=""$|^BOOTSTRAP_SHARED_TOKEN=""$|^BOOTSTRAP_RUNTIME_ENV_URL=""$' "${out}" >/dev/null 2>&1; then
+          echo "Kickstart render failed: required non-secret bootstrap settings are empty in ${out}."
+          exit 1
+        fi
+        python3 -c 'import os,sys; path=sys.argv[1]; content=open(path, "r", encoding="utf-8").read(); secret_keys=["TAILSCALE_AUTHKEY","TAILSCALE_OAUTH_CLIENT_SECRET","ANSIBLE_RUNNER_HTTP_TOKEN","ANSIBLE_RUNNER_DEPLOY_KEY_B64","ARGOCD_GITHUB_TOKEN","CLOUDFLARE_API_TOKEN","CLOUDFLARE_ZONE_API_TOKEN","GITHUB_APP_PRIVATE_KEY_B64","GITEA_SEED_SOURCE_TOKEN","RANCHER_CLOUDFLARED_TUNNEL_TOKEN","BOOTSTRAP_BACKUP_PASSPHRASE","BOOTSTRAP_BACKUP_PASSPHRASE_B64","RANCHER_ADMIN_PASSWORD","BOOTSTRAP_DEBUG_PASSWORD","BOOTSTRAP_DEBUG_PASSWORD_HASH","BOOTSTRAP_DEBUG_SSH_KEY"]; hits=[key for key in secret_keys if (os.environ.get(key) or "").strip() and (os.environ.get(key) or "").strip() in content]; sys.stderr.write("Kickstart render failed: secret values leaked into %s: %s\n" % (path, ", ".join(hits))) if hits else None; sys.exit(1 if hits else 0)' "${out}"
+
+  serve:
+    internal: true
+    desc: Serve kickstart files over HTTP (macOS)
+    deps: [':hooks:ensure', render]
+    cmds:
+      - |
+        set -e
+        ks_dir="{{.KS_OUT_DIR}}"
+        if [ ! -d "${ks_dir}" ]; then
+          ks_dir="{{.KS_SRC_DIR}}"
+        fi
+        ks_name="{{.KS_TEMPLATE_FILE_NAME}}"
+        if [ -n "${ks_name}" ] && [ -f "${ks_dir}/${ks_name}" ]; then
+          if rg -n "%post.*--erroronfail" "${ks_dir}/${ks_name}" >/dev/null 2>&1; then
+            echo "WARNING: ${ks_dir}/${ks_name} still contains %post --erroronfail"
+            echo "Run: task ks:render (this task now depends on it) and ensure you're booting the updated kickstart."
+          fi
+        fi
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+        ip=""
+        if [ -z "${ip}" ] && command -v ipconfig >/dev/null 2>&1; then
+          ip="$(ipconfig getifaddr en0 || true)"
+          if [ -z "${ip}" ]; then
+            ip="$(ipconfig getifaddr en1 || true)"
+          fi
+        fi
+        if [ -z "${ip}" ] && command -v hostname >/dev/null 2>&1; then
+          ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        fi
+        if [ -z "${ip}" ] && command -v ip >/dev/null 2>&1; then
+          ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+        fi
+        if [ -z "${ip}" ]; then
+          echo "Unable to detect local IP (tried en0/en1)"
+          exit 1
+        fi
+        token="${KS_FILE_AUTH_TOKEN:-${KS_SHARED_TOKEN:-}}"
+        ks_url_env="${KS_FILE_URL:-}"
+        log_url="${KS_LOG_URL:-}"
+        force_local_logs="${KS_FORCE_LOCAL_LOGS:-}"
+        if [ "${force_local_logs}" = "1" ] || [ "${force_local_logs}" = "true" ]; then
+          log_url="http://${ip}:8000/logs"
+        fi
+        if [ -n "${ks_url_env}" ] && [ -z "${log_url}" ]; then
+          base="$(
+            python3 -c 'import os,urllib.parse; url=os.environ.get("KS_FILE_URL",""); parsed=urllib.parse.urlparse(url); print(f"{parsed.scheme}://{parsed.netloc}") if parsed.scheme and parsed.netloc else None'
+          )"
+          if [ -n "${base}" ]; then
+            log_url="${base}/logs"
+          fi
+        fi
+        if [ -z "${ks_url_env}" ]; then
+          if [ -z "${ks_name}" ]; then
+            echo "Set KS_TEMPLATE_FILE_NAME or KS_FILE_URL to serve a kickstart file."
+            exit 1
+          fi
+          ks_url_env="http://${ip}:8000/${ks_name}"
+        fi
+        if [ -z "${log_url}" ]; then
+          log_url="http://${ip}:8000/logs"
+        fi
+        repo_root="$(pwd -P)"
+        echo "Serving ${ks_dir} at http://${ip}:8000/"
+        if [ -n "${token}" ]; then
+          if echo "${ks_url_env}" | grep -q '?'; then
+            ks_url_env="${ks_url_env}&token=${token}"
+          else
+            ks_url_env="${ks_url_env}?token=${token}"
+          fi
+          if echo "${log_url}" | grep -q '?'; then
+            log_url="${log_url}&token=${token}"
+          else
+            log_url="${log_url}?token=${token}"
+          fi
+          echo "Boot arg: inst.ks=${ks_url_env}"
+          echo "Log upload endpoint: ${log_url}"
+        else
+          echo "Boot arg: inst.ks=${ks_url_env}"
+          echo "Log upload endpoint: ${log_url}"
+        fi
+        echo "Log uploads saved to: dist/ks-logs/"
+        cd "${ks_dir}"
+        REPO_ROOT="${repo_root}" KS_FILE_AUTH_TOKEN="${token}" python3 - <<'PY'
+        import datetime
+        import http.server
+        import os
+        import urllib.parse
+
+        repo_root = os.environ.get("REPO_ROOT") or os.getcwd()
+        auth_token = (os.environ.get("KS_FILE_AUTH_TOKEN") or "").strip()
+        port = 8000
+        log_dir = os.path.join(repo_root, "dist", "ks-logs")
+        os.makedirs(log_dir, exist_ok=True)
+
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def _token_ok(self):
+                if not auth_token:
+                    return True
+                header_token = (self.headers.get("X-KS-Token") or "").strip()
+                parsed = urllib.parse.urlparse(self.path)
+                qs = urllib.parse.parse_qs(parsed.query)
+                query_token = (qs.get("token") or [""])[0].strip()
+                return header_token == auth_token or query_token == auth_token
+
+            def do_GET(self):
+                if not self._token_ok():
+                    self.send_response(401)
+                    self.end_headers()
+                    self.wfile.write(b"unauthorized\n")
+                    return
+                super().do_GET()
+
+            def do_POST(self):
+                if not self._token_ok():
+                    self.send_response(401)
+                    self.end_headers()
+                    self.wfile.write(b"unauthorized\n")
+                    return
+                parsed = urllib.parse.urlparse(self.path)
+                if not parsed.path.startswith("/logs"):
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = self.rfile.read(length)
+                qs = urllib.parse.parse_qs(parsed.query)
+                host = (qs.get("host") or ["unknown"])[0].strip() or "unknown"
+                file_param = (qs.get("file") or [""])[0].strip()
+                if file_param:
+                    safe_name = os.path.basename(file_param)
+                    filename = f"{host}-{safe_name}"
+                else:
+                    name = (qs.get("name") or ["log"])[0].strip() or "log"
+                    ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                    filename = f"{host}-{name}-{ts}.log"
+                path = os.path.join(log_dir, filename)
+                with open(path, "wb") as fh:
+                    fh.write(payload)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok\n")
+
+        try:
+            http.server.ThreadingHTTPServer(("", port), Handler).serve_forever()
+        except KeyboardInterrupt:
+            pass
+        PY
+
+  log-test:
+    internal: true
+    desc: Upload a small test log payload to the KS log endpoint
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -e
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+        ip=""
+        if [ -z "${ip}" ] && command -v ipconfig >/dev/null 2>&1; then
+          ip="$(ipconfig getifaddr en0 || true)"
+          if [ -z "${ip}" ]; then
+            ip="$(ipconfig getifaddr en1 || true)"
+          fi
+        fi
+        if [ -z "${ip}" ] && command -v hostname >/dev/null 2>&1; then
+          ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        fi
+        if [ -z "${ip}" ] && command -v ip >/dev/null 2>&1; then
+          ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+        fi
+        if [ -z "${ip}" ]; then
+          echo "Unable to detect local IP (tried en0/en1)"
+          exit 1
+        fi
+        token="${KS_FILE_AUTH_TOKEN:-${KS_SHARED_TOKEN:-}}"
+        ks_url_env="${KS_FILE_URL:-}"
+        log_url="${KS_LOG_URL:-}"
+        force_local_logs="${KS_FORCE_LOCAL_LOGS:-}"
+        if [ "${force_local_logs}" = "1" ] || [ "${force_local_logs}" = "true" ]; then
+          log_url="http://${ip}:8000/logs"
+        fi
+        if [ -n "${ks_url_env}" ] && [ -z "${log_url}" ]; then
+          base="$(
+            python3 -c 'import os,urllib.parse; url=os.environ.get("KS_FILE_URL",""); parsed=urllib.parse.urlparse(url); print(f"{parsed.scheme}://{parsed.netloc}") if parsed.scheme and parsed.netloc else None'
+          )"
+          if [ -n "${base}" ]; then
+            log_url="${base}/logs"
+          fi
+        fi
+        if [ -z "${log_url}" ]; then
+          log_url="http://${ip}:8000/logs"
+        fi
+        if [ -n "${token}" ]; then
+          if echo "${log_url}" | grep -q '?'; then
+            log_url="${log_url}&token=${token}"
+          else
+            log_url="${log_url}?token=${token}"
+          fi
+        fi
+
+        host="${LOG_HOST:-$(hostname -s 2>/dev/null || echo node-bootstrap)}"
+        filename="${LOG_TEST_FILE_NAME:-manual-test.log}"
+        payload="log-test $(date -u +"%Y-%m-%dT%H:%M:%SZ") host=${host} file=${filename}"
+
+        redact_url() {
+          printf '%s' "${1:-}" | sed -E 's/([?&]token=)[^&]+/\1REDACTED/g'
+        }
+
+        sep="?"
+        if echo "${log_url}" | grep -q '?'; then
+          sep="&"
+        fi
+        test_url="${log_url}${sep}host=${host}&file=${filename}"
+        if [ "${LOG_TEST_SHOW_URL:-0}" = "1" ] || [ "${LOG_TEST_SHOW_URL:-0}" = "true" ]; then
+          echo "Posting test log to: ${test_url}"
+        else
+          echo "Posting test log to: $(redact_url "${test_url}")"
+        fi
+
+        response_file="$(mktemp)"
+        curl_rc=0
+        set +e
+        http_code="$(curl --http1.1 -sS -o "${response_file}" -w "%{http_code}" --connect-timeout 3 --max-time 10 --retry 2 -X POST \
+          --data-binary "${payload}" \
+          "${test_url}")"
+        curl_rc=$?
+        set -e
+        if [ "${curl_rc}" != "0" ] || [ -z "${http_code}" ] || [ "${http_code}" = "000" ]; then
+          echo "Log upload failed (rc=${curl_rc}, http_code=${http_code:-<empty>})"
+          if [ -s "${response_file}" ]; then
+            response_snip="$(head -c 200 "${response_file}" | tr '\n' ' ')"
+            if [ -n "${response_snip}" ]; then
+              echo "Log upload response: ${response_snip}"
+            fi
+          fi
+          rm -f "${response_file}" 2>/dev/null || true
+          exit 1
+        fi
+        if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+          echo "Log upload rejected (http=${http_code})"
+          if [ -s "${response_file}" ]; then
+            response_snip="$(head -c 200 "${response_file}" | tr '\n' ' ')"
+            if [ -n "${response_snip}" ]; then
+              echo "Log upload response: ${response_snip}"
+            fi
+          fi
+          rm -f "${response_file}" 2>/dev/null || true
+          exit 1
+        fi
+        echo "Log upload ok (http=${http_code})"
+        rm -f "${response_file}" 2>/dev/null || true
+        echo "Log upload test completed."
+
+  logs:list:
+    internal: true
+    desc: List uploaded log object keys for a host (Cloudflare Worker -> R2)
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -euo pipefail
+
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+
+        # Support both:
+        # - env vars: LOGS_HOST=... LOGS_NAME_PREFIX=... task ks:logs:list
+        # - task vars: task ks:logs:list LOGS_HOST=... LOGS_NAME_PREFIX=...
+        task_logs_host="{{.LOGS_HOST | default ""}}"
+        task_logs_prefix="{{.LOGS_NAME_PREFIX | default ""}}"
+
+        base_url="${KS_BASE_URL:-}"
+        if [ -z "${base_url}" ] && [ -n "${KS_FILE_URL:-}" ]; then
+          base_url="$(
+            python3 -c 'import os,urllib.parse; url=os.environ.get("KS_FILE_URL",""); parsed=urllib.parse.urlparse(url); print(f"{parsed.scheme}://{parsed.netloc}") if parsed.scheme and parsed.netloc else print("")'
+          )"
+        fi
+        if [ -z "${base_url}" ]; then
+          echo "Missing KS base URL." >&2
+          echo "Set KS_BASE_URL (preferred) or KS_FILE_URL." >&2
+          exit 1
+        fi
+        base_url="${base_url%/}"
+
+        token="${KS_SHARED_TOKEN:-}"
+        if [ -z "${token}" ]; then
+          echo "Missing KS_SHARED_TOKEN (required to list logs)." >&2
+          exit 1
+        fi
+
+        host="${LOGS_HOST:-${task_logs_host:-${BG_HOSTNAME:-}}}"
+        if [ -z "${host}" ]; then
+          echo "Missing LOGS_HOST (or BG_HOSTNAME)." >&2
+          echo "Usage examples:" >&2
+          echo "  LOGS_HOST=node-39424 task ks:logs:list" >&2
+          echo "  task ks:logs:list LOGS_HOST=node-39424" >&2
+          exit 1
+        fi
+
+        name_prefix="${LOGS_NAME_PREFIX:-${task_logs_prefix:-}}"
+
+        # Response is JSON: { prefix, keys }
+        url="${base_url}/logs?host=${host}&token=${token}"
+        if [ -n "${name_prefix}" ]; then
+          url="${url}&name_prefix=${name_prefix}"
+        fi
+
+        curl -fsS "${url}"
+
+  logs:download:
+    internal: true
+    desc: Download a specific uploaded log file (Cloudflare Worker -> R2)
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -euo pipefail
+
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+
+        # Support both:
+        # - env vars: LOGS_HOST=... LOGS_FILE=... task ks:logs:download
+        # - task vars: task ks:logs:download LOGS_HOST=... LOGS_FILE=...
+        task_logs_host="{{.LOGS_HOST | default ""}}"
+        task_logs_file="{{.LOGS_FILE | default ""}}"
+        task_logs_out_dir="{{.LOGS_OUT_DIR | default ""}}"
+
+        base_url="${KS_BASE_URL:-}"
+        if [ -z "${base_url}" ] && [ -n "${KS_FILE_URL:-}" ]; then
+          base_url="$(
+            python3 -c 'import os,urllib.parse; url=os.environ.get("KS_FILE_URL",""); parsed=urllib.parse.urlparse(url); print(f"{parsed.scheme}://{parsed.netloc}") if parsed.scheme and parsed.netloc else print("")'
+          )"
+        fi
+        if [ -z "${base_url}" ]; then
+          echo "Missing KS base URL." >&2
+          echo "Set KS_BASE_URL (preferred) or KS_FILE_URL." >&2
+          exit 1
+        fi
+        base_url="${base_url%/}"
+
+        token="${KS_SHARED_TOKEN:-}"
+        if [ -z "${token}" ]; then
+          echo "Missing KS_SHARED_TOKEN (required to download logs)." >&2
+          exit 1
+        fi
+
+        host="${LOGS_HOST:-${task_logs_host:-${BG_HOSTNAME:-}}}"
+        if [ -z "${host}" ]; then
+          echo "Missing LOGS_HOST (or BG_HOSTNAME)." >&2
+          echo "Usage examples:" >&2
+          echo "  LOGS_HOST=node-39424 LOGS_FILE=first-boot.log task ks:logs:download" >&2
+          echo "  task ks:logs:download LOGS_HOST=node-39424 LOGS_FILE=first-boot.log" >&2
+          exit 1
+        fi
+
+        name="${LOGS_FILE:-${task_logs_file:-}}"
+        if [ -z "${name}" ]; then
+          echo "Missing LOGS_FILE (example: first-boot.log)." >&2
+          exit 1
+        fi
+
+        out_dir="${LOGS_OUT_DIR:-${task_logs_out_dir:-dist/ks-logs}}"
+        mkdir -p "${out_dir}"
+
+        url="${base_url}/logs/${host}/${name}?token=${token}"
+        out="${out_dir}/${host}-${name}"
+        curl -fsS "${url}" -o "${out}"
+        echo "Wrote ${out}"
+
+  logs:download:interactive:
+    internal: true
+    desc: Interactive R2 logs wizard (select node, download all logs to dist)
+    cmds:
+      - cmd: ./tasks/scripts/download-logs-interactive.sh
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/download-logs-interactive.sh
+        platforms: [windows]
+
+  backup:download:
+    internal: true
+    desc: Download an uploaded emergency kit backup (Cloudflare Worker -> R2)
+    cmds:
+      - |
+        set -euo pipefail
+
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+
+        # Support both:
+        # - env vars: BACKUP_HOST=... BACKUP_FILE=... task ks:backup:download
+        # - task vars: task ks:backup:download BACKUP_HOST=... BACKUP_FILE=...
+        task_backup_host="{{.BACKUP_HOST | default ""}}"
+        task_backup_file="{{.BACKUP_FILE | default ""}}"
+        task_backup_out_dir="{{.BACKUP_OUT_DIR | default ""}}"
+
+        base_url="${KS_BASE_URL:-}"
+        if [ -z "${base_url}" ] && [ -n "${KS_FILE_URL:-}" ]; then
+          base_url="$(
+            python3 -c 'import os,urllib.parse; url=os.environ.get("KS_FILE_URL",""); parsed=urllib.parse.urlparse(url); print(f"{parsed.scheme}://{parsed.netloc}") if parsed.scheme and parsed.netloc else print("")'
+          )"
+        fi
+        if [ -z "${base_url}" ]; then
+          echo "Missing KS base URL." >&2
+          echo "Set KS_BASE_URL (preferred) or KS_FILE_URL." >&2
+          exit 1
+        fi
+        base_url="${base_url%/}"
+
+        token="${KS_SHARED_TOKEN:-}"
+        if [ -z "${token}" ]; then
+          echo "Missing KS_SHARED_TOKEN (required to download backups)." >&2
+          exit 1
+        fi
+
+        host="${BACKUP_HOST:-${task_backup_host:-${LOGS_HOST:-${BG_HOSTNAME:-}}}}"
+        if [ -z "${host}" ]; then
+          echo "Missing BACKUP_HOST (or LOGS_HOST / BG_HOSTNAME)." >&2
+          echo "Usage examples:" >&2
+          echo "  BACKUP_HOST=node-39424 BACKUP_FILE=bootstrap-emergency-kit.tar.gz.enc task ks:backup:download" >&2
+          echo "  task ks:backup:download BACKUP_HOST=node-39424 BACKUP_FILE=bootstrap-emergency-kit.tar.gz.enc" >&2
+          exit 1
+        fi
+
+        name="${BACKUP_FILE:-${task_backup_file:-}}"
+        if [ -z "${name}" ]; then
+          echo "Missing BACKUP_FILE (example: bootstrap-emergency-kit.tar.gz.enc)." >&2
+          exit 1
+        fi
+
+        out_dir="${BACKUP_OUT_DIR:-${task_backup_out_dir:-dist/ks-backups}}"
+        mkdir -p "${out_dir}"
+
+        url="${base_url}/backup/${host}/${name}?token=${token}"
+        out="${out_dir}/${host}-${name}"
+        curl -fsS "${url}" -o "${out}"
+        echo "Wrote ${out}"
+
+  backup:download:interactive:
+    internal: true
+    desc: Interactive R2 backup wizard (select node, download .7z, extract to dist)
+    cmds:
+      - cmd: ./tasks/scripts/download-backup-interactive.sh
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/download-backup-interactive.sh
+        platforms: [windows]
+
+  backup:extract:
+    internal: true
+    desc: Extract an emergency kit by BACKUP_HOST (auto-detect file in repo root or dist/ks-backups)
+    cmds:
+      - |
+        set -euo pipefail
+
+        # Support both:
+        # - env vars: BACKUP_HOST=... task ks:backup:extract
+        # - task vars: task ks:backup:extract BACKUP_HOST=...
+        task_backup_host="{{.BACKUP_HOST | default ""}}"
+        task_backup_file="{{.BACKUP_FILE | default ""}}"
+        task_out_dir="{{.OUT_DIR | default ""}}"
+
+        host="${BACKUP_HOST:-${NODE_ID:-${task_backup_host:-}}}"
+        if [ -z "${host}" ]; then
+          echo "Missing BACKUP_HOST (or NODE_ID)." >&2
+          echo "Examples:" >&2
+          echo "  BACKUP_HOST=node-00380 task ks:backup:extract" >&2
+          echo "  task ks:backup:extract BACKUP_HOST=node-00380" >&2
+          exit 1
+        fi
+
+        # Optional: specify BACKUP_FILE when you know the exact file name.
+        # Example values:
+        # - bootstrap-emergency-kit.tar.gz.enc
+        # - bootstrap-emergency-kit.7z
+        name="${BACKUP_FILE:-${task_backup_file:-}}"
+
+        # Prefer format based on env (if present). Default: openssl.
+        prefer="${BACKUP_PREFER:-${BOOTSTRAP_BACKUP_FORMAT:-openssl}}"
+        prefer="$(printf '%s' "${prefer}" | tr '[:upper:]' '[:lower:]')"
+
+        candidates=""
+        add_cand() {
+          f="${1:?}"
+          if [ -f "${f}" ]; then
+            printf '%s\n' "${f}"
+          fi
+        }
+
+        pick_first() {
+          while IFS= read -r f; do
+            [ -n "${f}" ] || continue
+            if [ -f "${f}" ]; then
+              printf '%s\n' "${f}"
+              return 0
+            fi
+          done
+          return 1
+        }
+
+        if [ -n "${name}" ]; then
+          # Accept either the raw file name or the host-prefixed name.
+          path="$(
+            {
+              printf '%s\n' "dist/ks-backups/${host}-${name}"
+              printf '%s\n' "dist/ks-backups/${name}"
+              printf '%s\n' "${host}-${name}"
+              printf '%s\n' "${name}"
+            } | pick_first || true
+          )"
+        else
+          # Auto-detect: look for the common names in both dist/ks-backups and repo root.
+          # We also accept a bare `bootstrap-emergency-kit.*` dropped in the repo root.
+          enc="bootstrap-emergency-kit.tar.gz.enc"
+          seven="bootstrap-emergency-kit.7z"
+          # Some users copy files out of a backup system with an added prefix.
+          seven_prefixed="backups_${host}_bootstrap-emergency-kit.7z"
+          enc_prefixed="backups_${host}_bootstrap-emergency-kit.tar.gz.enc"
+          path=""
+          if [ "${prefer}" = "7z" ]; then
+            path="$(
+              {
+                printf '%s\n' "dist/ks-backups/${host}-${seven}"
+                printf '%s\n' "dist/ks-backups/${host}-bootstrap-emergency-kit.7z"
+                printf '%s\n' "dist/ks-backups/${seven_prefixed}"
+                printf '%s\n' "${host}-${seven}"
+                printf '%s\n' "${host}-bootstrap-emergency-kit.7z"
+                printf '%s\n' "${seven_prefixed}"
+                printf '%s\n' "dist/ks-backups/${seven}"
+                printf '%s\n' "${seven}"
+                printf '%s\n' "dist/ks-backups/${host}-${enc}"
+                printf '%s\n' "dist/ks-backups/${host}-bootstrap-emergency-kit.tar.gz.enc"
+                printf '%s\n' "dist/ks-backups/${enc_prefixed}"
+                printf '%s\n' "${host}-${enc}"
+                printf '%s\n' "${host}-bootstrap-emergency-kit.tar.gz.enc"
+                printf '%s\n' "${enc_prefixed}"
+                printf '%s\n' "dist/ks-backups/${enc}"
+                printf '%s\n' "${enc}"
+              } | pick_first || true
+            )"
+          else
+            # openssl|both|unknown => prefer .enc first.
+            path="$(
+              {
+                printf '%s\n' "dist/ks-backups/${host}-${enc}"
+                printf '%s\n' "dist/ks-backups/${host}-bootstrap-emergency-kit.tar.gz.enc"
+                printf '%s\n' "dist/ks-backups/${enc_prefixed}"
+                printf '%s\n' "${host}-${enc}"
+                printf '%s\n' "${host}-bootstrap-emergency-kit.tar.gz.enc"
+                printf '%s\n' "${enc_prefixed}"
+                printf '%s\n' "dist/ks-backups/${enc}"
+                printf '%s\n' "${enc}"
+                printf '%s\n' "dist/ks-backups/${host}-${seven}"
+                printf '%s\n' "dist/ks-backups/${host}-bootstrap-emergency-kit.7z"
+                printf '%s\n' "dist/ks-backups/${seven_prefixed}"
+                printf '%s\n' "${host}-${seven}"
+                printf '%s\n' "${host}-bootstrap-emergency-kit.7z"
+                printf '%s\n' "${seven_prefixed}"
+                printf '%s\n' "dist/ks-backups/${seven}"
+                printf '%s\n' "${seven}"
+              } | pick_first || true
+            )"
+          fi
+        fi
+
+        if [ -z "${path}" ] || [ ! -f "${path}" ]; then
+          echo "Could not find an emergency kit file for host=${host}." >&2
+          echo "Looked in repo root and dist/ks-backups." >&2
+          echo "Fix options:" >&2
+          echo "  - Put the file in the repo root (examples: bootstrap-emergency-kit.tar.gz.enc, bootstrap-emergency-kit.7z, backups_${host}_bootstrap-emergency-kit.7z), OR" >&2
+          echo "  - Download it: task ks:backup:download BACKUP_HOST=${host} BACKUP_FILE=bootstrap-emergency-kit.tar.gz.enc" >&2
+          echo "  - Or specify BACKUP_FILE explicitly." >&2
+          exit 1
+        fi
+
+        out_dir="${OUT_DIR:-${task_out_dir:-}}"
+        if [ -z "${out_dir}" ]; then
+          out_dir="dist/ks-backups/extracted/${host}"
+        fi
+        mkdir -p "${out_dir}"
+
+        echo "[ks:backup:extract] using ${path}"
+        if printf '%s' "${path}" | rg -q "\\.7z$"; then
+          task ks:backup:extract-7z BACKUP_PATH="${path}" OUT_DIR="${out_dir}"
+        elif printf '%s' "${path}" | rg -q "\\.enc$"; then
+          task ks:backup:extract-openssl BACKUP_PATH="${path}" OUT_DIR="${out_dir}"
+        else
+          echo "Unsupported kit file type (expected .7z or .enc): ${path}" >&2
+          exit 1
+        fi
+
+  backup:test-7z:
+    internal: true
+    desc: Test that a downloaded .7z emergency kit can be opened with BOOTSTRAP_BACKUP_PASSPHRASE
+    cmds:
+      - |
+        set -euo pipefail
+
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+
+        archive="{{.BACKUP_PATH | default ""}}"
+        if [ -z "${archive}" ]; then
+          echo "Set BACKUP_PATH to a local .7z file (example: dist/ks-backups/node-123-bootstrap-emergency-kit.7z)." >&2
+          exit 1
+        fi
+        if command -v python3 >/dev/null 2>&1; then
+          archive="$(python3 -c 'import os,sys; print(os.path.expanduser(sys.argv[1]))' "${archive}")"
+        fi
+        if [ ! -f "${archive}" ]; then
+          echo "Missing BACKUP_PATH file: ${archive}" >&2
+          exit 1
+        fi
+
+        if ! printf '%s' "${archive}" | rg -q "\\.7z$"; then
+          echo "BACKUP_PATH must end with .7z (got: ${archive})." >&2
+          exit 1
+        fi
+
+        pass="${BOOTSTRAP_BACKUP_PASSPHRASE:-}"
+        if [ -z "${pass}" ] && [ -n "${BOOTSTRAP_BACKUP_PASSPHRASE_B64:-}" ]; then
+          pass="$(python3 -c 'import base64,sys; sys.stdout.write(base64.b64decode(sys.argv[1].strip().encode()).decode("utf-8"))' "${BOOTSTRAP_BACKUP_PASSPHRASE_B64}")"
+        fi
+        if [ -z "${pass}" ]; then
+          echo "Missing BOOTSTRAP_BACKUP_PASSPHRASE (or BOOTSTRAP_BACKUP_PASSPHRASE_B64)." >&2
+          exit 1
+        fi
+
+        find_seven() {
+          if command -v 7z >/dev/null 2>&1; then
+            command -v 7z
+            return 0
+          fi
+          if command -v 7za >/dev/null 2>&1; then
+            command -v 7za
+            return 0
+          fi
+          if [ -x "/c/Program Files/7-Zip/7z.exe" ]; then
+            printf '%s\n' "/c/Program Files/7-Zip/7z.exe"
+            return 0
+          fi
+          return 1
+        }
+
+        ensure_seven() {
+          local s=""
+          s="$(find_seven || true)"
+          if [ -n "${s}" ]; then
+            printf '%s\n' "${s}"
+            return 0
+          fi
+          case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+              if command -v powershell.exe >/dev/null 2>&1; then
+                powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "./tasks/scripts/install-7zip.ps1" >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+          s="$(find_seven || true)"
+          if [ -n "${s}" ]; then
+            printf '%s\n' "${s}"
+            return 0
+          fi
+          return 1
+        }
+
+        seven="$(ensure_seven || true)"
+        if [ -z "${seven}" ]; then
+          echo "7z is required to test .7z archives and auto-install did not succeed." >&2
+          exit 1
+        fi
+
+        # `t` verifies the archive without extracting it.
+        "${seven}" t -p"${pass}" "${archive}" >/dev/null
+        echo "OK: password accepted for ${archive}"
+
+  backup:extract-7z:
+    internal: true
+    desc: Extract a downloaded .7z emergency kit using BOOTSTRAP_BACKUP_PASSPHRASE (no GUI, avoids paste issues)
+    cmds:
+      - |
+        set -euo pipefail
+
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+
+        archive="{{.BACKUP_PATH | default ""}}"
+        if [ -z "${archive}" ]; then
+          echo "Set BACKUP_PATH to a local .7z file (example: dist/ks-backups/node-123-bootstrap-emergency-kit.7z)." >&2
+          exit 1
+        fi
+        if command -v python3 >/dev/null 2>&1; then
+          archive="$(python3 -c 'import os,sys; print(os.path.expanduser(sys.argv[1]))' "${archive}")"
+        fi
+        if [ ! -f "${archive}" ]; then
+          echo "Missing BACKUP_PATH file: ${archive}" >&2
+          exit 1
+        fi
+        if ! printf '%s' "${archive}" | rg -q "\\.7z$"; then
+          echo "BACKUP_PATH must end with .7z (got: ${archive})." >&2
+          exit 1
+        fi
+
+        out_dir="{{.OUT_DIR | default ""}}"
+        if [ -z "${out_dir}" ]; then
+          out_dir="dist/ks-backups/extracted-7z"
+        fi
+        mkdir -p "${out_dir}"
+
+        pass="${BOOTSTRAP_BACKUP_PASSPHRASE:-}"
+        if [ -z "${pass}" ] && [ -n "${BOOTSTRAP_BACKUP_PASSPHRASE_B64:-}" ]; then
+          pass="$(python3 -c 'import base64,sys; sys.stdout.write(base64.b64decode(sys.argv[1].strip().encode()).decode("utf-8"))' "${BOOTSTRAP_BACKUP_PASSPHRASE_B64}")"
+        fi
+        if [ -z "${pass}" ]; then
+          echo "Missing BOOTSTRAP_BACKUP_PASSPHRASE (or BOOTSTRAP_BACKUP_PASSPHRASE_B64)." >&2
+          exit 1
+        fi
+
+        find_seven() {
+          if command -v 7z >/dev/null 2>&1; then
+            command -v 7z
+            return 0
+          fi
+          if command -v 7za >/dev/null 2>&1; then
+            command -v 7za
+            return 0
+          fi
+          if [ -x "/c/Program Files/7-Zip/7z.exe" ]; then
+            printf '%s\n' "/c/Program Files/7-Zip/7z.exe"
+            return 0
+          fi
+          return 1
+        }
+
+        ensure_seven() {
+          local s=""
+          s="$(find_seven || true)"
+          if [ -n "${s}" ]; then
+            printf '%s\n' "${s}"
+            return 0
+          fi
+          case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+              if command -v powershell.exe >/dev/null 2>&1; then
+                powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "./tasks/scripts/install-7zip.ps1" >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+          s="$(find_seven || true)"
+          if [ -n "${s}" ]; then
+            printf '%s\n' "${s}"
+            return 0
+          fi
+          return 1
+        }
+
+        seven="$(ensure_seven || true)"
+        if [ -z "${seven}" ]; then
+          echo "7z is required to extract .7z archives and auto-install did not succeed." >&2
+          exit 1
+        fi
+
+        "${seven}" x -y -p"${pass}" -o"${out_dir}" "${archive}" >/dev/null
+        echo "Extracted to ${out_dir}"
+
+  backup:pbcopy-passphrase:
+    internal: true
+    desc: Copy BOOTSTRAP_BACKUP_PASSPHRASE to clipboard without a trailing newline (macOS)
+    cmds:
+      - |
+        set -euo pipefail
+        if ! command -v pbcopy >/dev/null 2>&1; then
+          echo "pbcopy not found (this task is macOS-only)." >&2
+          exit 1
+        fi
+
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+
+        pass="${BOOTSTRAP_BACKUP_PASSPHRASE:-}"
+        if [ -z "${pass}" ] && [ -n "${BOOTSTRAP_BACKUP_PASSPHRASE_B64:-}" ]; then
+          pass="$(python3 -c 'import base64,sys; sys.stdout.write(base64.b64decode(sys.argv[1].strip().encode()).decode("utf-8"))' "${BOOTSTRAP_BACKUP_PASSPHRASE_B64}")"
+        fi
+        if [ -z "${pass}" ]; then
+          echo "Missing BOOTSTRAP_BACKUP_PASSPHRASE (or BOOTSTRAP_BACKUP_PASSPHRASE_B64)." >&2
+          exit 1
+        fi
+
+        printf '%s' "${pass}" | pbcopy
+        echo "Copied BOOTSTRAP_BACKUP_PASSPHRASE to clipboard (no newline)."
+
+  backup:extract-openssl:
+    internal: true
+    desc: Decrypt and extract a downloaded .tar.gz.enc emergency kit using OpenSSL + BOOTSTRAP_BACKUP_PASSPHRASE
+    cmds:
+      - |
+        set -euo pipefail
+
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+
+        enc="{{.BACKUP_PATH | default ""}}"
+        if [ -z "${enc}" ]; then
+          echo "Set BACKUP_PATH to a local .enc file (example: dist/ks-backups/node-123-bootstrap-emergency-kit.tar.gz.enc)." >&2
+          exit 1
+        fi
+        if command -v python3 >/dev/null 2>&1; then
+          enc="$(python3 -c 'import os,sys; print(os.path.expanduser(sys.argv[1]))' "${enc}")"
+        fi
+        if [ ! -f "${enc}" ]; then
+          echo "Missing BACKUP_PATH file: ${enc}" >&2
+          exit 1
+        fi
+        if ! printf '%s' "${enc}" | rg -q "\\.enc$"; then
+          echo "BACKUP_PATH must end with .enc (got: ${enc})." >&2
+          exit 1
+        fi
+
+        pass="${BOOTSTRAP_BACKUP_PASSPHRASE:-}"
+        if [ -z "${pass}" ] && [ -n "${BOOTSTRAP_BACKUP_PASSPHRASE_B64:-}" ]; then
+          pass="$(python3 -c 'import base64,sys; sys.stdout.write(base64.b64decode(sys.argv[1].strip().encode()).decode("utf-8"))' "${BOOTSTRAP_BACKUP_PASSPHRASE_B64}")"
+        fi
+        if [ -z "${pass}" ]; then
+          echo "Missing BOOTSTRAP_BACKUP_PASSPHRASE (or BOOTSTRAP_BACKUP_PASSPHRASE_B64)." >&2
+          exit 1
+        fi
+        export BOOTSTRAP_BACKUP_PASSPHRASE="${pass}"
+
+        out_dir="{{.OUT_DIR | default ""}}"
+        if [ -z "${out_dir}" ]; then
+          out_dir="dist/ks-backups/extracted"
+        fi
+        mkdir -p "${out_dir}"
+
+        base="$(basename "${enc}")"
+        base="${base%.enc}"
+        tarball="${out_dir}/${base}"
+        extract_dir="${out_dir}/${base%.tar.gz}"
+
+        rm -f "${tarball}" 2>/dev/null || true
+        # Prefer GCM; fall back to CBC if the file was created on a host where `openssl enc` lacks AEAD support.
+        if ! openssl enc -d -aes-256-gcm -salt -pbkdf2 -iter 200000 \
+          -in "${enc}" -out "${tarball}" \
+          -pass env:BOOTSTRAP_BACKUP_PASSPHRASE >/dev/null 2>&1; then
+          openssl enc -d -aes-256-cbc -salt -pbkdf2 -iter 200000 \
+            -in "${enc}" -out "${tarball}" \
+            -pass env:BOOTSTRAP_BACKUP_PASSPHRASE >/dev/null
+        fi
+
+        rm -rf "${extract_dir}" 2>/dev/null || true
+        mkdir -p "${extract_dir}"
+        tar -xzf "${tarball}" -C "${extract_dir}"
+        echo "Extracted to ${extract_dir}"

@@ -1,0 +1,21 @@
+name: homepage
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-15"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/portal/homepage
+ignore_differences:
+  - group: ""
+    kind: Namespace
+    name: homepage
+    jsonPointers:
+      - /metadata/annotations/cattle.io~1status
+      - /metadata/resourceVersion
+      - /metadata/uid
+      - /spec
+      - /spec/finalizers
+      - /status
+sync_options:
+  - RespectIgnoreDifferences=true
+destination_namespace: homepage

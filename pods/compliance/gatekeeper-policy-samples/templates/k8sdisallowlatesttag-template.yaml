@@ -1,0 +1,70 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sdisallowlatesttag
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sDisallowLatestTag
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            exemptNamespaces:
+              type: array
+              items:
+                type: string
+            exemptImages:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sdisallowlatesttag
+
+        violation[{"msg": msg}] {
+          obj := input.review.object
+          namespace := object.get(obj.metadata, "namespace", "")
+          not exempt_namespace(namespace)
+          obj.kind == "Pod"
+          image := obj.spec.containers[_].image
+          not exempt_image(image)
+          latest_image(image)
+          msg := sprintf("image %q must not use the latest tag", [image])
+        }
+
+        violation[{"msg": msg}] {
+          obj := input.review.object
+          namespace := object.get(obj.metadata, "namespace", "")
+          not exempt_namespace(namespace)
+          obj.kind == "Pod"
+          image := obj.spec.initContainers[_].image
+          not exempt_image(image)
+          latest_image(image)
+          msg := sprintf("image %q must not use the latest tag", [image])
+        }
+
+        exempt_namespace(namespace) {
+          exempt := object.get(input.parameters, "exemptNamespaces", [])
+          namespace != ""
+          exempt[_] == namespace
+        }
+
+        exempt_image(image) {
+          exempt := object.get(input.parameters, "exemptImages", [])
+          prefix := exempt[_]
+          prefix != ""
+          startswith(lower(image), lower(prefix))
+        }
+
+        latest_image(image) {
+          not contains(image, ":")
+        }
+
+        latest_image(image) {
+          endswith(lower(image), ":latest")
+        }

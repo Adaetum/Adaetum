@@ -1,0 +1,7 @@
+configMapGenerator:
+  - name: cluster-config
+    envs:
+      - cluster-config.env
+
+generatorOptions:
+  disableNameSuffixHash: true

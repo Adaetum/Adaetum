@@ -1,0 +1,117 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingress-vip
+  namespace: ingress
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: ingress-vip
+          restartPolicy: OnFailure
+          containers:
+            - name: ingress-vip
+              image: bitnami/kubectl:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  set -eu
+
+                  secret_ns="ingress"
+                  secret_name="ingress-vip-config"
+
+                  read_secret_key() {
+                    key="$1"
+                    kubectl -n "${secret_ns}" get secret "${secret_name}" -o "jsonpath={.data.${key}}" 2>/dev/null \
+                      | (base64 -d 2>/dev/null || true) \
+                      | tr -d '\r\n'
+                  }
+
+                  controller_service="$(read_secret_key ingress_controller_service || true)"
+                  if [ -z "${controller_service}" ]; then
+                    controller_service="kube-system/rke2-ingress-nginx-controller"
+                  fi
+                  controller_ns="${controller_service%%/*}"
+                  controller_name="${controller_service##*/}"
+
+                  desired_type="$(read_secret_key ingress_service_type || true)"
+                  desired_type="${desired_type:-LoadBalancer}"
+                  desired_type="$(printf '%s' "${desired_type}" | tr -d '\r\n')"
+                  dhcp_hostname="$(read_secret_key ingress_dhcp_hostname || true)"
+
+                  internal_vip="$(read_secret_key ingress_internal_vip || true)"
+                  external_vip="$(read_secret_key ingress_external_vip || true)"
+                  vip="${external_vip:-${internal_vip:-}}"
+
+                  if ! kubectl -n "${controller_ns}" get svc "${controller_name}" >/dev/null 2>&1; then
+                    echo "[ingress-vip] service not found: ${controller_service}"
+                    exit 0
+                  fi
+
+                  echo "[ingress-vip] target=${controller_service} type=${desired_type} vip=${vip:-<none>}"
+
+                  kubectl -n "${controller_ns}" patch svc "${controller_name}" --type=merge \
+                    -p "{\"spec\":{\"type\":\"${desired_type}\"}}" >/dev/null 2>&1 || true
+
+                  existing_lb_class="$(kubectl -n "${controller_ns}" get svc "${controller_name}" -o jsonpath='{.spec.loadBalancerClass}' 2>/dev/null | tr -d '\r\n' || true)"
+                  if [ -n "${existing_lb_class}" ]; then
+                    echo "[ingress-vip] leaving existing loadBalancerClass=${existing_lb_class} unchanged on ${controller_service}"
+                  fi
+
+                  if [ "${desired_type}" != "LoadBalancer" ]; then
+                    exit 0
+                  fi
+
+                  # Default "best effort" behavior: if no VIP is pinned, request one via DHCP.
+                  # kube-vip will create a macvlan interface and request a lease when it sees
+                  # a Service using an "empty" load balancer address (0.0.0.0).
+                  if [ -z "${vip}" ]; then
+                    kubectl -n "${controller_ns}" patch svc "${controller_name}" --type=merge \
+                      -p "{\"spec\":{\"loadBalancerIP\":\"0.0.0.0\"},\"metadata\":{\"annotations\":{\"kube-vip.io/loadbalancerIP\":\"0.0.0.0\",\"kube-vip.io/loadbalancerIPs\":null}}}" >/dev/null 2>&1 || true
+                    if [ -n "${dhcp_hostname}" ]; then
+                      kubectl -n "${controller_ns}" patch svc "${controller_name}" --type=merge \
+                        -p "{\"metadata\":{\"annotations\":{\"kube-vip.io/loadbalancerHostname\":\"${dhcp_hostname}\"}}}" >/dev/null 2>&1 || true
+                    fi
+                  fi
+
+                  if [ -n "${vip}" ]; then
+                    kubectl -n "${controller_ns}" patch svc "${controller_name}" --type=merge \
+                      -p "{\"spec\":{\"loadBalancerIP\":\"${vip}\"},\"metadata\":{\"annotations\":{\"kube-vip.io/loadbalancerIP\":null,\"kube-vip.io/loadbalancerIPs\":\"${vip}\"}}}" >/dev/null 2>&1 || true
+                  fi
+
+                  if [ -z "${vip}" ]; then
+                    i=1
+                    while [ "${i}" -le 60 ]; do
+                      status_ip="$(kubectl -n "${controller_ns}" get svc "${controller_name}" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+                      status_ip="$(printf '%s' "${status_ip}" | tr -d '\r\n')"
+                      if [ -n "${status_ip}" ]; then
+                        vip="${status_ip}"
+                        break
+                      fi
+                      sleep 2
+                      i=$((i + 1))
+                    done
+
+                    if [ -n "${vip}" ]; then
+                      if [ "${vip}" = "0.0.0.0" ] || [ "${vip}" = "::" ]; then
+                        vip=""
+                      fi
+                    fi
+
+                    if [ -n "${vip}" ]; then
+                      echo "[ingress-vip] discovered vip=${vip} via DHCP; persisting to ${secret_ns}/${secret_name}"
+                      vip_b64="$(printf '%s' "${vip}" | base64 | tr -d '\r\n')"
+                      svc_b64="$(printf '%s' "${controller_service}" | base64 | tr -d '\r\n')"
+                      kubectl -n "${controller_ns}" patch svc "${controller_name}" --type=merge \
+                        -p "{\"spec\":{\"loadBalancerIP\":\"${vip}\"},\"metadata\":{\"annotations\":{\"kube-vip.io/loadbalancerIP\":null,\"kube-vip.io/loadbalancerIPs\":\"${vip}\"}}}" >/dev/null 2>&1 || true
+                      kubectl -n "${secret_ns}" patch secret "${secret_name}" --type=merge \
+                        -p "{\"data\":{\"ingress_controller_service\":\"${svc_b64}\",\"ingress_internal_vip\":\"${vip_b64}\",\"ingress_external_vip\":\"${vip_b64}\"}}" >/dev/null 2>&1 || true
+                    fi
+                  fi

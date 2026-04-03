@@ -1,0 +1,118 @@
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+        files: ^ansible/.*\.(yml|yaml)$
+      - id: end-of-file-fixer
+        files: ^ansible/.*\.(yml|yaml)$
+      - id: trailing-whitespace
+        files: ^ansible/.*\.(yml|yaml)$
+
+  - repo: local
+    hooks:
+      - id: validate-ansible-syntax
+        name: Validate Ansible playbook syntax
+        entry: ansible/ansible-scripts/validate-ansible-syntax.py
+        language: python
+        additional_dependencies:
+          - ansible-core==2.19.6
+        pass_filenames: false
+        files: ^ansible/.*\.(yml|yaml)$
+      - id: validate-actions
+        name: Validate GitHub Actions YAML
+        entry: .validator/validate-actions.py
+        language: python
+        additional_dependencies: [pyyaml]
+        files: ^\.github/workflows/.*\.(yml|yaml)$
+      - id: validate-ks-src
+        name: Validate Kickstart Source Compiler
+        entry: tasks/scripts/compile-kickstarts.py
+        language: python
+        additional_dependencies:
+          - jinja2
+        args:
+          - --validate-all
+          - --self-test
+        pass_filenames: false
+        files: ^(ks-src/|tasks/scripts/compile-kickstarts\.py|tasks/ks\.yml|Taskfile\.yml)
+      - id: render-pods-config-check
+        name: Validate rendered pods config
+        entry: tasks/scripts/render-pods-config.py
+        language: python
+        args:
+          - --check
+        pass_filenames: false
+        files: ^(pods/cluster-config/cluster-config\.env|pods/.+\.tmpl|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/ingress-cluster-config\.yaml|tasks/scripts/render-pods-config\.py|tasks/scripts/run-opinionated-setup\.sh)
+      - id: validate-pods-public-safe
+        name: Validate public-safe pods templates
+        entry: .validator/validate-pods-public-safe.py
+        language: python
+        pass_filenames: false
+        files: ^(pods/cluster-config/cluster-config\.env|pods/argocd/.+\.ya?ml|pods/ansible/ansible/ansible-cluster-config\.yaml|pods/gitea/gitea\.app\.yaml|pods/ingress/.+cluster-config\.yaml|pods/portal/homepage/homepage-cluster-config\.yaml|tasks/scripts/clean-public-safe-config\.py|\.validator/validate-pods-public-safe\.py)
+      - id: validate-cluster-config
+        name: Validate cluster config values
+        entry: .validator/validate-cluster-config.py
+        language: python
+        pass_filenames: false
+        files: ^(pods/cluster-config/cluster-config\.env|\.validator/validate-cluster-config\.py)
+      - id: validate-pod-app-definitions
+        name: Validate pod app definitions
+        entry: .validator/validate-pod-app-definitions.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        files: ^(pods/.+\.app\.yaml|\.validator/validate-pod-app-definitions\.py)
+      - id: validate-pods-kustomize
+        name: Validate pods kustomize builds
+        entry: .validator/validate-pods-kustomize.py
+        language: python
+        pass_filenames: false
+        files: ^(pods/.+/kustomization\.yaml|pods/cluster-config/cluster-config\.env|pods/.+\.ya?ml|\.validator/validate-pods-kustomize\.py)
+      - id: validate-pods-template-inventory
+        name: Validate pods template inventory
+        entry: .validator/validate-pods-template-inventory.py
+        language: python
+        pass_filenames: false
+        files: ^(pods/.+\.tmpl|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/ingress-cluster-config\.yaml|tasks/scripts/render-pods-config\.py|\.validator/validate-pods-template-inventory\.py)
+      - id: validate-setup-pods-roundtrip
+        name: Validate setup pods roundtrip
+        entry: .validator/validate-setup-pods-roundtrip.py
+        language: python
+        pass_filenames: false
+        files: ^(tasks/scripts/render-pods-config\.py|tasks/scripts/run-opinionated-setup\.sh|pods/cluster-config/cluster-config\.env|\.validator/validate-setup-pods-roundtrip\.py)
+      - id: validate-applicationset-smoke
+        name: Validate ApplicationSet smoke
+        entry: .validator/validate-applicationset-smoke.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        files: ^(pods/argocd/bootstrap/applicationset\.yaml|pods/.+\.app\.yaml|\.validator/validate-applicationset-smoke\.py)
+      - id: validate-pods-docs
+        name: Validate pods docs contract
+        entry: .validator/validate-pods-docs.py
+        language: python
+        pass_filenames: false
+        files: ^(setup\.md|pods/ingress/platform-routing/README\.md|\.validator/validate-pods-docs\.py)
+      - id: validate-pods-secrets
+        name: Validate pods secret patterns
+        entry: .validator/validate-pods-secrets.py
+        language: python
+        pass_filenames: false
+        files: ^(pods/.*|setup\.md|\.validator/validate-pods-secrets\.py)
+      - id: validate-pods-consistency
+        name: Validate pods consistency
+        entry: .validator/validate-pods-consistency.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        files: ^(pods/cluster-config/cluster-config\.env|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/kustomization\.yaml|pods/ingress/ingress-cluster-config\.yaml|pods/ansible/ansible/ansible-runner-deployment\.yaml|pods/ingress/external-dns/deployment\.yaml|\.validator/validate-pods-consistency\.py)
+      - id: validate-no-example-placeholders
+        name: Validate generated config has no example placeholders
+        entry: .validator/validate-no-example-placeholders.py
+        language: python
+        pass_filenames: false
+        files: ^(pods/cluster-config/cluster-config\.env|pods/ingress/kustomization\.yaml|pods/ingress/observability-routing/kustomization\.yaml|pods/portal/homepage/kustomization\.yaml|pods/ansible/ansible/kustomization\.yaml|dist/bootstrap-runtime\.env|dist/ks-templates/.+\.ks|tasks/scripts/run-opinionated-setup\.sh|\.validator/validate-no-example-placeholders\.py)

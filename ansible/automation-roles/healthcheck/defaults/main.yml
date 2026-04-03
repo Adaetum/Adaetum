@@ -1,0 +1,24 @@
+---
+# Default variables for healthcheck
+healthcheck_report_path: "/var/log/ansible-healthcheck.txt"
+healthcheck_check_services:
+  - sshd
+  - chronyd
+  - tailscaled
+  - rke2-server
+healthcheck_disk_min_free_gb: 2
+healthcheck_write_report: true
+healthcheck_log_services:
+  - rke2-server
+  - tailscaled
+  - sshd
+healthcheck_log_lines: 200
+healthcheck_log_error_patterns:
+  - "error"
+  - "failed"
+  - "panic"
+  - "fatal"
+healthcheck_dns_name: "tailscale.com"
+healthcheck_ping_target: "1.1.1.1"
+healthcheck_cpu_load_max_per_core: 1.5
+healthcheck_check_kube_api: true

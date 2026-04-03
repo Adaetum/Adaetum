@@ -1,0 +1,130 @@
+#!/bin/sh
+set -eu
+
+playbook="${1:-${ANSIBLE_PLAYBOOK:-playbooks/bootstrap.yml}}"
+inventory="${ANSIBLE_INVENTORY:-node-inventory.yml}"
+extra_args="${ANSIBLE_EXTRA_ARGS:-}"
+
+if [ -f /ansible/ansible/.env ]; then
+  set -a
+  . /ansible/ansible/.env
+  set +a
+fi
+
+base64url() {
+  openssl base64 -A | tr '+/' '-_' | tr -d '='
+}
+
+github_app_mint_token() {
+  [ -n "${GITHUB_APP_ID:-}" ] || return 1
+  [ -n "${GITHUB_APP_INSTALLATION_ID:-}" ] || return 1
+  [ -n "${GITHUB_APP_PRIVATE_KEY_B64:-}" ] || return 1
+
+  key_file="$(mktemp)"
+  if ! printf "%s" "${GITHUB_APP_PRIVATE_KEY_B64}" | base64 -d > "${key_file}" 2>/dev/null; then
+    rm -f "${key_file}"
+    return 1
+  fi
+
+  now="$(date +%s)"
+  iat=$((now - 60))
+  exp=$((now + 540))
+  header='{"alg":"RS256","typ":"JWT"}'
+  payload="{\"iat\":${iat},\"exp\":${exp},\"iss\":\"${GITHUB_APP_ID}\"}"
+  unsigned="$(printf '%s' "${header}" | base64url).$(printf '%s' "${payload}" | base64url)"
+  signature="$(printf '%s' "${unsigned}" | openssl dgst -sha256 -sign "${key_file}" | base64url)"
+  rm -f "${key_file}"
+
+  jwt="${unsigned}.${signature}"
+  token_json="$(
+    curl -fsSL -X POST "https://api.github.com/app/installations/${GITHUB_APP_INSTALLATION_ID}/access_tokens" \
+      -H "Authorization: Bearer ${jwt}" \
+      -H "Accept: application/vnd.github+json"
+  )" || return 1
+
+  printf '%s' "${token_json}"
+}
+
+github_app_refresh_env() {
+  cache_dir="/var/lib/ansible"
+  cache_file="${cache_dir}/github-app-token.json"
+  mkdir -p "${cache_dir}"
+
+  now="$(date +%s)"
+  expires_epoch=0
+  cached_token=""
+  if [ -f "${cache_file}" ]; then
+    expires_epoch="$(python3 - <<'PY' "${cache_file}" 2>/dev/null
+import json,sys,datetime
+path = sys.argv[1]
+try:
+    data = json.load(open(path))
+    expires = data.get("expires_at") or ""
+    if expires:
+        dt = datetime.datetime.fromisoformat(expires.replace("Z","+00:00"))
+        print(int(dt.timestamp()))
+    else:
+        print(0)
+except Exception:
+    print(0)
+PY
+)"
+    cached_token="$(python3 - <<'PY' "${cache_file}" 2>/dev/null
+import json,sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path))
+    print(data.get("token",""))
+except Exception:
+    print("")
+PY
+)"
+  fi
+
+  if [ -n "${cached_token}" ] && [ $((now + 300)) -lt "${expires_epoch}" ]; then
+    export ARGOCD_GITHUB_TOKEN="${cached_token}"
+    export ANSIBLE_RUNNER_HTTP_TOKEN="${cached_token}"
+    if [ -z "${ARGOCD_GITHUB_USERNAME:-}" ]; then
+      export ARGOCD_GITHUB_USERNAME="oauth2"
+    fi
+    return 0
+  fi
+
+  token_json="$(github_app_mint_token)" || return 1
+  token="$(printf '%s' "${token_json}" | python3 - <<'PY'
+import json,sys
+data = json.load(sys.stdin)
+print(data.get("token",""))
+PY
+)"
+  if [ -z "${token}" ]; then
+    return 1
+  fi
+  printf '%s' "${token_json}" > "${cache_file}"
+  export ARGOCD_GITHUB_TOKEN="${token}"
+  export ANSIBLE_RUNNER_HTTP_TOKEN="${token}"
+  if [ -z "${ARGOCD_GITHUB_USERNAME:-}" ]; then
+    export ARGOCD_GITHUB_USERNAME="oauth2"
+  fi
+}
+
+if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_INSTALLATION_ID:-}" ] && [ -n "${GITHUB_APP_PRIVATE_KEY_B64:-}" ]; then
+  github_app_refresh_env || echo "[ansible-runner] GitHub App token refresh failed"
+fi
+
+cd /ansible/ansible
+
+if [ -x /usr/local/bin/build-inventory ]; then
+  /usr/local/bin/build-inventory /ansible/ansible
+elif [ -x ./ansible-scripts/build-inventory ]; then
+  ./ansible-scripts/build-inventory /ansible/ansible
+fi
+
+echo "[ansible-runner] $(date -u +"%Y-%m-%dT%H:%M:%SZ") running ${playbook}"
+
+if [ -n "${extra_args}" ]; then
+  # shellcheck disable=SC2086
+  ansible-playbook -i "${inventory}" ${extra_args} "${playbook}"
+else
+  ansible-playbook -i "${inventory}" "${playbook}"
+fi

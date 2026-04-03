@@ -1,0 +1,7 @@
+name: ansible-runner
+project: default
+sync_automated: false
+source_type: git
+source_target_revision: HEAD
+source_path: pods/ansible/ansible
+destination_namespace: ansible

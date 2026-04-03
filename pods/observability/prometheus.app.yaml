@@ -1,0 +1,47 @@
+name: prometheus
+project: default
+source_type: helm
+source_repo_url: https://prometheus-community.github.io/helm-charts
+source_chart: kube-prometheus-stack
+source_target_revision: "82.10.3"
+sync_options:
+  - ServerSideApply=true
+  - SkipDryRunOnMissingResource=true
+source_helm_values: |
+  grafana:
+    enabled: false
+
+  alertmanager:
+    enabled: false
+
+  # RKE2 binds these control-plane metrics endpoints to 127.0.0.1 by default.
+  # The kube-prometheus-stack chart assumes kubeadm-style node-reachable ports,
+  # which leaves these ServiceMonitors permanently down on this cluster.
+  kubeControllerManager:
+    enabled: false
+
+  kubeEtcd:
+    enabled: false
+
+  kubeScheduler:
+    enabled: false
+
+  prometheus:
+    prometheusSpec:
+      alerting:
+        alertmanagers:
+          - namespace: observability
+            name: alertmanager
+            port: http
+            scheme: http
+            apiVersion: v2
+      retention: "15d"
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: longhorn
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: "20Gi"
+destination_namespace: observability

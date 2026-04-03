@@ -1,0 +1,20 @@
+name: gatekeeper-crds
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-20"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/compliance/gatekeeper-crds
+ignore_differences:
+  - group: apiextensions.k8s.io
+    kind: CustomResourceDefinition
+    jsonPointers:
+      - /status
+      - /spec/conversion
+      - /spec/preserveUnknownFields
+      - /metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+    managedFieldsManagers:
+      - kube-apiserver
+sync_options:
+  - RespectIgnoreDifferences=true
+destination_namespace: gatekeeper-system

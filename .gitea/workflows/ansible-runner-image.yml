@@ -1,0 +1,70 @@
+name: Build Ansible Runner Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ansible/**
+      - pods/ansible/**
+      - .gitea/workflows/ansible-runner-image.yml
+      - Taskfile.yml
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    env:
+      ANSIBLE_RUNNER_REGISTRY_HOST: ${{ secrets.ANSIBLE_RUNNER_REGISTRY_HOST }}
+      ANSIBLE_RUNNER_REGISTRY_NAMESPACE: ${{ secrets.ANSIBLE_RUNNER_REGISTRY_NAMESPACE }}
+      ANSIBLE_RUNNER_REGISTRY_USERNAME: ${{ secrets.ANSIBLE_RUNNER_REGISTRY_USERNAME }}
+      ANSIBLE_RUNNER_REGISTRY_TOKEN: ${{ secrets.ANSIBLE_RUNNER_REGISTRY_TOKEN }}
+      ANSIBLE_RUNNER_IMAGE_NAME: ${{ secrets.ANSIBLE_RUNNER_IMAGE_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve registry target
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${ANSIBLE_RUNNER_REGISTRY_HOST:?Missing secret: ANSIBLE_RUNNER_REGISTRY_HOST}"
+          : "${ANSIBLE_RUNNER_REGISTRY_USERNAME:?Missing secret: ANSIBLE_RUNNER_REGISTRY_USERNAME}"
+          : "${ANSIBLE_RUNNER_REGISTRY_TOKEN:?Missing secret: ANSIBLE_RUNNER_REGISTRY_TOKEN}"
+
+          registry_host="${ANSIBLE_RUNNER_REGISTRY_HOST%/}"
+          namespace="${ANSIBLE_RUNNER_REGISTRY_NAMESPACE:-${GITHUB_REPOSITORY_OWNER:-gitea-admin}}"
+          image_name="${ANSIBLE_RUNNER_IMAGE_NAME:-ansible-runner}"
+          sha_tag="$(printf '%s' "${GITHUB_SHA:-manual}" | cut -c1-12)"
+
+          case "${registry_host}" in
+            http://*|https://*)
+              echo "ANSIBLE_RUNNER_REGISTRY_HOST must be a registry host, not a URL with scheme."
+              exit 1
+              ;;
+          esac
+
+          image_ref="${registry_host}/${namespace}/${image_name}"
+          echo "ANSIBLE_RUNNER_IMAGE_REF=${image_ref}" >> "${GITHUB_ENV}"
+          echo "ANSIBLE_RUNNER_IMAGE_SHA_TAG=${sha_tag}" >> "${GITHUB_ENV}"
+
+      - name: Log in to registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${ANSIBLE_RUNNER_REGISTRY_TOKEN}" | docker login "${ANSIBLE_RUNNER_REGISTRY_HOST}" \
+            --username "${ANSIBLE_RUNNER_REGISTRY_USERNAME}" \
+            --password-stdin
+
+      - name: Build and push image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            -f ansible/Dockerfile \
+            -t "${ANSIBLE_RUNNER_IMAGE_REF}:latest" \
+            -t "${ANSIBLE_RUNNER_IMAGE_REF}:${ANSIBLE_RUNNER_IMAGE_SHA_TAG}" \
+            .
+
+          docker push "${ANSIBLE_RUNNER_IMAGE_REF}:latest"
+          docker push "${ANSIBLE_RUNNER_IMAGE_REF}:${ANSIBLE_RUNNER_IMAGE_SHA_TAG}"

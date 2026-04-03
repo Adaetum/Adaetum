@@ -1,0 +1,172 @@
+---
+- name: Verify basic connectivity
+  ansible.builtin.ping:
+
+- name: Collect service facts
+  ansible.builtin.service_facts:
+
+- name: Get CPU core count
+  ansible.builtin.command: nproc
+  register: health_cpu_cores
+  changed_when: false
+
+- name: Check hostname
+  ansible.builtin.command: hostname
+  register: health_hostname
+  changed_when: false
+
+- name: Check uptime
+  ansible.builtin.command: uptime -p
+  register: health_uptime
+  changed_when: false
+
+- name: Check load averages
+  ansible.builtin.command: uptime
+  register: health_load
+  changed_when: false
+
+- name: Read 1-minute load from /proc/loadavg
+  ansible.builtin.command: awk '{print $1}' /proc/loadavg
+  register: health_load_1m_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse 1-minute load
+  ansible.builtin.set_fact:
+    health_load_1m: "{{ (health_load_1m_raw.stdout | default('0') | trim | float) }}"
+  when: health_load_1m_raw is defined
+
+- name: Parse CPU core count
+  ansible.builtin.set_fact:
+    health_cpu_cores_count: "{{ (health_cpu_cores.stdout | default('1') | trim | int) }}"
+  when: health_cpu_cores.stdout is defined
+
+- name: Fail if load is above threshold per core
+  ansible.builtin.fail:
+    msg: "Load average {{ health_load_1m }} exceeds {{ healthcheck_cpu_load_max_per_core }} per core"
+  when:
+    - health_load_1m is defined
+    - health_cpu_cores_count is defined
+    - (health_cpu_cores_count | int) > 0
+    - ((health_load_1m | float) / (health_cpu_cores_count | int)) > (healthcheck_cpu_load_max_per_core | float)
+
+- name: Check disk usage
+  ansible.builtin.command: "{{ healthcheck_df_cmd }}"
+  register: health_disk
+  changed_when: false
+
+- name: Check inode usage
+  ansible.builtin.command: df -Pi /
+  register: health_inodes
+  changed_when: false
+
+- name: Parse disk free GB
+  ansible.builtin.set_fact:
+    health_disk_free_gb: "{{ (health_disk.stdout_lines[1].split()[3] | int) // 1024 }}"
+  when: health_disk.stdout_lines | length > 1
+
+- name: Fail if disk free is below threshold
+  ansible.builtin.fail:
+    msg: "Free disk space below {{ healthcheck_disk_min_free_gb }}GB (found {{ health_disk_free_gb }}GB)"
+  when:
+    - health_disk_free_gb is defined
+    - (health_disk_free_gb | int) < (healthcheck_disk_min_free_gb | int)
+
+- name: Check memory usage
+  ansible.builtin.command: free -h
+  register: health_memory
+  changed_when: false
+
+- name: Check time sync status
+  ansible.builtin.command: timedatectl show -p NTPSynchronized --value
+  register: health_time_sync
+  changed_when: false
+  failed_when: false
+
+- name: Check DNS resolution
+  ansible.builtin.command: getent hosts "{{ healthcheck_dns_name }}"
+  register: health_dns
+  changed_when: false
+  failed_when: false
+
+- name: Check outbound ping
+  ansible.builtin.command: ping -c 1 "{{ healthcheck_ping_target }}"
+  register: health_ping
+  changed_when: false
+  failed_when: false
+
+- name: Check Tailscale status
+  ansible.builtin.command: tailscale status --self
+  register: health_tailscale
+  changed_when: false
+  failed_when: false
+
+- name: Check kube API health
+  ansible.builtin.command: "{{ kubectl_cmd }} get --raw=/healthz"
+  register: health_kube
+  changed_when: false
+  failed_when: false
+  when:
+    - healthcheck_check_kube_api | bool
+    - kubectl_cmd is defined
+
+- name: Collect service logs
+  ansible.builtin.command: "journalctl -u {{ item }} -n {{ healthcheck_log_lines }} --no-pager"
+  register: health_logs
+  changed_when: false
+  failed_when: false
+  loop: "{{ healthcheck_log_services }}"
+  when: healthcheck_log_services | length > 0
+
+- name: Scan logs for error patterns
+  ansible.builtin.set_fact:
+    health_log_matches: >-
+      {{
+        (health_log_matches | default({}))
+        | combine({
+            item.item: (item.stdout_lines | default([]) | select('search', healthcheck_log_error_patterns | join('|')) | list)
+          })
+      }}
+  loop: "{{ health_logs.results | default([]) }}"
+  when: healthcheck_log_error_patterns | length > 0
+
+- name: Check required services
+  ansible.builtin.assert:
+    that:
+      - "(item in ansible_facts.services) or ((item + '.service') in ansible_facts.services)"
+      - >-
+        (
+          (ansible_facts.services[item].state)
+          if (item in ansible_facts.services)
+          else (ansible_facts.services[item + '.service'].state)
+        ) == 'running'
+    fail_msg: "Service {{ item }} is not running"
+    quiet: true
+  loop: "{{ healthcheck_check_services }}"
+  when: healthcheck_check_services | length > 0
+
+- name: Report health summary
+  ansible.builtin.debug:
+    msg:
+      - "hostname: {{ health_hostname.stdout }}"
+      - "uptime: {{ health_uptime.stdout }}"
+      - "load: {{ health_load.stdout | default('n/a') }}"
+      - "cpu_cores: {{ health_cpu_cores.stdout | default('n/a') }}"
+      - "disk: {{ health_disk.stdout_lines | default([]) }}"
+      - "inodes: {{ health_inodes.stdout_lines | default([]) }}"
+      - "disk_free_gb: {{ health_disk_free_gb | default('n/a') }}"
+      - "memory: {{ health_memory.stdout_lines | default([]) }}"
+      - "time_sync: {{ health_time_sync.stdout | default('n/a') }}"
+      - "dns: {{ health_dns.stdout | default('n/a') }}"
+      - "ping: {{ health_ping.rc | default('n/a') }}"
+      - "tailscale: {{ health_tailscale.stdout | default('n/a') }}"
+      - "kube_health: {{ health_kube.stdout | default('n/a') }}"
+      - "log_matches: {{ health_log_matches | default({}) }}"
+
+- name: Write health report
+  ansible.builtin.template:
+    src: healthcheck_report.txt.j2
+    dest: "{{ healthcheck_report_path }}"
+    mode: "0644"
+  when: healthcheck_write_report | bool
+  notify: Healthcheck report written

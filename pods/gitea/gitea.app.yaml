@@ -1,0 +1,26 @@
+name: gitea
+project: default
+source_type: helm
+source_repo_url: https://dl.gitea.io/charts/
+source_chart: gitea
+source_target_revision: "12.5.0"
+source_helm_value_files:
+  - $values/pods/gitea/gitea-values.yaml
+ignore_differences:
+  - group: ""
+    kind: PersistentVolumeClaim
+    name: gitea-shared-storage
+    namespace: gitea
+    jsonPointers:
+      - /spec/volumeName
+  - group: ""
+    kind: Secret
+    name: gitea-postgresql
+    namespace: gitea
+    jsonPointers:
+      - /data/postgres-password
+      - /data/password
+      - /data/replication-password
+sync_options:
+  - RespectIgnoreDifferences=true
+destination_namespace: gitea

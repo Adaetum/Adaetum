@@ -1,0 +1,10 @@
+name: gatekeeper-policy-templates
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-18"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/compliance/gatekeeper-policy-samples/templates
+sync_options:
+  - CreateNamespace=true
+destination_namespace: gatekeeper-system

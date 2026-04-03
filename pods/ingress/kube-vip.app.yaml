@@ -1,0 +1,9 @@
+name: kube-vip
+project: default
+source_type: git
+source_target_revision: HEAD
+source_path: pods/ingress/kube-vip
+sync_options:
+  - ServerSideApply=true
+  - SkipDryRunOnMissingResource=true
+destination_namespace: kube-system

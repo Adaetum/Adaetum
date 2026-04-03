@@ -1,0 +1,38 @@
+name: kubescape
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-17"
+source_type: helm
+source_repo_url: https://kubescape.github.io/helm-charts
+source_chart: kubescape-operator
+source_target_revision: "1.30.5"
+source_helm_values: |
+  # Keep the operator pinned to a known chart release. Kubescape's own docs
+  # recommend Helm/Argo CD for installation, and the operator is the supported
+  # path for continuous scan results and UI integrations such as Headlamp.
+  clusterName: cluster
+
+  capabilities:
+    configurationScan: enable
+    continuousScan: enable
+    nodeScan: enable
+    vulnerabilityScan: enable
+    relevancy: enable
+    runtimeObservability: enable
+    networkPolicyService: enable
+    runtimeDetection: disable
+    malwareDetection: disable
+    nodeProfileService: disable
+    seccompProfileService: enable
+    autoUpgrading: disable
+    prometheusExporter: enable
+    vexGeneration: disable
+
+  kubescape:
+    serviceMonitor:
+      enabled: true
+
+  nodeAgent:
+    serviceMonitor:
+      enabled: true
+destination_namespace: kubescape

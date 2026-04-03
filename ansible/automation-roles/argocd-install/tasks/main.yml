@@ -1,0 +1,290 @@
+---
+- name: Skip Argo CD when disabled
+  ansible.builtin.debug:
+    msg: "Argo CD install is disabled."
+  when: not argocd_enabled | bool
+
+- name: Determine primary rke2 server
+  ansible.builtin.set_fact:
+    rke2_primary: >-
+      {{
+        (groups['break_glass'][0] if (break_glass | default(false) | bool) else (groups['all'] | default([inventory_hostname]))[0])
+      }}
+  when: argocd_enabled | bool
+
+- name: Determine kubectl command
+  ansible.builtin.set_fact:
+    kubectl_cmd: >-
+      {{
+        '/var/lib/rancher/rke2/bin/kubectl'
+        if lookup(
+          'ansible.builtin.first_found',
+          {'files': ['/var/lib/rancher/rke2/bin/kubectl', '/usr/local/bin/kubectl'], 'skip': true}
+        ) is not none
+        else '/usr/local/bin/kubectl'
+      }}
+  when:
+    - argocd_enabled | bool
+    - inventory_hostname == rke2_primary
+
+- name: Install Argo CD on primary
+  when:
+    - argocd_enabled | bool
+    - inventory_hostname == rke2_primary
+  block:
+    - name: Detect helm command
+      ansible.builtin.shell: |
+        set -euo pipefail
+        command -v helm
+      args:
+        executable: /bin/bash
+      register: helm_cmd_detect
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure openssl and tar are installed for helm on RedHat family
+      ansible.builtin.dnf:
+        name:
+          - openssl
+          - tar
+          - httpd-tools
+        state: present
+        releasever: >-
+          {{
+            ansible_distribution_major_version
+            | default(
+                (ansible_distribution_version | default('') | regex_replace('\\..*$', '')),
+                true
+              )
+          }}
+      when:
+        - helm_cmd_detect.rc != 0
+        - ansible_os_family == 'RedHat'
+
+    - name: Ensure openssl and tar are installed for helm on non-RedHat families
+      ansible.builtin.package:
+        name:
+          - openssl
+          - tar
+          - httpd-tools
+        state: present
+      when:
+        - helm_cmd_detect.rc != 0
+        - ansible_os_family != 'RedHat'
+
+    - name: Install helm
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if command -v helm >/dev/null 2>&1; then
+          exit 0
+        fi
+        dnf -y install helm || curl -sfL {{ argocd_helm_install_script_url }} | bash
+      args:
+        executable: /bin/bash
+      when: helm_cmd_detect.rc != 0
+
+    - name: Ensure htpasswd is available for admin password hashing on RedHat family
+      ansible.builtin.dnf:
+        name: httpd-tools
+        state: present
+        releasever: >-
+          {{
+            ansible_distribution_major_version
+            | default(
+                (ansible_distribution_version | default('') | regex_replace('\\..*$', '')),
+                true
+              )
+          }}
+      when:
+        - argocd_admin_password | length > 0
+        - argocd_admin_password_hash | length == 0
+        - ansible_os_family == 'RedHat'
+
+    - name: Ensure htpasswd is available for admin password hashing on non-RedHat families
+      ansible.builtin.package:
+        name: httpd-tools
+        state: present
+      when:
+        - argocd_admin_password | length > 0
+        - argocd_admin_password_hash | length == 0
+        - ansible_os_family != 'RedHat'
+
+    - name: Resolve helm command path
+      ansible.builtin.shell: |
+        set -euo pipefail
+        command -v helm
+      args:
+        executable: /bin/bash
+      register: helm_cmd
+      changed_when: false
+
+    - name: Build Argo CD admin password bcrypt hash
+      ansible.builtin.shell: |
+        set -euo pipefail
+        htpasswd -nbBC 10 '' '{{ argocd_admin_password }}' | tr -d ':\n'
+      args:
+        executable: /bin/bash
+      register: argocd_admin_password_hash_cmd
+      changed_when: false
+      when:
+        - argocd_admin_password | length > 0
+        - argocd_admin_password_hash | length == 0
+
+    - name: Resolve effective Argo CD admin password hash
+      ansible.builtin.set_fact:
+        argocd_admin_password_hash_effective: >-
+          {{
+            argocd_admin_password_hash
+            if (argocd_admin_password_hash | length > 0)
+            else (argocd_admin_password_hash_cmd.stdout | default(''))
+          }}
+      when: argocd_admin_password | length > 0
+
+    - name: Add Argo Helm repository
+      ansible.builtin.command:
+        cmd: "{{ helm_cmd.stdout }} repo add argo {{ argocd_chart_repo }} --force-update"
+      register: argocd_helm_repo_add
+      retries: "{{ argocd_helm_repo_add_retries }}"
+      delay: "{{ argocd_helm_repo_add_delay }}"
+      until: argocd_helm_repo_add.rc == 0
+
+    - name: Update helm repositories
+      ansible.builtin.command:
+        cmd: "{{ helm_cmd.stdout }} repo update"
+      register: argocd_helm_repo_update
+      retries: "{{ argocd_helm_repo_update_retries }}"
+      delay: "{{ argocd_helm_repo_update_delay }}"
+      until: argocd_helm_repo_update.rc == 0
+
+    - name: Render Argo CD values
+      ansible.builtin.template:
+        src: argocd-values.yaml.j2
+        dest: /tmp/argocd-values.yaml
+        mode: "0644"
+
+    - name: Wait for Rancher webhook endpoints when present (best effort)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if ! {{ kubectl_cmd }} -n cattle-system get svc rancher-webhook >/dev/null 2>&1; then
+          exit 0
+        fi
+        {{ kubectl_cmd }} -n cattle-system get endpoints rancher-webhook -o jsonpath='{.subsets[0].addresses[0].ip}'
+      args:
+        executable: /bin/bash
+      register: rancher_webhook_endpoints
+      changed_when: false
+      failed_when: false
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      retries: 20
+      delay: 10
+      until: rancher_webhook_endpoints.rc == 0
+
+    - name: Install Argo CD
+      ansible.builtin.command:
+        cmd: >-
+          {{ helm_cmd.stdout }} upgrade --install {{ argocd_release_name }}
+          {{ argocd_chart_name }}
+          --repo {{ argocd_chart_repo }}
+          --namespace {{ argocd_namespace }}
+          --create-namespace
+          {% if argocd_chart_version | length > 0 %}
+          --version {{ argocd_chart_version }}
+          {% endif %}
+          --values /tmp/argocd-values.yaml
+      register: argocd_install_cmd
+      retries: 20
+      delay: 15
+      until: argocd_install_cmd.rc == 0
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+    - name: Wait for Argo CD server pods to be ready
+      ansible.builtin.command: >-
+        {{ kubectl_cmd }} -n {{ argocd_namespace }} wait
+        --for=condition=Ready pod
+        -l app.kubernetes.io/component=server,app.kubernetes.io/instance={{ argocd_release_name }}
+        --timeout=300s
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      changed_when: false
+      failed_when: false
+      register: argocd_server_wait
+
+    - name: Warn when Argo CD server pods are not ready
+      ansible.builtin.debug:
+        msg: "Argo CD server pods not ready yet. Continuing bootstrap."
+      when: argocd_server_wait.rc is defined and argocd_server_wait.rc != 0
+
+    - name: Wait for Argo CD repo server pods to be ready
+      ansible.builtin.command: >-
+        {{ kubectl_cmd }} -n {{ argocd_namespace }} wait
+        --for=condition=Ready pod
+        -l app.kubernetes.io/component=repo-server,app.kubernetes.io/instance={{ argocd_release_name }}
+        --timeout=300s
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      changed_when: false
+      failed_when: false
+      register: argocd_repo_wait
+
+    - name: Warn when Argo CD repo server pods are not ready
+      ansible.builtin.debug:
+        msg: "Argo CD repo server pods not ready yet. Continuing bootstrap."
+      when: argocd_repo_wait.rc is defined and argocd_repo_wait.rc != 0
+
+    - name: Wait for Argo CD application controller pods to be ready
+      ansible.builtin.command: >-
+        {{ kubectl_cmd }} -n {{ argocd_namespace }} wait
+        --for=condition=Ready pod
+        -l app.kubernetes.io/component=application-controller,app.kubernetes.io/instance={{ argocd_release_name }}
+        --timeout=300s
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      changed_when: false
+      failed_when: false
+      register: argocd_controller_wait
+
+    - name: Warn when Argo CD application controller pods are not ready
+      ansible.builtin.debug:
+        msg: "Argo CD application controller pods not ready yet. Continuing bootstrap."
+      when: argocd_controller_wait.rc is defined and argocd_controller_wait.rc != 0
+
+    - name: Configure Argo CD repo credentials (HTTPS token)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n {{ argocd_namespace }} create secret generic argocd-repo-https \
+          --from-literal=url='{{ argocd_bootstrap_repo_url }}' \
+          --from-literal=username='{{ argocd_repo_username }}' \
+          --from-literal=password='{{ argocd_repo_token }}' \
+          --from-literal=type=git \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n {{ argocd_namespace }} apply -f -
+        {{ kubectl_cmd }} -n {{ argocd_namespace }} label secret argocd-repo-https \
+          argocd.argoproj.io/secret-type=repo-creds --overwrite
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      no_log: true
+      when:
+        - argocd_bootstrap_repo_url | length > 0
+        - argocd_repo_token | length > 0
+
+    - name: Render bootstrap Application manifest
+      ansible.builtin.template:
+        src: argocd-bootstrap-app.yaml.j2
+        dest: /tmp/argocd-bootstrap-app.yaml
+        mode: "0644"
+      when:
+        - argocd_bootstrap_enabled | bool
+        - argocd_bootstrap_repo_url | length > 0
+        - argocd_bootstrap_repo_path | length > 0
+
+    - name: Apply bootstrap Application
+      ansible.builtin.command: "{{ kubectl_cmd }} apply -f /tmp/argocd-bootstrap-app.yaml"
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      when:
+        - argocd_bootstrap_enabled | bool
+        - argocd_bootstrap_repo_url | length > 0
+        - argocd_bootstrap_repo_path | length > 0

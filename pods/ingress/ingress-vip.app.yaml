@@ -1,0 +1,17 @@
+name: ingress-vip
+project: default
+source_type: git
+source_target_revision: HEAD
+source_path: pods/ingress/ingress-vip
+ignore_differences:
+  - group: ""
+    kind: Secret
+    name: ingress-vip-config
+    namespace: ingress
+    jsonPointers:
+      - /data/ingress_internal_vip
+      - /data/ingress_external_vip
+sync_options:
+  - ServerSideApply=true
+  - SkipDryRunOnMissingResource=true
+destination_namespace: ingress

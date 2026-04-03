@@ -1,0 +1,10 @@
+name: authentik-blueprints
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-18"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/authentik/blueprints
+sync_options:
+  - PruneLast=true
+destination_namespace: authentik

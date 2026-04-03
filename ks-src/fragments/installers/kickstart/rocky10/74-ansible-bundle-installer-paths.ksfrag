@@ -1,0 +1,3 @@
+# Offline installer-media bundle fallback is disabled. First boot must fetch
+# the ansible bundle from the bootstrap Worker/R2 path.
+BUNDLE_CANDIDATE_PATHS=""

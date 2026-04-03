@@ -1,0 +1,25 @@
+---
+tailscale_cluster_tag: "{{ lookup('ansible.builtin.env', 'TAILSCALE_CLUSTER_TAG') | default('', true) }}"
+tailscale_advertise_tags: "{{ lookup('ansible.builtin.env', 'TAILSCALE_ADVERTISE_TAGS') | default('', true) }}"
+tailscale_retag_authkey: "{{ lookup('ansible.builtin.env', 'TAILSCALE_RETAG_AUTHKEY') | default('', true) }}"
+tailscale_oauth_client_id: "{{ lookup('ansible.builtin.env', 'TAILSCALE_OAUTH_CLIENT_ID') | default('', true) }}"
+tailscale_oauth_client_secret: "{{ lookup('ansible.builtin.env', 'TAILSCALE_OAUTH_CLIENT_SECRET') | default('', true) }}"
+tailscale_oauth_ttl: "{{ lookup('ansible.builtin.env', 'TAILSCALE_OAUTH_TTL') | default('1h', true) }}"
+tailscale_exit_node: "{{ lookup('ansible.builtin.env', 'TAILSCALE_EXIT_NODE') | default('', true) }}"
+tailscale_exit_node_allow_lan_access: "{{ lookup('ansible.builtin.env', 'TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS') | default('', true) }}"
+tailscale_oauth_scopes_auth_keys: "auth_keys devices:core:write"
+tailscale_oauth_scopes_devices: "devices:core:write"
+
+tailscale_retag_enabled: true
+tailscale_retag_force: false
+tailscale_retag_use_oauth: true
+tailscale_retag_role_tag: ""
+tailscale_retag_platform_tag: ""
+tailscale_retag_fail_on_missing_authkey: false
+tailscale_post_retag_status_retries: 15
+tailscale_post_retag_status_delay: 2
+tailscale_key_expiry_fail_on_error: >-
+  {{
+    (lookup('ansible.builtin.env', 'TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR') | default('false', true))
+    | bool
+  }}

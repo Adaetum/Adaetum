@@ -1,0 +1,23 @@
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sDisallowLatestTag
+metadata:
+  name: disallow-latest-tags
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  match:
+    kinds:
+      - apiGroups:
+          - ""
+        kinds:
+          - Pod
+  parameters:
+    exemptNamespaces:
+      - ansible
+    exemptImages:
+      - "bitnami/kubectl"
+      - "cloudflare/cloudflared"
+      - "ghcr.io/openbao/openbao"
+      - "caronc/apprise"
+      - "quay.io/kubescape/kubescape"

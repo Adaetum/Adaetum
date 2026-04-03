@@ -1,0 +1,65 @@
+podSecurityContext:
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+
+# Gitea uses a local level queue on the shared PVC during bootstrap. Keep
+# upgrades single-pod so Argo takeover never overlaps two writers.
+strategy:
+  type: Recreate
+
+persistence:
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  storageClass: longhorn
+  annotations:
+    helm.sh/resource-policy: keep
+
+# Make the bundled database persistence explicit as part of the desired state.
+# Do not rely on chart defaults for data retention.
+postgresql-ha:
+  enabled: false
+
+postgresql:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: longhorn
+    annotations:
+      helm.sh/resource-policy: keep
+
+ingress:
+  # Disabled: routing is handled by nginx Ingress manifests in pods/ingress.
+  enabled: false
+
+# Bootstrap sets the live canonical URL from CLUSTER_DOMAIN / CLUSTER_LOCAL_DOMAIN.
+# Keep these aligned with the Phase 50 local bootstrap install so Argo takeover
+# is a no-op instead of rolling Gitea onto a different inline config secret.
+gitea:
+  config:
+    # Keep bootstrap on the single-node/local defaults. The bundled Valkey init
+    # path has been failing before the gitea container starts, so avoid that
+    # dependency entirely for the base install.
+    cache:
+      ADAPTER: memory
+    session:
+      PROVIDER: memory
+    queue:
+      TYPE: level
+    server:
+      DOMAIN: __GITEA_CANONICAL_HOST__
+      ROOT_URL: __GITEA_ROOT_URL__
+  admin:
+    existingSecret: gitea-admin-secret
+    passwordMode: initialOnlyRequireReset
+
+# Break-glass clusters are single-node initially. Keep the bootstrap install free
+# of external cache/session/queue dependencies so a fresh ISO install can converge
+# without waiting on bundled Valkey wiring.
+valkey-cluster:
+  enabled: false
+
+valkey:
+  enabled: false

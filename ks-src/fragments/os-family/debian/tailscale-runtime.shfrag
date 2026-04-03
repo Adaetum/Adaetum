@@ -1,0 +1,41 @@
+os_family_tailscale_ensure_installed() {
+  if command -v tailscale >/dev/null 2>&1; then
+    return 0
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  if ! command -v curl >/dev/null 2>&1; then
+    bootstrap_pkg_install curl || return 1
+  fi
+  if ! command -v gpg >/dev/null 2>&1; then
+    bootstrap_pkg_install gnupg || return 1
+  fi
+  if ! command -v tee >/dev/null 2>&1; then
+    bootstrap_pkg_install coreutils || return 1
+  fi
+  install -d -m 0755 /usr/share/keyrings /etc/apt/sources.list.d || return 1
+  curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg \
+    -o /usr/share/keyrings/tailscale-archive-keyring.gpg || return 1
+  cat >/etc/apt/sources.list.d/tailscale.list <<'EOF'
+deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian bookworm main
+EOF
+  apt-get update || return 1
+  apt-get install -y tailscale
+}
+
+os_family_tailscale_service_name() {
+  printf 'tailscaled'
+}
+
+os_family_platform_os_tag() {
+  local os_id=""
+  local version_id=""
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release || true
+    os_id="${ID:-}"
+    version_id="${VERSION_ID:-}"
+  fi
+  if [ -n "${os_id}" ] && [ -n "${version_id}" ]; then
+    printf 'tag:%s%s' "${os_id}" "${version_id%%.*}"
+  fi
+}

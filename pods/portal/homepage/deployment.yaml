@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: homepage
+  labels:
+    app.kubernetes.io/name: homepage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homepage
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: homepage
+    spec:
+      serviceAccountName: homepage
+      initContainers:
+        - name: render-homepage-config
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: homepage-cluster-config
+            - secretRef:
+                name: homepage-widget-secrets
+                optional: true
+          command:
+            - /bin/sh
+            - -c
+            - |
+              python - <<'PY'
+              import os
+              import re
+              from pathlib import Path
+              template_dir = Path("/templates")
+              output_dir = Path("/rendered")
+              output_dir.mkdir(parents=True, exist_ok=True)
+              for source in template_dir.iterdir():
+                  if not source.is_file():
+                      continue
+                  text = source.read_text(encoding="utf-8")
+                  for key, value in os.environ.items():
+                      text = text.replace(f"__{key}__", value)
+                  # Prevent broken placeholders from leaking into live Homepage config.
+                  text = re.sub(r"__[A-Z0-9_]+__", "", text)
+                  (output_dir / source.name).write_text(text, encoding="utf-8")
+              (output_dir / "logs").mkdir(exist_ok=True)
+              PY
+          volumeMounts:
+            - name: homepage-templates
+              mountPath: /templates
+            - name: homepage-config
+              mountPath: /rendered
+      containers:
+        - name: homepage
+          image: ghcr.io/gethomepage/homepage:v1.3.2
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: homepage-cluster-config
+            - secretRef:
+                name: homepage-widget-secrets
+                optional: true
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - wget -qO- http://127.0.0.1:3000/api/healthcheck >/dev/null
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - wget -qO- http://127.0.0.1:3000/api/healthcheck >/dev/null
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          volumeMounts:
+            - name: homepage-config
+              mountPath: /app/config
+      volumes:
+        - name: homepage-templates
+          configMap:
+            name: homepage-templates
+        - name: homepage-config
+          emptyDir: {}

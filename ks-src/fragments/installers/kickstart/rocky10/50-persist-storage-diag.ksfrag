@@ -1,0 +1,46 @@
+
+# --- Persist installer storage diagnostics into installed node ---
+%post --nochroot --interpreter=/bin/bash
+set -euo pipefail
+
+target_root="/mnt/sysroot"
+diag_dir="${target_root}/root/bootstrap-storage-diag"
+if [ -d "${target_root}" ]; then
+  mkdir -p "${diag_dir}"
+
+  # Capture installer logs useful for storage triage on bare metal.
+  for src in \
+    /tmp/ks-pre.log \
+    /tmp/ks-storage-watch.log \
+    /tmp/ks-install-watchdog.log \
+    /tmp/ks-install-watchdog.pid \
+    /tmp/ks-watchdog-triggered \
+    /tmp/ks-watchdog-reason \
+    /tmp/ks-watchdog-lastseen \
+    /tmp/ks-watchdog-proc.txt \
+    /tmp/ks-watchdog-strace.txt \
+    /tmp/ks-storage-watch.pid \
+    /tmp/ks-target-disk \
+    /tmp/collect-storage-diag.sh \
+    /tmp/partitioning.ks \
+    /tmp/storage.log \
+    /tmp/anaconda.log \
+    /tmp/program.log \
+    /tmp/syslog
+  do
+    [ -f "${src}" ] || continue
+    cp -f "${src}" "${diag_dir}/$(basename "${src}")"
+  done
+
+  if command -v lsblk >/dev/null 2>&1; then
+    lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,MOUNTPOINT,MODEL,TRAN >"${diag_dir}/lsblk-post.txt" 2>&1 || true
+  fi
+  if command -v blkid >/dev/null 2>&1; then
+    blkid >"${diag_dir}/blkid-post.txt" 2>&1 || true
+  fi
+
+  {
+    echo "[BOOTSTRAP] Installer storage diagnostics saved to /root/bootstrap-storage-diag"
+  } >>"${target_root}/root/bootstrap-post.log" 2>/dev/null || true
+fi
+%end

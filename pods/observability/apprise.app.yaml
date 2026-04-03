@@ -1,0 +1,6 @@
+name: apprise
+project: default
+source_type: git
+source_target_revision: HEAD
+source_path: pods/observability/apprise
+destination_namespace: observability

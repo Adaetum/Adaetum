@@ -1,0 +1,49 @@
+---
+# Argo CD install defaults
+argocd_enabled: true
+argocd_namespace: "argocd"
+argocd_release_name: "argocd"
+argocd_chart_repo: "https://argoproj.github.io/argo-helm"
+argocd_chart_name: "argo-cd"
+argocd_chart_version: ""
+argocd_helm_repo_add_retries: 10
+argocd_helm_repo_add_delay: 15
+argocd_helm_repo_update_retries: 10
+argocd_helm_repo_update_delay: 15
+
+argocd_helm_install_script_url: >-
+  {{
+    helm_install_script_url
+    | default('https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3')
+  }}
+
+argocd_admin_password: "{{ lookup('ansible.builtin.env', 'ARGOCD_ADMIN_PASSWORD') | default('', true) }}"
+argocd_admin_password_hash: ""
+argocd_admin_password_hash_effective: ""
+
+argocd_bootstrap_enabled: false
+argocd_bootstrap_repo_url: >-
+  {{
+    lookup('ansible.builtin.env', 'ARGOCD_REPO_URL')
+    | default('', true)
+  }}
+argocd_bootstrap_repo_path: "pods/argocd"
+argocd_bootstrap_repo_revision: >-
+  {{
+    lookup('ansible.builtin.env', 'ARGOCD_REPO_BRANCH')
+    | default('HEAD', true)
+  }}
+argocd_bootstrap_app_name: "app-of-apps"
+argocd_bootstrap_dest_server: "https://kubernetes.default.svc"
+argocd_bootstrap_dest_namespace: "argocd"
+
+argocd_repo_username: >-
+  {{
+    lookup('ansible.builtin.env', 'ARGOCD_REPO_USERNAME')
+    | default('', true)
+  }}
+argocd_repo_token: >-
+  {{
+    lookup('ansible.builtin.env', 'ARGOCD_REPO_TOKEN')
+    | default('', true)
+  }}

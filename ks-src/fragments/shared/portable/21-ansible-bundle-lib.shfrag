@@ -1,0 +1,229 @@
+set -Eeuo pipefail
+
+env_file="/etc/ansible-bundle-bootstrap.env"
+if [ -f "${env_file}" ]; then
+  set -a
+  . "${env_file}"
+  set +a
+fi
+
+BOOTSTRAP_BUNDLE_URL="${BOOTSTRAP_BUNDLE_URL:-__BOOTSTRAP_BUNDLE_URL__}"
+BOOTSTRAP_BUNDLE_SHA256="${BOOTSTRAP_BUNDLE_SHA256:-__BOOTSTRAP_BUNDLE_SHA256__}"
+BOOTSTRAP_BUNDLE_TOKEN="${BOOTSTRAP_BUNDLE_TOKEN:-}"
+BOOTSTRAP_BUNDLE_FORCE="${BOOTSTRAP_BUNDLE_FORCE:-__BOOTSTRAP_BUNDLE_FORCE__}"
+BOOTSTRAP_PLAYBOOK="${BOOTSTRAP_PLAYBOOK:-__BOOTSTRAP_PLAYBOOK__}"
+ARGOCD_GITHUB_REPO_URL="${ARGOCD_GITHUB_REPO_URL:-__ARGOCD_GITHUB_REPO_URL__}"
+ARGOCD_GITHUB_USERNAME="${ARGOCD_GITHUB_USERNAME:-__ARGOCD_GITHUB_USERNAME__}"
+ARGOCD_GITHUB_TOKEN="${ARGOCD_GITHUB_TOKEN:-}"
+ARGOCD_GITHUB_REPO_BRANCH="${ARGOCD_GITHUB_REPO_BRANCH:-__ARGOCD_GITHUB_REPO_BRANCH__}"
+CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+CLOUDFLARE_ZONE_API_TOKEN="${CLOUDFLARE_ZONE_API_TOKEN:-}"
+GITEA_SEED_SOURCE_REPO_URL="${GITEA_SEED_SOURCE_REPO_URL:-__GITEA_SEED_SOURCE_REPO_URL__}"
+GITEA_SEED_SOURCE_REPO_BRANCH="${GITEA_SEED_SOURCE_REPO_BRANCH:-__GITEA_SEED_SOURCE_REPO_BRANCH__}"
+GITEA_SEED_SOURCE_TOKEN="${GITEA_SEED_SOURCE_TOKEN:-}"
+GITEA_SEED_TARGET_OWNER="${GITEA_SEED_TARGET_OWNER:-__GITEA_SEED_TARGET_OWNER__}"
+GITEA_SEED_TARGET_REPO="${GITEA_SEED_TARGET_REPO:-__GITEA_SEED_TARGET_REPO__}"
+LOG_UPLOAD_URL="${LOG_UPLOAD_URL:-}"
+LOG_UPLOAD_EVENTUAL="${LOG_UPLOAD_EVENTUAL:-__KS_LOG_UPLOAD_EVENTUAL__}"
+LOG_UPLOAD_DEBUG="${LOG_UPLOAD_DEBUG:-__KS_LOG_UPLOAD_DEBUG__}"
+LOG_HOST="$(hostname -s 2>/dev/null || echo node-bootstrap)"
+
+log_file="/var/log/ansible-bundle-bootstrap.log"
+mkdir -p "$(dirname "${log_file}")"
+: > "${log_file}"
+
+trim_env_value() {
+  printf '%s' "${1:-}" | tr -d '\r\n'
+}
+
+if command -v stdbuf >/dev/null 2>&1; then
+  exec > >(stdbuf -oL tee "${log_file}") 2>&1
+else
+  exec > >(tee "${log_file}") 2>&1
+fi
+
+BOOTSTRAP_BUNDLE_URL="$(trim_env_value "${BOOTSTRAP_BUNDLE_URL}")"
+BOOTSTRAP_BUNDLE_SHA256="$(trim_env_value "${BOOTSTRAP_BUNDLE_SHA256}")"
+BOOTSTRAP_BUNDLE_TOKEN="$(trim_env_value "${BOOTSTRAP_BUNDLE_TOKEN}")"
+BOOTSTRAP_BUNDLE_FORCE="$(trim_env_value "${BOOTSTRAP_BUNDLE_FORCE}")"
+BOOTSTRAP_PLAYBOOK="$(trim_env_value "${BOOTSTRAP_PLAYBOOK}")"
+ARGOCD_GITHUB_REPO_URL="$(trim_env_value "${ARGOCD_GITHUB_REPO_URL}")"
+ARGOCD_GITHUB_USERNAME="$(trim_env_value "${ARGOCD_GITHUB_USERNAME}")"
+ARGOCD_GITHUB_TOKEN="$(trim_env_value "${ARGOCD_GITHUB_TOKEN}")"
+ARGOCD_GITHUB_REPO_BRANCH="$(trim_env_value "${ARGOCD_GITHUB_REPO_BRANCH}")"
+CLOUDFLARE_API_TOKEN="$(trim_env_value "${CLOUDFLARE_API_TOKEN}")"
+CLOUDFLARE_ZONE_API_TOKEN="$(trim_env_value "${CLOUDFLARE_ZONE_API_TOKEN}")"
+GITEA_SEED_SOURCE_REPO_URL="$(trim_env_value "${GITEA_SEED_SOURCE_REPO_URL}")"
+GITEA_SEED_SOURCE_REPO_BRANCH="$(trim_env_value "${GITEA_SEED_SOURCE_REPO_BRANCH}")"
+GITEA_SEED_SOURCE_TOKEN="$(trim_env_value "${GITEA_SEED_SOURCE_TOKEN}")"
+GITEA_SEED_TARGET_OWNER="$(trim_env_value "${GITEA_SEED_TARGET_OWNER}")"
+GITEA_SEED_TARGET_REPO="$(trim_env_value "${GITEA_SEED_TARGET_REPO}")"
+LOG_UPLOAD_URL="$(trim_env_value "${LOG_UPLOAD_URL}")"
+LOG_UPLOAD_EVENTUAL="$(trim_env_value "${LOG_UPLOAD_EVENTUAL}")"
+LOG_UPLOAD_DEBUG="$(trim_env_value "${LOG_UPLOAD_DEBUG}")"
+LOG_HOST="$(trim_env_value "${LOG_HOST}")"
+
+ensure_bootstrap_runtime_env
+
+if [[ "${BOOTSTRAP_BUNDLE_URL}" == __*__ ]]; then
+  BOOTSTRAP_BUNDLE_URL=""
+fi
+if [[ "${BOOTSTRAP_BUNDLE_SHA256}" == __*__ ]]; then
+  BOOTSTRAP_BUNDLE_SHA256=""
+fi
+if [[ "${BOOTSTRAP_BUNDLE_FORCE}" == __*__ ]]; then
+  BOOTSTRAP_BUNDLE_FORCE=""
+fi
+if [[ "${BOOTSTRAP_PLAYBOOK}" == __*__ ]] || [ -z "${BOOTSTRAP_PLAYBOOK}" ]; then
+  BOOTSTRAP_PLAYBOOK="/opt/ansible-runner/ansible/playbooks/bootstrap.yml"
+fi
+if [[ "${ARGOCD_GITHUB_REPO_URL}" == __*__ ]]; then
+  ARGOCD_GITHUB_REPO_URL=""
+fi
+if [[ "${ARGOCD_GITHUB_USERNAME}" == __*__ ]]; then
+  ARGOCD_GITHUB_USERNAME=""
+fi
+if [[ "${ARGOCD_GITHUB_REPO_BRANCH}" == __*__ ]]; then
+  ARGOCD_GITHUB_REPO_BRANCH=""
+fi
+if [[ "${GITEA_SEED_SOURCE_REPO_URL}" == __*__ ]]; then
+  GITEA_SEED_SOURCE_REPO_URL=""
+fi
+if [[ "${GITEA_SEED_SOURCE_REPO_BRANCH}" == __*__ ]]; then
+  GITEA_SEED_SOURCE_REPO_BRANCH=""
+fi
+ARGOCD_GITHUB_REPO_BRANCH="${ARGOCD_GITHUB_REPO_BRANCH:-master}"
+GITEA_SEED_SOURCE_REPO_BRANCH="${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH}}"
+if [[ "${GITEA_SEED_TARGET_OWNER}" == __*__ ]]; then
+  GITEA_SEED_TARGET_OWNER=""
+fi
+if [[ "${GITEA_SEED_TARGET_REPO}" == __*__ ]]; then
+  GITEA_SEED_TARGET_REPO=""
+fi
+if [[ "${LOG_UPLOAD_EVENTUAL}" == __*__ ]] || [ -z "${LOG_UPLOAD_EVENTUAL}" ]; then
+  LOG_UPLOAD_EVENTUAL="1"
+fi
+if [[ "${LOG_UPLOAD_DEBUG}" == __*__ ]] || [ -z "${LOG_UPLOAD_DEBUG}" ]; then
+  LOG_UPLOAD_DEBUG="0"
+fi
+if [[ "${LOG_UPLOAD_URL}" == __*__ ]]; then
+  LOG_UPLOAD_URL=""
+fi
+
+log_upload_debug_enabled() {
+  case "${LOG_UPLOAD_DEBUG:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if [ -z "${BOOTSTRAP_BUNDLE_TOKEN}" ]; then
+  BOOTSTRAP_BUNDLE_TOKEN="${BOOTSTRAP_SHARED_TOKEN:-}"
+fi
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+redact_log_url() {
+  printf '%s' "${1:-}" | sed -E 's/([?&]token=)[^&]+/\1REDACTED/g'
+}
+
+upload_log() {
+  log_path="$1"
+  log_name="${2:-}"
+  if [ -z "${LOG_UPLOAD_URL}" ] || [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
+    return 0
+  fi
+  if [ ! -f "${log_path}" ]; then
+    if log_upload_debug_enabled; then
+      echo "[BOOTSTRAP] Log upload skipped (missing ${log_path})"
+    fi
+    return 0
+  fi
+  sep="?"
+  log_url="$(bootstrap_url_with_shared_token "${LOG_UPLOAD_URL}")"
+  if printf '%s' "${log_url}" | grep -q '?'; then
+    sep="&"
+  fi
+  log_url="${log_url}${sep}host=${LOG_HOST}&file=${log_name:-$(basename "${log_path}")}"
+  safe_url="$(redact_log_url "${log_url}")"
+
+  response_file="$(mktemp)"
+  curl_rc=0
+  set +e
+  http_code="$(curl -4 --http1.1 -sS -o "${response_file}" -w "%{http_code}" --connect-timeout 3 --max-time 10 --retry 2 -X POST \
+    --data-binary @"${log_path}" \
+    "${log_url}")"
+  curl_rc=$?
+  set -e
+
+  if [ "${curl_rc}" != "0" ] || [ -z "${http_code}" ] || [ "${http_code}" = "000" ]; then
+    echo "[BOOTSTRAP] Log upload failed (rc=${curl_rc}, http_code=${http_code:-<empty>}, url=${safe_url})"
+    rm -f "${response_file}" 2>/dev/null || true
+    return 0
+  fi
+  if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+    echo "[BOOTSTRAP] Log upload rejected (http=${http_code}, url=${safe_url})"
+    rm -f "${response_file}" 2>/dev/null || true
+    return 0
+  fi
+  if log_upload_debug_enabled; then
+    echo "[BOOTSTRAP] Log upload ok (http=${http_code}, url=${safe_url})"
+  fi
+  rm -f "${response_file}" 2>/dev/null || true
+  return 0
+}
+
+upload_log_tree() {
+  tree_root="$1"
+  tree_prefix="${2:-}"
+  if [ -z "${tree_root}" ] || [ ! -d "${tree_root}" ]; then
+    if log_upload_debug_enabled; then
+      echo "[BOOTSTRAP] Log tree upload skipped (missing ${tree_root})"
+    fi
+    return 0
+  fi
+
+  while IFS= read -r tree_file; do
+    rel_path="${tree_file#${tree_root}/}"
+    if [ "${rel_path}" = "${tree_file}" ]; then
+      rel_path="$(basename "${tree_file}")"
+    fi
+    if [ -n "${tree_prefix}" ]; then
+      upload_name="${tree_prefix%/}/${rel_path}"
+    else
+      upload_name="${rel_path}"
+    fi
+    upload_log "${tree_file}" "${upload_name}" || true
+  done < <(find "${tree_root}" -type f | LC_ALL=C sort)
+}
+
+start_log_stream() {
+  log_path="$1"
+  log_name="$2"
+  if [ -z "${LOG_UPLOAD_URL}" ] || [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
+    return 0
+  fi
+  if ! is_true "${LOG_UPLOAD_EVENTUAL}"; then
+    return 0
+  fi
+  (
+    while true; do
+      upload_log "${log_path}" "${log_name}"
+      sleep 15
+    done
+  ) &
+  LOG_STREAM_PID=$!
+}
+
+stop_log_stream() {
+  if [ -n "${LOG_STREAM_PID:-}" ]; then
+    kill "${LOG_STREAM_PID}" >/dev/null 2>&1 || true
+    wait "${LOG_STREAM_PID}" 2>/dev/null || true
+    unset LOG_STREAM_PID
+  fi
+}

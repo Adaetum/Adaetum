@@ -1,0 +1,19 @@
+os_family_service_enable() {
+  systemctl enable "$@"
+}
+
+os_family_service_start() {
+  systemctl start "$@"
+}
+
+os_family_service_disable() {
+  systemctl disable "$@"
+}
+
+os_family_service_status() {
+  systemctl status "$@" --no-pager
+}
+
+os_family_poweroff() {
+  systemctl poweroff -f || poweroff -f
+}

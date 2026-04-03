@@ -1,0 +1,980 @@
+---
+- name: Check for tailscale-firstboot env
+  ansible.builtin.stat:
+    path: /etc/tailscale-firstboot.env
+  register: tailscale_firstboot_env_stat
+
+- name: Ensure base tailscale tag variables are defined
+  ansible.builtin.set_fact:
+    tailscale_cluster_tag: "{{ tailscale_cluster_tag | default('') }}"
+    tailscale_advertise_tags: "{{ tailscale_advertise_tags | default('') }}"
+    tailscale_retag_role_tag: "{{ tailscale_retag_role_tag | default('') }}"
+    tailscale_retag_platform_tag: "{{ tailscale_retag_platform_tag | default('') }}"
+
+- name: Read tailscale-firstboot env
+  ansible.builtin.slurp:
+    src: /etc/tailscale-firstboot.env
+  register: tailscale_firstboot_env
+  when: tailscale_firstboot_env_stat.stat.exists
+  no_log: true
+
+- name: Parse tailscale-firstboot env (json)
+  ansible.builtin.command: >-
+    python3 - <<'PY'
+    import json, os, re, sys
+    raw = os.environ.get("TS_ENV_RAW", "")
+    def get(key):
+        pattern = rf"(?m)^{re.escape(key)}=\"?([^\\"\n]*)\"?$"
+        m = re.search(pattern, raw)
+        return m.group(1) if m else ""
+    data = {
+        "raw": raw,
+        "oauth_client_id": get("TAILSCALE_OAUTH_CLIENT_ID"),
+        "oauth_client_secret": get("TAILSCALE_OAUTH_CLIENT_SECRET"),
+        "oauth_ttl": get("TAILSCALE_OAUTH_TTL"),
+        "cluster_tag": get("TAILSCALE_CLUSTER_TAG"),
+        "advertise_tags": get("TAILSCALE_ADVERTISE_TAGS"),
+        "exit_node": get("TAILSCALE_EXIT_NODE"),
+        "exit_node_allow_lan_access": get("TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS"),
+    }
+    sys.stdout.write(json.dumps(data))
+    PY
+  environment:
+    TS_ENV_RAW: "{{ tailscale_firstboot_env.content | b64decode }}"
+  register: tailscale_firstboot_parsed
+  changed_when: false
+  failed_when: false
+  when: tailscale_firstboot_env_stat.stat.exists
+  no_log: true
+
+- name: Extract tailscale values from firstboot env
+  ansible.builtin.set_fact:
+    tailscale_firstboot_raw: "{{ (tailscale_firstboot_parsed.stdout | default('{}') | from_json).raw | default('') }}"
+    tailscale_firstboot_oauth_client_id: "{{ (tailscale_firstboot_parsed.stdout | default('{}') | from_json).oauth_client_id | default('') }}"
+    tailscale_firstboot_oauth_client_secret: "{{ (tailscale_firstboot_parsed.stdout | default('{}') | from_json).oauth_client_secret | default('') }}"
+    tailscale_firstboot_oauth_ttl: "{{ (tailscale_firstboot_parsed.stdout | default('{}') | from_json).oauth_ttl | default('') }}"
+    tailscale_firstboot_cluster_tag: "{{ (tailscale_firstboot_parsed.stdout | default('{}') | from_json).cluster_tag | default('') }}"
+    tailscale_firstboot_advertise_tags: "{{ (tailscale_firstboot_parsed.stdout | default('{}') | from_json).advertise_tags | default('') }}"
+    tailscale_firstboot_exit_node: "{{ (tailscale_firstboot_parsed.stdout | default('{}') | from_json).exit_node | default('') }}"
+    tailscale_firstboot_exit_node_allow_lan_access: "{{ (tailscale_firstboot_parsed.stdout | default('{}') | from_json).exit_node_allow_lan_access | default('') }}"
+  when:
+    - tailscale_firstboot_env_stat.stat.exists
+    - tailscale_firstboot_parsed.stdout | default('') | length > 0
+  no_log: true
+
+- name: Prefer firstboot tailscale values when env is missing
+  ansible.builtin.set_fact:
+    tailscale_oauth_client_id: >-
+      {{
+        tailscale_oauth_client_id
+        if (tailscale_oauth_client_id | length) > 0
+        else (tailscale_firstboot_oauth_client_id | default(''))
+      }}
+    tailscale_oauth_client_secret: >-
+      {{
+        tailscale_oauth_client_secret
+        if (tailscale_oauth_client_secret | length) > 0
+        else (tailscale_firstboot_oauth_client_secret | default(''))
+      }}
+    tailscale_oauth_ttl: >-
+      {{
+        tailscale_oauth_ttl
+        if (tailscale_oauth_ttl | length) > 0
+        else (tailscale_firstboot_oauth_ttl | default(''))
+      }}
+    tailscale_cluster_tag: >-
+      {{
+        tailscale_cluster_tag
+        if (tailscale_cluster_tag | length) > 0
+        else (tailscale_firstboot_cluster_tag | default(''))
+      }}
+    tailscale_advertise_tags: >-
+      {{
+        tailscale_advertise_tags
+        if (tailscale_advertise_tags | length) > 0
+        else (tailscale_firstboot_advertise_tags | default(''))
+      }}
+    tailscale_exit_node: >-
+      {{
+        tailscale_exit_node
+        if (tailscale_exit_node | length) > 0
+        else (tailscale_firstboot_exit_node | default(''))
+      }}
+    tailscale_exit_node_allow_lan_access: >-
+      {{
+        tailscale_exit_node_allow_lan_access
+        if (tailscale_exit_node_allow_lan_access | length) > 0
+        else (tailscale_firstboot_exit_node_allow_lan_access | default(''))
+      }}
+  when: tailscale_firstboot_env_stat.stat.exists
+  no_log: true
+
+- name: Debug tailscale OAuth inputs (sanitized)
+  ansible.builtin.debug:
+    msg: >-
+      oauth_client_id_present={{ (tailscale_oauth_client_id | length) > 0 }},
+      oauth_client_secret_present={{ (tailscale_oauth_client_secret | length) > 0 }},
+      oauth_ttl={{ tailscale_oauth_ttl | default('') }},
+      cluster_tag={{ tailscale_cluster_tag | default('') }},
+      advertise_tags={{ tailscale_advertise_tags | default('') }},
+      firstboot_env_exists={{ tailscale_firstboot_env_stat.stat.exists | default(false) }},
+      firstboot_env_len={{ (tailscale_firstboot_raw | length) if (tailscale_firstboot_raw is defined) else 'n/a' }},
+      firstboot_env_b64_len={{ (tailscale_firstboot_env.content | length) if (tailscale_firstboot_env is defined) else 'n/a' }}
+  when: tailscale_retag_enabled | bool
+
+- name: Debug proxy environment (sanitized)
+  ansible.builtin.debug:
+    msg: >-
+      http_proxy={{ ansible_env.http_proxy | default(ansible_env.HTTP_PROXY | default('')) }},
+      https_proxy={{ ansible_env.https_proxy | default(ansible_env.HTTPS_PROXY | default('')) }},
+      no_proxy={{ ansible_env.no_proxy | default(ansible_env.NO_PROXY | default('')) }}
+  when: tailscale_retag_enabled | bool
+
+- name: Debug PATH environment (sanitized)
+  ansible.builtin.debug:
+    msg: "path={{ ansible_env.PATH | default('') }}"
+  when: tailscale_retag_enabled | bool
+
+- name: Drop placeholder tailscale values
+  ansible.builtin.set_fact:
+    tailscale_oauth_client_id: ""
+  when: tailscale_oauth_client_id is match('^__.*__$')
+
+- name: Drop placeholder tailscale secret
+  ansible.builtin.set_fact:
+    tailscale_oauth_client_secret: ""
+  when: tailscale_oauth_client_secret is match('^__.*__$')
+
+- name: Drop placeholder cluster tag
+  ansible.builtin.set_fact:
+    tailscale_cluster_tag: ""
+  when: tailscale_cluster_tag is match('^__.*__$')
+
+- name: Normalize tailscale cluster tag
+  ansible.builtin.set_fact:
+    tailscale_cluster_tag: "tag:{{ tailscale_cluster_tag }}"
+  when:
+    - tailscale_cluster_tag | length > 0
+    - not (tailscale_cluster_tag is match('^tag:'))
+
+- name: Normalize retag role tag
+  ansible.builtin.set_fact:
+    tailscale_retag_role_tag: "tag:{{ tailscale_retag_role_tag }}"
+  when:
+    - tailscale_retag_role_tag | length > 0
+    - not (tailscale_retag_role_tag is match('^tag:'))
+
+- name: Normalize retag platform tag
+  ansible.builtin.set_fact:
+    tailscale_retag_platform_tag: "tag:{{ tailscale_retag_platform_tag }}"
+  when:
+    - tailscale_retag_platform_tag | length > 0
+    - not (tailscale_retag_platform_tag is match('^tag:'))
+
+- name: Initialize desired tailscale tags
+  ansible.builtin.set_fact:
+    tailscale_retag_tags: []
+
+- name: Add retag role tag
+  ansible.builtin.set_fact:
+    tailscale_retag_tags: "{{ tailscale_retag_tags + [tailscale_retag_role_tag] }}"
+  when: tailscale_retag_role_tag | length > 0
+
+- name: Add retag platform tag
+  ansible.builtin.set_fact:
+    tailscale_retag_tags: "{{ tailscale_retag_tags + [tailscale_retag_platform_tag] }}"
+  when: tailscale_retag_platform_tag | length > 0
+
+- name: Add cluster tag
+  ansible.builtin.set_fact:
+    tailscale_retag_tags: "{{ tailscale_retag_tags + [tailscale_cluster_tag] }}"
+  when: tailscale_cluster_tag | length > 0
+
+- name: Add advertise tags from firstboot/env
+  ansible.builtin.set_fact:
+    tailscale_retag_tags: "{{ tailscale_retag_tags + tailscale_advertise_tags_list }}"
+  vars:
+    tailscale_advertise_tags_list: >-
+      {{
+        (
+          tailscale_advertise_tags | default('')
+          | regex_replace('\\s+', ',')
+          | regex_replace('^,+|,+$', '')
+          | split(',')
+        )
+        | reject('equalto', '')
+        | list
+      }}
+  when: tailscale_advertise_tags | length > 0
+
+- name: Deduplicate desired tailscale tags
+  ansible.builtin.set_fact:
+    tailscale_retag_tags: "{{ tailscale_retag_tags | unique }}"
+
+- name: Fetch Tailscale status snapshot (compact)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - <<'PY'
+    import json, shlex, subprocess
+
+    def find_prefs(obj):
+      if isinstance(obj, dict):
+        if isinstance(obj.get("Prefs"), dict):
+          return obj.get("Prefs") or {}
+        for val in obj.values():
+          found = find_prefs(val)
+          if found:
+            return found
+      elif isinstance(obj, list):
+        for val in obj:
+          found = find_prefs(val)
+          if found:
+            return found
+      return {}
+
+    try:
+      raw = subprocess.check_output(["tailscale", "status", "--json"], text=True, stderr=subprocess.DEVNULL)
+      data = json.loads(raw or "{}")
+    except Exception:
+      data = {}
+    prefs = find_prefs(data) or {}
+    self_obj = data.get("Self") or {}
+
+    flags = []
+    def add_bool(name, val):
+      if val is None:
+        return
+      flags.append(f"--{name}={'true' if val else 'false'}")
+    def add_str(name, val):
+      if val:
+        flags.append(f"--{name}={shlex.quote(str(val))}")
+
+    add_bool("accept-dns", prefs.get("AcceptDNS"))
+    add_bool("accept-routes", prefs.get("AcceptRoutes"))
+    add_bool("shields-up", prefs.get("ShieldsUp"))
+    add_bool("ssh", prefs.get("RunSSH") if "RunSSH" in prefs else prefs.get("SSHEnabled"))
+    add_str("hostname", prefs.get("Hostname"))
+    if prefs.get("ExitNode"):
+      flags.append(f"--exit-node={shlex.quote(prefs.get('ExitNode'))}")
+      add_bool("exit-node-allow-lan-access", prefs.get("ExitNodeAllowLANAccess"))
+    routes = prefs.get("AdvertiseRoutes") or []
+    if routes:
+      flags.append(f"--advertise-routes={shlex.quote(','.join(routes))}")
+    if prefs.get("AdvertiseExitNode") is True:
+      flags.append("--advertise-exit-node")
+    if "NoSNAT" in prefs:
+      add_bool("snat-subnet-routes", not bool(prefs.get("NoSNAT")))
+
+    out = {
+      "self_tags": self_obj.get("Tags", []),
+      "self_id": self_obj.get("ID", ""),
+      "up_flags": " ".join(flags),
+    }
+    print(json.dumps(out))
+    PY
+  args:
+    executable: /bin/bash
+  register: tailscale_status_compact
+  no_log: true
+  changed_when: false
+  failed_when: false
+  when:
+    - tailscale_retag_enabled | bool
+    - tailscale_retag_tags | length > 0
+
+- name: Build tailscale up flags from current prefs
+  ansible.builtin.set_fact:
+    tailscale_up_flags:
+      stdout: "{{ (tailscale_status_compact.stdout | default('{}') | from_json).up_flags | default('') }}"
+  when:
+    - tailscale_status_compact is defined
+    - tailscale_status_compact.rc == 0
+    - tailscale_status_compact.stdout | length > 0
+
+- name: Debug tailscale up flags (sanitized)
+  ansible.builtin.debug:
+    msg: "tailscale_up_flags={{ tailscale_up_flags.stdout | default('') }}"
+  when:
+    - tailscale_up_flags is defined
+
+- name: Build fallback tailscale up flags
+  ansible.builtin.command: >-
+    python3 - <<'PY'
+    import os, shlex
+    host = (os.environ.get("TS_HOSTNAME") or "").strip()
+    exit_node = (os.environ.get("TS_EXIT_NODE") or "").strip()
+    exit_allow = (os.environ.get("TS_EXIT_ALLOW") or "").strip().lower()
+    flags = ["--accept-dns=true", "--ssh=true"]
+    if host:
+      flags.append(f"--hostname={shlex.quote(host)}")
+    if exit_node:
+      flags.append(f"--exit-node={shlex.quote(exit_node)}")
+      allow = "true" if exit_allow in ("1", "true", "yes", "on") else "false"
+      flags.append(f"--exit-node-allow-lan-access={allow}")
+    print(" ".join(flags))
+    PY
+  environment:
+    TS_HOSTNAME: "{{ ansible_facts['hostname'] | default('') }}"
+    TS_EXIT_NODE: "{{ tailscale_exit_node | default('') }}"
+    TS_EXIT_ALLOW: "{{ tailscale_exit_node_allow_lan_access | default('') }}"
+  register: tailscale_up_flags_fallback
+  changed_when: false
+  when:
+    - tailscale_retag_enabled | bool
+
+- name: Choose effective tailscale up flags
+  ansible.builtin.set_fact:
+    tailscale_up_flags_effective: >-
+      {{
+        tailscale_up_flags.stdout
+        if (tailscale_up_flags.stdout | default('') | length) > 0
+        else (tailscale_up_flags_fallback.stdout | default(''))
+      }}
+  when:
+    - tailscale_retag_enabled | bool
+
+- name: Parse current Tailscale tags
+  ansible.builtin.set_fact:
+    tailscale_current_tags: "{{ (tailscale_status_compact.stdout | from_json).self_tags | default([]) }}"
+  when:
+    - tailscale_status_compact.rc == 0
+    - tailscale_status_compact.stdout | length > 0
+
+- name: Capture Tailscale device id
+  ansible.builtin.set_fact:
+    tailscale_device_id: "{{ (tailscale_status_compact.stdout | from_json).self_id | default('') }}"
+  when:
+    - tailscale_status_compact.rc == 0
+    - tailscale_status_compact.stdout | length > 0
+
+- name: Determine Tailscale retag delta
+  ansible.builtin.set_fact:
+    tailscale_tags_missing: "{{ tailscale_retag_tags | difference(tailscale_current_tags | default([])) }}"
+    tailscale_tags_unexpected: "{{ (tailscale_current_tags | default([])) | difference(tailscale_retag_tags) }}"
+    tailscale_should_retag: >-
+      {{
+        (tailscale_retag_force | bool)
+        or ((tailscale_retag_tags | difference(tailscale_current_tags | default([]))) | length > 0)
+      }}
+  when:
+    - tailscale_retag_enabled | bool
+    - tailscale_retag_tags | length > 0
+
+- name: Compute OAuth auth-key expiry seconds
+  ansible.builtin.set_fact:
+    tailscale_oauth_expiry_seconds: >-
+      {{
+        (
+          (tailscale_oauth_ttl | default('3600s') | regex_search('^\\d+') | default('3600')) | int
+        )
+        * (
+          {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}[
+            (tailscale_oauth_ttl | default('3600s') | regex_search('[smhd]$') | default('s'))
+          ]
+        )
+      }}
+  when:
+    - tailscale_should_retag | default(false) | bool
+    - (tailscale_retag_authkey | length) == 0
+    - tailscale_retag_use_oauth | bool
+    - (tailscale_oauth_client_id | length) > 0
+    - (tailscale_oauth_client_secret | length) > 0
+
+- name: Request Tailscale OAuth access token
+  ansible.builtin.uri:
+    url: https://api.tailscale.com/api/v2/oauth/token
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: client_credentials
+      scope: "{{ tailscale_oauth_scopes_auth_keys }}"
+    url_username: "{{ tailscale_oauth_client_id }}"
+    url_password: "{{ tailscale_oauth_client_secret }}"
+    force_basic_auth: true
+    return_content: true
+    headers:
+      Accept: application/json
+  register: tailscale_oauth_token
+  no_log: true
+  when:
+    - tailscale_should_retag | default(false) | bool
+    - (tailscale_retag_authkey | length) == 0
+    - tailscale_retag_use_oauth | bool
+    - (tailscale_oauth_client_id | length) > 0
+    - (tailscale_oauth_client_secret | length) > 0
+
+- name: Debug OAuth token response (sanitized)
+  ansible.builtin.debug:
+    msg: >-
+      oauth_token_status={{ tailscale_oauth_token.status | default('unknown') }},
+      oauth_token_tags={{ tailscale_oauth_token.json.tags | default('') }}
+  when:
+    - tailscale_oauth_token is defined
+
+- name: Create Tailscale auth key for retag (curl)
+  ansible.builtin.shell: |
+    set -u
+    resp_file="$(mktemp)"
+    hdr_file="$(mktemp)"
+    stderr_file="$(mktemp)"
+    stdout_file="$(mktemp)"
+    curl_rc=0
+    http_code=""
+    curl_path="$(command -v curl || true)"
+    curl_type="$(type -p curl 2>/dev/null || true)"
+    curl_ls="/usr/bin/curl"
+    curl_ls_out=""
+    if [ -e "${curl_ls}" ]; then
+      curl_ls_out="$(ls -l "${curl_ls}" 2>/dev/null || true)"
+    fi
+    curl_version="$(curl --version 2>/dev/null | head -n1 || true)"
+    create_payload="$(
+      EXPIRY_SECONDS="${EXPIRY_SECONDS}" TAGS_JSON="${TAGS_JSON}" python3 - <<'PY'
+    import json, os
+    expiry = int(os.environ.get("EXPIRY_SECONDS") or "3600")
+    tags = json.loads(os.environ.get("TAGS_JSON") or "[]")
+    payload = {
+        "capabilities": {
+            "devices": {
+                "create": {
+                    "reusable": False,
+                    "ephemeral": False,
+                    "preauthorized": True,
+                    "tags": tags,
+                }
+            }
+        },
+        "expirySeconds": expiry,
+        "description": "ansible retag",
+    }
+    print(json.dumps(payload))
+    PY
+    )"
+    curl -sS -X POST \
+      -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+      -H 'Content-Type: application/json' \
+      -H 'Accept: application/json' \
+      --data-binary "${create_payload}" \
+      -D "${hdr_file}" \
+      -o "${resp_file}" -w "%{http_code}" \
+      https://api.tailscale.com/api/v2/tailnet/-/keys >"${stdout_file}" 2>"${stderr_file}" || curl_rc=$?
+    http_code="$(tr -d '\r\n' < "${stdout_file}" 2>/dev/null || true)"
+    req_id="$(awk -F': ' 'tolower($1)=="x-request-id"{print $2}' "${hdr_file}" | tr -d '\r' | tail -n1)"
+    server_hdr="$(awk -F': ' 'tolower($1)=="server"{print $2}' "${hdr_file}" | tr -d '\r' | tail -n1)"
+    via_hdr="$(awk -F': ' 'tolower($1)=="via"{print $2}' "${hdr_file}" | tr -d '\r' | tail -n1)"
+    content_type_hdr="$(awk -F': ' 'tolower($1)=="content-type"{print $2}' "${hdr_file}" | tr -d '\r' | tail -n1)"
+    date_hdr="$(awk -F': ' 'tolower($1)=="date"{print $2}' "${hdr_file}" | tr -d '\r' | tail -n1)"
+    RESP_FILE="${resp_file}" STDERR_FILE="${stderr_file}" STDOUT_FILE="${stdout_file}" HTTP_CODE="${http_code}" HTTP_CODE_RAW="${http_code}" CURL_RC="${curl_rc}" REQ_ID="${req_id}" SERVER_HDR="${server_hdr}" VIA_HDR="${via_hdr}" CONTENT_TYPE_HDR="${content_type_hdr}" DATE_HDR="${date_hdr}" CURL_PATH="${curl_path}" CURL_TYPE="${curl_type}" CURL_LS="${curl_ls_out}" CURL_VERSION="${curl_version}" \
+    python3 - <<'PY'
+    import json, os
+    resp_path = os.environ.get("RESP_FILE", "")
+    stderr_path = os.environ.get("STDERR_FILE", "")
+    stdout_path = os.environ.get("STDOUT_FILE", "")
+    content = ""
+    if resp_path:
+        with open(resp_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    stderr_text = ""
+    if stderr_path:
+        with open(stderr_path, "r", encoding="utf-8", errors="replace") as f:
+            stderr_text = f.read()
+    stdout_text = ""
+    if stdout_path:
+        with open(stdout_path, "r", encoding="utf-8", errors="replace") as f:
+            stdout_text = f.read()
+    data = {}
+    try:
+        data = json.loads(content) if content else {}
+    except Exception:
+        data = {}
+    out = {
+        "status": int(os.environ.get("HTTP_CODE") or "0"),
+        "http_code_raw": os.environ.get("HTTP_CODE_RAW", ""),
+        "curl_path": os.environ.get("CURL_PATH", ""),
+        "curl_type": os.environ.get("CURL_TYPE", ""),
+        "curl_ls": os.environ.get("CURL_LS", ""),
+        "curl_version": os.environ.get("CURL_VERSION", ""),
+        "curl_rc": int(os.environ.get("CURL_RC") or "0"),
+        "content": content[:2000],
+        "stderr": stderr_text[:2000],
+        "stdout": stdout_text[:2000],
+        "json": data,
+        "headers": {
+            "x-request-id": os.environ.get("REQ_ID", ""),
+            "server": os.environ.get("SERVER_HDR", ""),
+            "via": os.environ.get("VIA_HDR", ""),
+            "content-type": os.environ.get("CONTENT_TYPE_HDR", ""),
+            "date": os.environ.get("DATE_HDR", ""),
+        },
+    }
+    print(json.dumps(out))
+    PY
+    rm -f "${resp_file}" "${hdr_file}" "${stderr_file}" "${stdout_file}"
+  args:
+    executable: /bin/bash
+  environment:
+    ACCESS_TOKEN: "{{ tailscale_oauth_token.json.access_token }}"
+    TAGS_JSON: "{{ tailscale_retag_tags | to_json }}"
+    EXPIRY_SECONDS: "{{ tailscale_oauth_expiry_seconds | int }}"
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  register: tailscale_authkey_response_raw
+  no_log: true
+  failed_when: false
+  retries: 3
+  delay: 3
+  until: (tailscale_authkey_response_raw.stdout | default('{}') | from_json).status in [200, 201]
+  when:
+    - tailscale_should_retag | default(false) | bool
+    - (tailscale_retag_authkey | length) == 0
+    - tailscale_retag_use_oauth | bool
+    - tailscale_oauth_token is defined
+    - tailscale_oauth_token.json.access_token is defined
+
+- name: Normalize auth key response (curl)
+  ansible.builtin.set_fact:
+    tailscale_authkey_response: "{{ (tailscale_authkey_response_raw.stdout | default('{}') | from_json) }}"
+  when:
+    - tailscale_authkey_response_raw is defined
+    - not (tailscale_authkey_response_raw.skipped | default(false))
+    - (tailscale_authkey_response_raw.stdout | default('') | length) > 0
+
+- name: Log Tailscale auth key creation response (sanitized)
+  ansible.builtin.debug:
+    msg: >-
+      Tailscale auth key create response status={{ tailscale_authkey_response.status | default('unknown') }},
+      http_code_raw={{ tailscale_authkey_response.http_code_raw | default('') }},
+      curl_path={{ tailscale_authkey_response.curl_path | default('') }},
+      curl_version={{ tailscale_authkey_response.curl_version | default('') }},
+      curl_rc={{ tailscale_authkey_response.curl_rc | default('n/a') }},
+      request_id={{ (tailscale_authkey_response.headers['x-request-id'] | default(tailscale_authkey_response.headers['X-Request-Id'] | default('n/a'))) if tailscale_authkey_response.headers is defined else 'n/a' }},
+      tags={{ tailscale_retag_tags | join(',') }},
+      body={{ tailscale_authkey_response.content | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }},
+      stderr={{ tailscale_authkey_response.stderr | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }},
+      stdout={{ tailscale_authkey_response.stdout | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }}
+  when:
+    - tailscale_authkey_response is defined
+
+- name: Debug Tailscale auth key response headers (sanitized)
+  ansible.builtin.debug:
+    msg: >-
+      headers_server={{ tailscale_authkey_response.headers['server'] | default(tailscale_authkey_response.headers['Server'] | default('')) }},
+      headers_via={{ tailscale_authkey_response.headers['via'] | default(tailscale_authkey_response.headers['Via'] | default('')) }},
+      headers_content_type={{ tailscale_authkey_response.headers['content-type'] | default(tailscale_authkey_response.headers['Content-Type'] | default('')) }},
+      headers_date={{ tailscale_authkey_response.headers['date'] | default(tailscale_authkey_response.headers['Date'] | default('')) }}
+  when:
+    - tailscale_authkey_response is defined
+
+- name: Fail when Tailscale auth key creation fails
+  ansible.builtin.fail:
+    msg: >-
+      Tailscale auth key creation failed (status={{ tailscale_authkey_response.status | default('unknown') }}).
+      curl_rc={{ tailscale_authkey_response.curl_rc | default('n/a') }}.
+      request_id={{ (tailscale_authkey_response.headers['x-request-id'] | default(tailscale_authkey_response.headers['X-Request-Id'] | default('n/a'))) if tailscale_authkey_response.headers is defined else 'n/a' }}.
+      Check tagOwners and OAuth client scopes. Response={{ tailscale_authkey_response.json.message | default(tailscale_authkey_response.content | default('no message')) }}
+  when:
+    - tailscale_authkey_response_raw is defined
+    - not (tailscale_authkey_response_raw.skipped | default(false))
+    - tailscale_authkey_response is defined
+    - (tailscale_authkey_response.status | default(0) | int) not in [200, 201]
+
+- name: Capture Tailscale retag authkey
+  ansible.builtin.set_fact:
+    tailscale_retag_authkey: "{{ tailscale_authkey_response.json.key | default('') }}"
+  no_log: true
+  when:
+    - tailscale_authkey_response is defined
+    - tailscale_authkey_response.json is defined
+
+- name: Warn when retag is requested but no authkey is available
+  ansible.builtin.debug:
+    msg: "Tailscale retag requested but no authkey/OAuth credentials are available."
+  when:
+    - tailscale_should_retag | default(false) | bool
+    - (tailscale_retag_authkey | length) == 0
+
+- name: Fail when retag is requested but no authkey is available
+  ansible.builtin.fail:
+    msg: >-
+      Tailscale retag was required but no authkey/OAuth credentials were available.
+      oauth_client_id_present={{ (tailscale_oauth_client_id | default('') | length) > 0 }},
+      oauth_client_secret_present={{ (tailscale_oauth_client_secret | default('') | length) > 0 }},
+      oauth_access_token_present={{ ((tailscale_oauth_token.json.access_token if (tailscale_oauth_token is defined and tailscale_oauth_token.json is defined) else '') | length) > 0 }}.
+      Provide a working Tailscale OAuth client or TAILSCALE_RETAG_AUTHKEY.
+  when:
+    - tailscale_retag_fail_on_missing_authkey | bool
+    - tailscale_should_retag | default(false) | bool
+    - (tailscale_retag_authkey | length) == 0
+
+- name: Retag current Tailscale device via tailscale up
+  ansible.builtin.shell: |
+    set -euo pipefail
+    tags="{{ tailscale_retag_tags | join(',') }}"
+    base_flags="{{ tailscale_up_flags_effective | default('') }}"
+    set +e
+    out="$(tailscale up --advertise-tags="${tags}" ${base_flags} 2>&1)"
+    rc=$?
+    set -e
+    if [ "${rc}" -eq 0 ]; then
+      exit 0
+    fi
+    suggested="$(
+      OUT="${out}" python3 - <<'PY'
+    import os, re
+    text = os.environ.get("OUT", "")
+    m = re.search(r"(tailscale up .*?)(?:\\n|$)", text, re.DOTALL)
+    if m:
+        print(m.group(1).strip())
+    PY
+    )"
+    if [ -n "${suggested}" ]; then
+      filtered_flags="$(
+        SUGGESTED="${suggested}" python3 - <<'PY'
+    import os, shlex
+    raw = os.environ.get("SUGGESTED", "")
+    if raw.startswith("tailscale up "):
+        raw = raw[len("tailscale up "):]
+    args = shlex.split(raw)
+    keep = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("--authkey", "--auth-key", "--advertise-tags"):
+            skip_next = True
+            continue
+        if arg == "--force-reauth" or arg == "--reauth":
+            continue
+        if arg.startswith("--authkey=") or arg.startswith("--auth-key=") or arg.startswith("--advertise-tags=") or arg.startswith("--force-reauth=") or arg.startswith("--reauth="):
+            continue
+        keep.append(shlex.quote(arg))
+    print(" ".join(keep))
+    PY
+      )"
+      tailscale up --advertise-tags="${tags}" ${filtered_flags}
+      exit $?
+    fi
+    printf '%s\n' "${out}" >&2
+    exit "${rc}"
+  args:
+    executable: /bin/bash
+  register: tailscale_retag_result_up
+  changed_when: false
+  failed_when: false
+  when:
+    - tailscale_should_retag | default(false) | bool
+    - (tailscale_retag_tags | default([]) | length) > 0
+
+- name: Log tailscale up retag result (sanitized)
+  ansible.builtin.debug:
+    msg: >-
+      tailscale_up_retag_rc={{ tailscale_retag_result_up.rc | default('unknown') }},
+      tailscale_up_retag_stdout={{ tailscale_retag_result_up.stdout | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(300, True, '...') }},
+      tailscale_up_retag_stderr={{ tailscale_retag_result_up.stderr | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(300, True, '...') }}
+  when: tailscale_retag_result_up is defined
+
+- name: Mark Tailscale retag as successful after tailscale up
+  ansible.builtin.set_fact:
+    tailscale_retag_result:
+      rc: 0
+      method: tailscale_up
+      stdout: "{{ tailscale_retag_result_up.stdout | default('') }}"
+      stderr: "{{ tailscale_retag_result_up.stderr | default('') }}"
+  when:
+    - tailscale_retag_result_up is defined
+    - (tailscale_retag_result_up.rc | default(1) | int) == 0
+
+- name: Warn when Tailscale retag ran without cached up flags
+  ansible.builtin.debug:
+    msg: >-
+      tailscale_up_flags was empty; using fallback flags derived from hostname and first-boot exit-node settings.
+  when:
+    - tailscale_should_retag | default(false) | bool
+    - (tailscale_up_flags.stdout | default('') | length) == 0
+    - tailscale_retag_result_up is defined
+    - (tailscale_retag_result_up.rc | default(1) | int) == 0
+
+- name: Fail when local tailscale retag command fails
+  ansible.builtin.fail:
+    msg: >-
+      Tailscale retag failed via local tailscale up.
+      rc={{ tailscale_retag_result_up.rc | default('unknown') }},
+      stderr={{ tailscale_retag_result_up.stderr | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(400, True, '...') }}
+  when:
+    - tailscale_should_retag | default(false) | bool
+    - tailscale_retag_result_up is not defined or (tailscale_retag_result_up.rc | default(1) | int) != 0
+
+- name: Refresh Tailscale device id when missing
+  ansible.builtin.command: >-
+    python3 - <<'PY'
+    import json, subprocess, time
+    device_id = ""
+    for _ in range(10):
+      try:
+        out = subprocess.check_output(["tailscale", "status", "--json"], text=True, stderr=subprocess.DEVNULL)
+        data = json.loads(out or "{}")
+        device_id = (data.get("Self") or {}).get("ID", "") or ""
+        if device_id:
+          break
+      except Exception:
+        pass
+      time.sleep(1)
+    print(device_id)
+    PY
+  register: tailscale_device_id_refresh
+  changed_when: false
+  failed_when: false
+  when:
+    - tailscale_retag_enabled | bool
+    - (tailscale_device_id | default('')) | length == 0
+
+- name: Refresh Tailscale device id after retag
+  ansible.builtin.command: >-
+    python3 - <<'PY'
+    import json, subprocess, time
+    device_id = ""
+    for _ in range(15):
+      try:
+        out = subprocess.check_output(["tailscale", "status", "--json"], text=True, stderr=subprocess.DEVNULL)
+        data = json.loads(out or "{}")
+        device_id = (data.get("Self") or {}).get("ID", "") or ""
+        if device_id:
+          break
+      except Exception:
+        pass
+      time.sleep(1)
+    print(device_id)
+    PY
+  register: tailscale_device_id_post_retag
+  changed_when: false
+  failed_when: false
+  when:
+    - tailscale_retag_enabled | bool
+    - tailscale_retag_result is defined
+    - (tailscale_retag_result.rc | default(1) | int) == 0
+
+- name: Apply refreshed Tailscale device id
+  ansible.builtin.set_fact:
+    tailscale_device_id: "{{ tailscale_device_id_refresh.stdout | default('') | trim }}"
+  when:
+    - tailscale_device_id_refresh is defined
+    - (tailscale_device_id_refresh.stdout | default('') | trim | length) > 0
+
+- name: Apply post-retag Tailscale device id
+  ansible.builtin.set_fact:
+    tailscale_device_id: "{{ tailscale_device_id_post_retag.stdout | default('') | trim }}"
+  when:
+    - tailscale_device_id_post_retag is defined
+    - (tailscale_device_id_post_retag.stdout | default('') | trim | length) > 0
+
+- name: Fetch Tailscale status snapshot after retag
+  ansible.builtin.shell: |
+    set -euo pipefail
+    tailscale status --json
+  args:
+    executable: /bin/bash
+  register: tailscale_status_post_retag
+  changed_when: false
+  failed_when: false
+  retries: "{{ tailscale_post_retag_status_retries | int }}"
+  delay: "{{ tailscale_post_retag_status_delay | int }}"
+  until: >-
+    (
+      tailscale_status_post_retag.stdout | default('{}') | from_json
+    ).Self is defined
+  when:
+    - tailscale_retag_result is defined
+    - (tailscale_retag_result.rc | default(1) | int) == 0
+
+- name: Capture final Tailscale tags after retag
+  ansible.builtin.command: >-
+    python3 - <<'PY'
+    import json, os
+    raw = os.environ.get("TS_STATUS_JSON", "")
+    try:
+      data = json.loads(raw or "{}")
+    except Exception:
+      data = {}
+    tags = ((data.get("Self") or {}).get("Tags") or [])
+    device_id = ((data.get("Self") or {}).get("ID") or "")
+    print(json.dumps({"tags": tags, "device_id": device_id}))
+    PY
+  environment:
+    TS_STATUS_JSON: "{{ tailscale_status_post_retag.stdout | default('') }}"
+  register: tailscale_final_tags
+  changed_when: false
+  failed_when: false
+  when:
+    - tailscale_status_post_retag is defined
+    - (tailscale_status_post_retag.stdout | default('') | length) > 0
+
+- name: Apply post-retag device id from final Tailscale state
+  ansible.builtin.set_fact:
+    tailscale_device_id: >-
+      {{
+        (
+          tailscale_final_tags.stdout | default('{}') | from_json
+        ).device_id | default(tailscale_device_id | default(''))
+      }}
+  when:
+    - tailscale_final_tags is defined
+    - (tailscale_final_tags.stdout | default('') | length) > 0
+
+- name: Apply post-retag tags from final Tailscale state
+  ansible.builtin.set_fact:
+    tailscale_current_tags: >-
+      {{
+        (
+          tailscale_final_tags.stdout | default('{}') | from_json
+        ).tags | default([])
+      }}
+  when:
+    - tailscale_final_tags is defined
+    - (tailscale_final_tags.stdout | default('') | length) > 0
+
+- name: Log post-retag Tailscale state
+  ansible.builtin.debug:
+    msg: >-
+      tailscale_device_id_after={{ tailscale_device_id | default('') }},
+      tailscale_final_tags={{ tailscale_current_tags | default([]) | join(',') }}
+  when:
+    - tailscale_retag_result is defined
+    - (tailscale_retag_result.rc | default(1) | int) == 0
+
+- name: Fail when post-retag Tailscale tags are empty
+  ansible.builtin.fail:
+    msg: >-
+      Tailscale retag completed but tailscale status reported no final tags.
+      device_id={{ tailscale_device_id | default('') }}
+  when:
+    - tailscale_retag_result is defined
+    - (tailscale_retag_result.rc | default(1) | int) == 0
+    - (tailscale_current_tags | default([]) | length) == 0
+
+- name: Fail when unexpected tags remain after final retag
+  ansible.builtin.fail:
+    msg: >-
+      Tailscale retag completed but unexpected tags remain.
+      unexpected_tags={{ (tailscale_current_tags | default([])) | difference(tailscale_retag_tags) | join(',') }},
+      final_tags={{ tailscale_current_tags | default([]) | join(',') }}
+  when:
+    - tailscale_retag_result is defined
+    - (tailscale_retag_result.rc | default(1) | int) == 0
+    - ((tailscale_current_tags | default([])) | difference(tailscale_retag_tags) | length) > 0
+
+- name: Disable Tailscale key expiry for node
+  ansible.builtin.uri:
+    url: https://api.tailscale.com/api/v2/oauth/token
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: client_credentials
+      scope: "{{ tailscale_oauth_scopes_devices }}"
+    url_username: "{{ tailscale_oauth_client_id }}"
+    url_password: "{{ tailscale_oauth_client_secret }}"
+    force_basic_auth: true
+    return_content: true
+    headers:
+      Accept: application/json
+  register: tailscale_oauth_token_devices
+  no_log: true
+  when:
+    - (tailscale_oauth_client_id | length) > 0
+    - (tailscale_oauth_client_secret | length) > 0
+
+- name: Disable Tailscale key expiry for node
+  ansible.builtin.uri:
+    url: "https://api.tailscale.com/api/v2/device/{{ tailscale_device_id }}/key"
+    method: POST
+    body_format: json
+    body:
+      keyExpiryDisabled: true
+    headers:
+      Authorization: "Bearer {{ tailscale_oauth_token_devices.json.access_token }}"
+      Accept: application/json
+  no_log: true
+  failed_when: false
+  register: tailscale_key_expiry_response
+  when:
+    - tailscale_device_id is defined
+    - tailscale_device_id | length > 0
+    - tailscale_oauth_token_devices is defined
+    - tailscale_oauth_token_devices.json.access_token is defined
+
+- name: Log Tailscale key expiry disable response (sanitized)
+  ansible.builtin.debug:
+    msg: >-
+      tailscale_key_expiry_skipped={{ tailscale_key_expiry_response.skipped | default(false) }},
+      tailscale_key_expiry_status={{ tailscale_key_expiry_response.status | default('unknown') }},
+      msg={{ tailscale_key_expiry_response.json.message | default('') }},
+      error={{ tailscale_key_expiry_response.json.error | default('') }}
+  when:
+    - tailscale_key_expiry_response is defined
+
+- name: Warn when Tailscale key expiry disable fails
+  ansible.builtin.debug:
+    msg: >-
+      Failed to disable Tailscale key expiry (status={{ tailscale_key_expiry_response.status | default('unknown') }}).
+      msg={{ tailscale_key_expiry_response.json.message | default('') }}
+      error={{ tailscale_key_expiry_response.json.error | default('') }}
+  when:
+    - tailscale_key_expiry_response is defined
+    - not (tailscale_key_expiry_response.skipped | default(false))
+    - (tailscale_key_expiry_response.status | default(0) | int) not in [200, 201]
+
+- name: Warn when unable to disable Tailscale key expiry
+  ansible.builtin.debug:
+    msg: >-
+      Skipping Tailscale key expiry disable: device_id_present={{ (tailscale_device_id | default('')) | length > 0 }},
+      oauth_token_present={{ ((tailscale_oauth_token_devices.json.access_token if (tailscale_oauth_token_devices is defined and tailscale_oauth_token_devices.json is defined) else '') | length) > 0 }}
+  when:
+    - tailscale_retag_enabled | bool
+    - (tailscale_device_id | default('')) | length == 0
+      or ((tailscale_oauth_token_devices.json.access_token if (tailscale_oauth_token_devices is defined and tailscale_oauth_token_devices.json is defined) else '') | length) == 0
+
+- name: Fail when Tailscale key expiry disable API call fails
+  ansible.builtin.fail:
+    msg: >-
+      Failed to disable Tailscale key expiry (status={{ tailscale_key_expiry_response.status | default('unknown') }}).
+      msg={{ tailscale_key_expiry_response.json.message | default('') }}
+      error={{ tailscale_key_expiry_response.json.error | default('') }}
+  when:
+    - tailscale_key_expiry_fail_on_error | bool
+    - tailscale_key_expiry_response is defined
+    - not (tailscale_key_expiry_response.skipped | default(false))
+    - (tailscale_key_expiry_response.status | default(0) | int) not in [200, 201]
+
+- name: Fail when Tailscale key expiry disable is skipped in strict mode
+  ansible.builtin.fail:
+    msg: >-
+      Tailscale key expiry disable was skipped in strict mode.
+      device_id_present={{ (tailscale_device_id | default('')) | length > 0 }},
+      oauth_client_id_present={{ (tailscale_oauth_client_id | default('') | length) > 0 }},
+      oauth_client_secret_present={{ (tailscale_oauth_client_secret | default('') | length) > 0 }},
+      oauth_token_present={{ ((tailscale_oauth_token_devices.json.access_token if (tailscale_oauth_token_devices is defined and tailscale_oauth_token_devices.json is defined) else '') | length) > 0 }}.
+      Set valid OAuth credentials or disable strict mode.
+  when:
+    - tailscale_key_expiry_fail_on_error | bool
+    - tailscale_retag_enabled | bool
+    - tailscale_key_expiry_response is not defined
+      or (tailscale_key_expiry_response.skipped | default(false))
+      or (tailscale_device_id | default('')) | length == 0
+      or ((tailscale_oauth_token_devices.json.access_token if (tailscale_oauth_token_devices is defined and tailscale_oauth_token_devices.json is defined) else '') | length) == 0
+
+- name: Log Tailscale retag result (sanitized)
+  ansible.builtin.debug:
+    msg: >-
+      tailscale_retag_rc={{ tailscale_retag_result.rc | default('n/a') }},
+      stdout={{ tailscale_retag_result.stdout | default('') | regex_replace(tailscale_retag_authkey, '[redacted]') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }},
+      stderr={{ tailscale_retag_result.stderr | default('') | regex_replace(tailscale_retag_authkey, '[redacted]') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }}
+  when:
+    - tailscale_retag_result is defined
+
+- name: Fail when Tailscale retag fails
+  ansible.builtin.fail:
+    msg: >-
+      Tailscale retag failed (rc={{ tailscale_retag_result.rc | default('n/a') }}).
+      stderr={{ tailscale_retag_result.stderr | default('') | regex_replace(tailscale_retag_authkey, '[redacted]') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }}
+  when:
+    - tailscale_retag_result is defined
+    - (tailscale_retag_result.rc | default(1) | int) != 0

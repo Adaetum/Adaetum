@@ -1,0 +1,175 @@
+{
+  "name": "rocky10",
+  "installer_type": "kickstart",
+  "os_family": "rhel",
+  "template": "templates/rocky10.ks.j2",
+  "output": "dist/ks-templates/rocky10.ks",
+  "enabled": true,
+  "shared_fragments": [
+    "fragments/shared/portable/dependency-bootstrap.shfrag"
+  ],
+  "os_family_adapters": {
+    "package_manager": "fragments/os-family/rhel/package-manager.shfrag",
+    "service_manager": "fragments/os-family/rhel/service-manager.shfrag",
+    "filesystem": "fragments/os-family/rhel/filesystem.shfrag",
+    "networking": "fragments/os-family/rhel/networking.shfrag"
+  },
+  "sections": [
+    {
+      "id": "header",
+      "phase": "header",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/00-header.ksfrag"
+    },
+    {
+      "id": "pre-storage",
+      "phase": "pre",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/10-pre-storage.ksfrag"
+    },
+    {
+      "id": "partitioning-include",
+      "phase": "include",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/20-partitioning-include.ksfrag"
+    },
+    {
+      "id": "packages",
+      "phase": "packages",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/30-packages.ksfrag"
+    },
+    {
+      "id": "services-and-growfs",
+      "phase": "post-install",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/40-services-growfs.ksfrag"
+    },
+    {
+      "id": "persist-storage-diag",
+      "phase": "post-install",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/50-persist-storage-diag.ksfrag"
+    },
+    {
+      "id": "embed-repo",
+      "phase": "post-install",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/60-embed-repo.ksfrag"
+    },
+    {
+      "id": "firstboot-wrapper",
+      "phase": "firstboot",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/70-firstboot.ksfrag"
+    },
+    {
+      "id": "tailscale-firstboot-open",
+      "phase": "firstboot",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/71-tailscale-firstboot-open.ksfrag"
+    },
+    {
+      "id": "tailscale-dependency-bootstrap",
+      "phase": "firstboot",
+      "kind": "shared",
+      "path": "fragments/shared/portable/dependency-bootstrap.shfrag"
+    },
+    {
+      "id": "tailscale-package-manager",
+      "phase": "firstboot",
+      "kind": "os-family",
+      "path": "fragments/os-family/rhel/package-manager.shfrag"
+    },
+    {
+      "id": "tailscale-service-manager",
+      "phase": "firstboot",
+      "kind": "os-family",
+      "path": "fragments/os-family/rhel/service-manager.shfrag"
+    },
+    {
+      "id": "tailscale-runtime",
+      "phase": "firstboot",
+      "kind": "os-family",
+      "path": "fragments/os-family/rhel/tailscale-runtime.shfrag"
+    },
+    {
+      "id": "tailscale-runtime-env-helper",
+      "phase": "firstboot",
+      "kind": "shared",
+      "path": "fragments/shared/portable/13-bootstrap-runtime-env.shfrag"
+    },
+    {
+      "id": "tailscale-firstboot-lib",
+      "phase": "firstboot",
+      "kind": "shared",
+      "path": "fragments/shared/portable/11-tailscale-firstboot-lib.shfrag"
+    },
+    {
+      "id": "tailscale-firstboot-flow",
+      "phase": "firstboot",
+      "kind": "shared",
+      "path": "fragments/shared/portable/12-tailscale-firstboot-flow.shfrag"
+    },
+    {
+      "id": "tailscale-firstboot-close",
+      "phase": "firstboot",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/72-tailscale-firstboot-close.ksfrag"
+    },
+    {
+      "id": "ansible-bundle-open",
+      "phase": "firstboot",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/73-ansible-bundle-open.ksfrag"
+    },
+    {
+      "id": "ansible-dependency-bootstrap",
+      "phase": "firstboot",
+      "kind": "shared",
+      "path": "fragments/shared/portable/dependency-bootstrap.shfrag"
+    },
+    {
+      "id": "ansible-package-manager",
+      "phase": "firstboot",
+      "kind": "os-family",
+      "path": "fragments/os-family/rhel/package-manager.shfrag"
+    },
+    {
+      "id": "ansible-runtime-env-helper",
+      "phase": "firstboot",
+      "kind": "shared",
+      "path": "fragments/shared/portable/13-bootstrap-runtime-env.shfrag"
+    },
+    {
+      "id": "ansible-bundle-lib",
+      "phase": "firstboot",
+      "kind": "shared",
+      "path": "fragments/shared/portable/21-ansible-bundle-lib.shfrag"
+    },
+    {
+      "id": "ansible-bundle-installer-paths",
+      "phase": "firstboot",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/74-ansible-bundle-installer-paths.ksfrag"
+    },
+    {
+      "id": "ansible-bundle-flow",
+      "phase": "firstboot",
+      "kind": "shared",
+      "path": "fragments/shared/portable/22-ansible-bundle-flow.shfrag"
+    },
+    {
+      "id": "ansible-bundle-env",
+      "phase": "firstboot",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/74-ansible-bundle-env.ksfrag"
+    },
+    {
+      "id": "firstboot-install-handoff",
+      "phase": "firstboot",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/75-firstboot-install-handoff.ksfrag"
+    }
+  ]
+}

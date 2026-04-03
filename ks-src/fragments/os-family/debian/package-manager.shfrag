@@ -1,0 +1,5 @@
+os_family_pkg_install() {
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y "$@"
+}

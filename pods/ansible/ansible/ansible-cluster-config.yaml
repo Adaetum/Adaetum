@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ansible-cluster-config
+data:
+  ANSIBLE_RUNNER_IMAGE: 'registry.example.services/gitea-admin/ansible-runner:latest'
+  TAILSCALE_DOMAIN: 'example.ts.net'
+  TAILSCALE_CLUSTER_TAG: 'tag:cluster'

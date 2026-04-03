@@ -1,0 +1,8 @@
+%packages --ignoremissing
+@core
+openssh-server
+curl
+ca-certificates
+sudo
+git
+%end

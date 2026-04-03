@@ -1,0 +1,89 @@
+name: authentik
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-17"
+source_type: helm
+source_repo_url: https://charts.goauthentik.io
+source_chart: authentik
+source_target_revision: ">=0.0.0"
+source_helm_values: |
+  authentik:
+    error_reporting:
+      enabled: false
+
+  server:
+    initContainers:
+      - name: wait-for-postgresql
+        image: public.ecr.aws/docker/library/busybox:1.36
+        command:
+          - sh
+          - -ec
+          - |
+            until nc -z authentik-postgresql 5432; do
+              echo "waiting for authentik-postgresql:5432"
+              sleep 2
+            done
+    env:
+      - name: AUTHENTIK_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: authentik-secrets
+            key: secret_key
+      - name: AUTHENTIK_BOOTSTRAP_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: authentik-secrets
+            key: bootstrap_password
+      - name: AUTHENTIK_BOOTSTRAP_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: authentik-secrets
+            key: bootstrap_token
+      - name: AUTHENTIK_POSTGRESQL__PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: authentik-secrets
+            key: postgresql_password
+    ingress:
+      # Disabled: routing is handled by nginx Ingress manifests in pods/ingress/nginx-routing.
+      enabled: false
+
+  worker:
+    initContainers:
+      - name: wait-for-postgresql
+        image: public.ecr.aws/docker/library/busybox:1.36
+        command:
+          - sh
+          - -ec
+          - |
+            until nc -z authentik-postgresql 5432; do
+              echo "waiting for authentik-postgresql:5432"
+              sleep 2
+            done
+    env:
+      - name: AUTHENTIK_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: authentik-secrets
+            key: secret_key
+      - name: AUTHENTIK_POSTGRESQL__PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: authentik-secrets
+            key: postgresql_password
+    volumeMounts:
+      - name: authentik-blueprints
+        mountPath: /blueprints/cluster
+        readOnly: true
+    volumes:
+      - name: authentik-blueprints
+        configMap:
+          name: authentik-blueprints
+
+  postgresql:
+    enabled: true
+    auth:
+      existingSecret: authentik-secrets
+  redis:
+    enabled: true
+destination_namespace: authentik

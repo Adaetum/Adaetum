@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ argocd_bootstrap_app_name }}
+  namespace: {{ argocd_namespace }}
+spec:
+  project: default
+  source:
+    repoURL: "{{ argocd_bootstrap_repo_url }}"
+    targetRevision: "{{ argocd_bootstrap_repo_revision }}"
+    path: "{{ argocd_bootstrap_repo_path }}"
+  destination:
+    server: "{{ argocd_bootstrap_dest_server }}"
+    namespace: "{{ argocd_bootstrap_dest_namespace }}"
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

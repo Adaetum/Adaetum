@@ -1,0 +1,478 @@
+name: Deploy KS/Log Worker
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths:
+      - ".github/workflows/ks-worker.yml"
+      - ".env.template"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ks-worker.yml"
+      - ".env.template"
+
+jobs:
+  deploy-worker:
+    name: Deploy KS Worker
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    environment: Prod
+    permissions:
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      KS_R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      KS_SHARED_TOKEN: ${{ secrets.KS_SHARED_TOKEN }}
+      KS_UPLOAD_TOKEN: ${{ secrets.KS_UPLOAD_TOKEN }}
+      KS_BASE_URL: ${{ secrets.KS_BASE_URL }}
+      KS_CUSTOM_DOMAIN: ${{ secrets.KS_CUSTOM_DOMAIN }}
+      KS_ZONE_NAME: ${{ secrets.KS_ZONE_NAME }}
+      KS_WORKER_NAME: "bootstrap-ks"
+      KS_CUSTOM_DOMAIN_DEFAULT: "bootstrap.example.services"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache npm
+        uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('.github/workflows/ks-worker.yml') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+
+      - name: Install Wrangler
+        run: |
+          npm install -g wrangler
+
+      - name: Validate secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ] || [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "Missing required Worker settings (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN)."
+            exit 1
+          fi
+          if [ -z "${KS_R2_BUCKET}" ] || [ -z "${KS_SHARED_TOKEN}" ]; then
+            echo "Missing required KS settings (R2_BUCKET, KS_SHARED_TOKEN)."
+            exit 1
+          fi
+          if ! printf '%s' "${KS_R2_BUCKET}" | grep -Eq '^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])?$'; then
+            echo "Invalid R2_BUCKET value in GitHub secret."
+            echo "Expected 3-63 chars: lowercase letters, numbers, hyphens; must start/end with alphanumeric."
+            exit 1
+          fi
+
+      - name: Write Worker and Wrangler config
+        run: |
+          set -euo pipefail
+          ks_custom_domain="${KS_CUSTOM_DOMAIN:-}"
+          if [ -z "${ks_custom_domain}" ] && [ -n "${KS_BASE_URL:-}" ]; then
+            ks_custom_domain="$(
+              printf '%s' "${KS_BASE_URL}" \
+                | sed -nE 's#^https?://([^/:]+).*$#\1#p' \
+                | head -n1
+            )"
+          fi
+          if [ -z "${ks_custom_domain}" ]; then
+            ks_custom_domain="${KS_CUSTOM_DOMAIN_DEFAULT}"
+          fi
+          if ! printf '%s' "${ks_custom_domain}" | grep -Eq '^[A-Za-z0-9.-]+$'; then
+            echo "Invalid custom domain resolved for Worker route: ${ks_custom_domain}" >&2
+            echo "Set KS_CUSTOM_DOMAIN (preferred) or KS_BASE_URL in GitHub Prod secrets." >&2
+            exit 1
+          fi
+          echo "Using Worker custom domain route: ${ks_custom_domain}"
+
+          printf '%s\n' \
+            'export default {' \
+            '  async fetch(request, env) {' \
+            '    const url = new URL(request.url);' \
+            '    const token = url.searchParams.get("token") || request.headers.get("x-ks-token") || "";' \
+            '    const sharedToken = env.KS_SHARED_TOKEN || "";' \
+            '    const uploadToken = env.KS_UPLOAD_TOKEN || "";' \
+            '' \
+            '    const unauthorized = () => new Response("unauthorized\\n", { status: 401 });' \
+            '    const requireShared = () => {' \
+            '      if (!sharedToken || token !== sharedToken) {' \
+            '        return unauthorized();' \
+            '      }' \
+            '      return null;' \
+            '    };' \
+            '    const requireUpload = () => {' \
+            '      if (uploadToken) {' \
+            '        if (token !== uploadToken) {' \
+            '          return unauthorized();' \
+            '        }' \
+            '        return null;' \
+            '      }' \
+            '      // Back-compat: if no dedicated upload token is configured, fall back to KS_SHARED_TOKEN.' \
+            '      return requireShared();' \
+            '    };' \
+            '' \
+            '    const isoResolve = (file) => {' \
+            '      const allowed = [".ks", ".tar.gz", ".tgz", ".env"];' \
+            '      if (!allowed.some((ext) => file.endsWith(ext))) {' \
+            '        return { error: "unsupported file type" };' \
+            '      }' \
+            '      let prefix = "";' \
+            '      if (file.includes("/")) {' \
+            '        prefix = file.split("/")[0];' \
+            '      }' \
+            '      if (!prefix) {' \
+            '        const match = file.match(/^([A-Za-z]+\\d+)/);' \
+            '        if (match) {' \
+            '          prefix = match[1].toLowerCase();' \
+            '        }' \
+            '      }' \
+            '      if (!prefix && file.includes("-")) {' \
+            '        prefix = file.split("-")[0].toLowerCase();' \
+            '      }' \
+            '      if (!prefix) {' \
+            '        return { error: "unsupported os prefix" };' \
+            '      }' \
+            '      let key = file;' \
+            '      if (!file.startsWith(`${prefix}/`)) {' \
+            '        key = `${prefix}/${file}`;' \
+            '      }' \
+            '      let contentType = "application/octet-stream";' \
+            '      if (file.endsWith(".ks")) {' \
+            '        contentType = "text/plain";' \
+            '      } else if (file.endsWith(".tar.gz") || file.endsWith(".tgz")) {' \
+            '        contentType = "application/gzip";' \
+            '      } else if (file.endsWith(".env")) {' \
+            '        contentType = "text/plain";' \
+            '      }' \
+            '      return { key, contentType };' \
+            '    };' \
+            '' \
+            '    if (url.pathname.startsWith("/iso/")) {' \
+            '      const file = url.pathname.replace("/iso/", "").trim();' \
+            '      if (!file) {' \
+            '        return new Response("missing file\\n", { status: 400 });' \
+            '      }' \
+            '      if (request.method === "GET") {' \
+            '        const auth = requireShared();' \
+            '        if (auth) {' \
+            '          return auth;' \
+            '        }' \
+            '        const resolved = isoResolve(file);' \
+            '        if (resolved.error) {' \
+            '          return new Response(`${resolved.error}\\n`, { status: 400 });' \
+            '        }' \
+            '        const obj = await env.KS_BUCKET.get(resolved.key);' \
+            '        if (!obj) {' \
+            '          return new Response("not found\\n", { status: 404 });' \
+            '        }' \
+            '        const headers = new Headers();' \
+            '        headers.set("Content-Type", obj.httpMetadata?.contentType || "text/plain");' \
+            '        headers.set("Cache-Control", "no-store");' \
+            '        return new Response(obj.body, { headers });' \
+            '      }' \
+            '' \
+            '      if (request.method === "PUT" || request.method === "POST") {' \
+            '        const auth = requireUpload();' \
+            '        if (auth) {' \
+            '          return auth;' \
+            '        }' \
+            '        const resolved = isoResolve(file);' \
+            '        if (resolved.error) {' \
+            '          return new Response(`${resolved.error}\\n`, { status: 400 });' \
+            '        }' \
+            '        const body = request.body;' \
+            '        if (!body) {' \
+            '          return new Response("empty body\\n", { status: 400 });' \
+            '        }' \
+            '        await env.KS_BUCKET.put(resolved.key, body, {' \
+            '          httpMetadata: { contentType: resolved.contentType },' \
+            '        });' \
+            '        return new Response("ok\\n");' \
+            '      }' \
+            '' \
+            '      return new Response("method not allowed\\n", { status: 405 });' \
+            '    }' \
+            '' \
+            '    if (url.pathname === "/logs" && request.method === "POST") {' \
+            '      const auth = requireShared();' \
+            '      if (auth) {' \
+            '        return auth;' \
+            '      }' \
+            '      const host = (url.searchParams.get("host") || "unknown").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const fileParam = (url.searchParams.get("file") || "").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const ts = new Date().toISOString().replace(/[:.]/g, "");' \
+            '      const name = fileParam || `${host}-log-${ts}.log`;' \
+            '      const key = `logs/${host}/${name}`;' \
+            '      const body = await request.arrayBuffer();' \
+            '      if (!body || body.byteLength === 0) {' \
+            '        return new Response("empty body\\n", { status: 400 });' \
+            '      }' \
+            '      await env.KS_BUCKET.put(key, body, {' \
+            '        httpMetadata: { contentType: "text/plain" },' \
+            '      });' \
+            '      return new Response("ok\\n");' \
+            '    }' \
+            '' \
+            '    if (url.pathname === "/logs" && request.method === "GET") {' \
+            '      const auth = requireShared();' \
+            '      if (auth) {' \
+            '        return auth;' \
+            '      }' \
+            '      const host = (url.searchParams.get("host") || "").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      if (!host) {' \
+            '        return new Response("missing host\\n", { status: 400 });' \
+            '      }' \
+            '      const namePrefix = (url.searchParams.get("name_prefix") || "").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      let prefix = `logs/${host}/`;' \
+            '      if (namePrefix) {' \
+            '        prefix = `${prefix}${namePrefix}`;' \
+            '      }' \
+            '      const listed = await env.KS_BUCKET.list({ prefix, limit: 1000 });' \
+            '      const keys = (listed.objects || []).map((o) => o.key);' \
+            '      const body = JSON.stringify({ prefix, keys });' \
+            '      return new Response(body + "\\n", { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });' \
+            '    }' \
+            '' \
+            '    if (url.pathname.startsWith("/logs/") && request.method === "GET") {' \
+            '      const auth = requireShared();' \
+            '      if (auth) {' \
+            '        return auth;' \
+            '      }' \
+            '      const rest = url.pathname.replace("/logs/", "").trim();' \
+            '      if (!rest) {' \
+            '        return new Response("missing file\\n", { status: 400 });' \
+            '      }' \
+            '      const parts = rest.split("/").filter(Boolean);' \
+            '      if (parts.length !== 2) {' \
+            '        return new Response("invalid path\\n", { status: 400 });' \
+            '      }' \
+            '      const host = parts[0].replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const name = parts[1].replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const key = `logs/${host}/${name}`;' \
+            '      const obj = await env.KS_BUCKET.get(key);' \
+            '      if (!obj) {' \
+            '        return new Response("not found\\n", { status: 404 });' \
+            '      }' \
+            '      const headers = new Headers();' \
+            '      headers.set("Content-Type", obj.httpMetadata?.contentType || "text/plain");' \
+            '      headers.set("Cache-Control", "no-store");' \
+            '      return new Response(obj.body, { headers });' \
+            '    }' \
+            '' \
+            '    if (url.pathname.startsWith("/backup/") && request.method === "GET") {' \
+            '      const auth = requireShared();' \
+            '      if (auth) {' \
+            '        return auth;' \
+            '      }' \
+            '      const rest = url.pathname.replace("/backup/", "").trim();' \
+            '      if (!rest) {' \
+            '        return new Response("missing file\\n", { status: 400 });' \
+            '      }' \
+            '      const parts = rest.split("/").filter(Boolean);' \
+            '      if (parts.length !== 2) {' \
+            '        return new Response("invalid path\\n", { status: 400 });' \
+            '      }' \
+            '      const host = parts[0].replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const name = parts[1].replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      if (!(name.endsWith(".enc") || name.endsWith(".7z") || name.endsWith(".passphrase.sha256"))) {' \
+            '        return new Response("unsupported file type\\n", { status: 400 });' \
+            '      }' \
+            '      const key = `backups/${host}/${name}`;' \
+            '      const obj = await env.KS_BUCKET.get(key);' \
+            '      if (!obj) {' \
+            '        return new Response("not found\\n", { status: 404 });' \
+            '      }' \
+            '      const headers = new Headers();' \
+            '      headers.set("Content-Type", obj.httpMetadata?.contentType || "application/octet-stream");' \
+            '      headers.set("Cache-Control", "no-store");' \
+            '      return new Response(obj.body, { headers });' \
+            '    }' \
+            '' \
+            '    if (url.pathname === "/backup" && request.method === "POST") {' \
+            '      const auth = requireShared();' \
+            '      if (auth) {' \
+            '        return auth;' \
+            '      }' \
+            '      const host = (url.searchParams.get("host") || "unknown").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const fileParam = (url.searchParams.get("file") || "").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const ts = new Date().toISOString().replace(/[:.]/g, "");' \
+            '      let name = fileParam || `${host}-${ts}.enc`;' \
+            '      if (fileParam) {' \
+            '        if (!(name.endsWith(".enc") || name.endsWith(".7z") || name.endsWith(".passphrase.sha256"))) {' \
+            '          return new Response("unsupported file type\\n", { status: 400 });' \
+            '        }' \
+            '      }' \
+            '      const key = `backups/${host}/${name}`;' \
+            '      const body = await request.arrayBuffer();' \
+            '      if (!body || body.byteLength === 0) {' \
+            '        return new Response("empty body\\n", { status: 400 });' \
+            '      }' \
+            '      await env.KS_BUCKET.put(key, body, {' \
+            '        httpMetadata: { contentType: name.endsWith(".passphrase.sha256") ? "text/plain" : "application/octet-stream" },' \
+            '      });' \
+            '      return new Response("ok\\n");' \
+            '    }' \
+            '' \
+            '    if (url.pathname === "/logs/stream" && request.headers.get("Upgrade") === "websocket") {' \
+            '      const auth = requireShared();' \
+            '      if (auth) {' \
+            '        return auth;' \
+            '      }' \
+            '      const host = (url.searchParams.get("host") || "unknown").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const fileParam = (url.searchParams.get("file") || "").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const ts = new Date().toISOString().replace(/[:.]/g, "");' \
+            '      const baseName = fileParam || `${host}-stream-${ts}`;' \
+            '      const pair = new WebSocketPair();' \
+            '      const [client, server] = Object.values(pair);' \
+            '      let counter = 0;' \
+            '      server.accept();' \
+            '      server.addEventListener("message", async (event) => {' \
+            '        const data = typeof event.data === "string" ? event.data : new Uint8Array(event.data);' \
+            '        const key = `logs/${host}/${baseName}-${String(counter).padStart(4, "0")}.log`;' \
+            '        counter += 1;' \
+            '        await env.KS_BUCKET.put(key, data, {' \
+            '          httpMetadata: { contentType: "text/plain" },' \
+            '        });' \
+            '      });' \
+            '      return new Response(null, { status: 101, webSocket: client });' \
+            '    }' \
+            '' \
+            '    return new Response("not found\\n", { status: 404 });' \
+            '  },' \
+            '};' \
+            > worker.mjs
+
+          printf '%s\n' \
+            "name = \"${KS_WORKER_NAME}\"" \
+            "account_id = \"${CLOUDFLARE_ACCOUNT_ID}\"" \
+            "compatibility_date = \"2024-06-01\"" \
+            "main = \"worker.mjs\"" \
+            "routes = [{ pattern = \"${ks_custom_domain}\", custom_domain = true }]" \
+            "" \
+            "[observability]" \
+            "enabled = false" \
+            "head_sampling_rate = 1" \
+            "" \
+            "[observability.logs]" \
+            "enabled = true" \
+            "head_sampling_rate = 1" \
+            "persist = true" \
+            "invocation_logs = true" \
+            "" \
+            "[observability.traces]" \
+            "enabled = false" \
+            "persist = true" \
+            "head_sampling_rate = 1" \
+            "" \
+            "[[r2_buckets]]" \
+            "binding = \"KS_BUCKET\"" \
+            "bucket_name = \"${KS_R2_BUCKET}\"" \
+            > wrangler.toml
+
+      - name: Deploy Worker
+        run: |
+          set -euo pipefail
+          printf '%s' "${KS_SHARED_TOKEN}" | wrangler secret put KS_SHARED_TOKEN
+          if [ -n "${KS_UPLOAD_TOKEN:-}" ]; then
+            printf '%s' "${KS_UPLOAD_TOKEN}" | wrangler secret put KS_UPLOAD_TOKEN
+          fi
+
+          deploy_log="$(mktemp)"
+          if wrangler deploy 2>&1 | tee "${deploy_log}"; then
+            rm -f "${deploy_log}"
+            exit 0
+          fi
+
+          # If custom-domain mode fails because DNS already exists, retry with a
+          # standard zone route (<host>/*) so existing DNS can stay in place.
+          if grep -qi "already has externally managed DNS records" "${deploy_log}"; then
+            ks_custom_domain="${KS_CUSTOM_DOMAIN:-}"
+            if [ -z "${ks_custom_domain}" ] && [ -n "${KS_BASE_URL:-}" ]; then
+              ks_custom_domain="$(
+                printf '%s' "${KS_BASE_URL}" \
+                  | sed -nE 's#^https?://([^/:]+).*$#\1#p' \
+                  | head -n1
+              )"
+            fi
+            if [ -z "${ks_custom_domain}" ]; then
+              ks_custom_domain="${KS_CUSTOM_DOMAIN_DEFAULT}"
+            fi
+
+            ks_zone_name="${KS_ZONE_NAME:-}"
+            if [ -z "${ks_zone_name}" ]; then
+              ks_zone_name="$(printf '%s' "${ks_custom_domain}" | sed -E 's/^[^.]+\.//')"
+            fi
+            if [ -z "${ks_zone_name}" ] || [ "${ks_zone_name}" = "${ks_custom_domain}" ]; then
+              echo "Unable to determine zone name for fallback route." >&2
+              echo "Set GitHub Prod secret KS_ZONE_NAME (e.g. cluster-duck.cloud)." >&2
+              rm -f "${deploy_log}"
+              exit 1
+            fi
+
+            echo "Custom-domain conflict detected; retrying with route ${ks_custom_domain}/* in zone ${ks_zone_name}"
+            printf '%s\n' \
+              "name = \"${KS_WORKER_NAME}\"" \
+              "account_id = \"${CLOUDFLARE_ACCOUNT_ID}\"" \
+              "compatibility_date = \"2024-06-01\"" \
+              "main = \"worker.mjs\"" \
+              "routes = [{ pattern = \"${ks_custom_domain}/*\", zone_name = \"${ks_zone_name}\" }]" \
+              "" \
+              "[observability]" \
+              "enabled = false" \
+              "head_sampling_rate = 1" \
+              "" \
+              "[observability.logs]" \
+              "enabled = true" \
+              "head_sampling_rate = 1" \
+              "persist = true" \
+              "invocation_logs = true" \
+              "" \
+              "[observability.traces]" \
+              "enabled = false" \
+              "persist = true" \
+              "head_sampling_rate = 1" \
+              "" \
+              "[[r2_buckets]]" \
+              "binding = \"KS_BUCKET\"" \
+              "bucket_name = \"${KS_R2_BUCKET}\"" \
+              > wrangler.toml
+
+            wrangler deploy
+            rm -f "${deploy_log}"
+            exit 0
+          fi
+
+          rm -f "${deploy_log}"
+          exit 1
+
+      - name: Build ansible bundle
+        run: |
+          set -euo pipefail
+          task bundle:build:external
+
+      - name: Upload ansible bundle to R2 via Worker
+        run: |
+          set -euo pipefail
+          # Route/Worker updates can take a moment to propagate after deploy.
+          tries=12
+          delay=10
+          i=1
+          while [ "${i}" -le "${tries}" ]; do
+            if task bundle:upload-r2:external; then
+              exit 0
+            fi
+            if [ "${i}" -eq "${tries}" ]; then
+              break
+            fi
+            echo "bundle upload attempt ${i}/${tries} failed; retrying in ${delay}s..."
+            sleep "${delay}"
+            i=$((i + 1))
+          done
+          echo "bundle upload failed after ${tries} attempts." >&2
+          exit 1

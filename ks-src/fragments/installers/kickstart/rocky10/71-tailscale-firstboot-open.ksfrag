@@ -1,0 +1,2 @@
+cat >/usr/local/sbin/tailscale-firstboot.sh <<'SCRIPT'
+#!/bin/bash

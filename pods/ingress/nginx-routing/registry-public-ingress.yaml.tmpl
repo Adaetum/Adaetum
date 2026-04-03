@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: registry-ui-public
+  namespace: gitea
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: registry.example.services
+    nginx.ingress.kubernetes.io/auth-url: __AUTHENTIK_FORWARD_AUTH_URL__
+    nginx.ingress.kubernetes.io/auth-snippet: __AUTHENTIK_AUTH_SNIPPET__
+    nginx.ingress.kubernetes.io/auth-signin: __AUTHENTIK_PUBLIC_AUTH_SIGNIN__
+    nginx.ingress.kubernetes.io/auth-response-headers: __AUTHENTIK_AUTH_RESPONSE_HEADERS__
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: registry.example.services
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gitea-http
+                port:
+                  number: 3000

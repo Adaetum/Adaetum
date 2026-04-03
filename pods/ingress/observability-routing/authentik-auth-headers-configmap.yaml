@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: authentik-forward-auth-headers
+  namespace: observability
+data:
+  Host: authentik.cluster-duck.cloud
+  X-Original-URL: $pass_access_scheme://$best_http_host$request_uri
+  X-Original-Method: $request_method

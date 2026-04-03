@@ -1,0 +1,1118 @@
+echo "[BOOTSTRAP] first-boot script started (log_file=${log_file})"
+if [[ "${LOG_UPLOAD_EVENTUAL}" == __*__ ]] || [ -z "${LOG_UPLOAD_EVENTUAL}" ]; then
+  LOG_UPLOAD_EVENTUAL="1"
+fi
+if [ -z "${LOG_UPLOAD_URL}" ] || [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
+  echo "[BOOTSTRAP] Log upload disabled (LOG_UPLOAD_URL unset)"
+else
+  echo "[BOOTSTRAP] Log upload enabled (LOG_UPLOAD_URL set)"
+fi
+echo "[BOOTSTRAP] Log upload eventual mode: ${LOG_UPLOAD_EVENTUAL}"
+echo "[BOOTSTRAP] Log upload debug mode: ${LOG_UPLOAD_DEBUG}"
+upload_log "${log_file}" first-boot.log || true
+BOOTSTRAP_PHASE_STATUS_FILE="${BOOTSTRAP_PHASE_STATUS_FILE:-/run/bootstrap-phase-status.env}"
+export BOOTSTRAP_PHASE_STATUS_FILE
+rm -f "${BOOTSTRAP_PHASE_STATUS_FILE}" 2>/dev/null || true
+
+TAILSCALE_ADVERTISE_TAGS="${TAILSCALE_ADVERTISE_TAGS:-__TAILSCALE_ADVERTISE_TAGS__}"
+TAILSCALE_OAUTH_CLIENT_ID="${TAILSCALE_OAUTH_CLIENT_ID:-__TAILSCALE_OAUTH_CLIENT_ID__}"
+TAILSCALE_OAUTH_CLIENT_SECRET="${TAILSCALE_OAUTH_CLIENT_SECRET:-}"
+			TAILSCALE_OAUTH_TTL="${TAILSCALE_OAUTH_TTL:-__TAILSCALE_OAUTH_TTL__}"
+			TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR="${TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR:-}"
+			TAILSCALE_NODE_ROLE="${TAILSCALE_NODE_ROLE:-__TAILSCALE_NODE_ROLE__}"
+			TAILSCALE_CLUSTER_TAG="${TAILSCALE_CLUSTER_TAG:-__TAILSCALE_CLUSTER_TAG__}"
+			TAILSCALE_ENFORCE_EXIT_NODE="${TAILSCALE_ENFORCE_EXIT_NODE:-__TAILSCALE_ENFORCE_EXIT_NODE__}"
+			TAILSCALE_EXIT_NODE="${TAILSCALE_EXIT_NODE:-__TAILSCALE_EXIT_NODE__}"
+			TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS="${TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS:-__TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS__}"
+			KS_BREAKGLASS="${KS_BREAKGLASS:-__KS_BREAKGLASS__}"
+			ANSIBLE_RUNNER_REPO="${ANSIBLE_RUNNER_REPO:-__ANSIBLE_RUNNER_REPO__}"
+			ANSIBLE_RUNNER_GIT_HOST="${ANSIBLE_RUNNER_GIT_HOST:-__ANSIBLE_RUNNER_GIT_HOST__}"
+			ANSIBLE_RUNNER_GIT_HTTP_VERSION="${ANSIBLE_RUNNER_GIT_HTTP_VERSION:-__ANSIBLE_RUNNER_GIT_HTTP_VERSION__}"
+			ANSIBLE_RUNNER_HTTP_TOKEN="${ANSIBLE_RUNNER_HTTP_TOKEN:-}"
+			ANSIBLE_RUNNER_DEPLOY_KEY="${ANSIBLE_RUNNER_DEPLOY_KEY:-__ANSIBLE_RUNNER_DEPLOY_KEY__}"
+			ANSIBLE_RUNNER_DEPLOY_KEY_B64="${ANSIBLE_RUNNER_DEPLOY_KEY_B64:-}"
+			GITHUB_APP_ID="${GITHUB_APP_ID:-__GITHUB_APP_ID__}"
+			GITHUB_APP_INSTALLATION_ID="${GITHUB_APP_INSTALLATION_ID:-__GITHUB_APP_INSTALLATION_ID__}"
+			GITHUB_APP_PRIVATE_KEY_B64="${GITHUB_APP_PRIVATE_KEY_B64:-}"
+			GITEA_SEED_SOURCE_REPO_URL="${GITEA_SEED_SOURCE_REPO_URL:-__GITEA_SEED_SOURCE_REPO_URL__}"
+			GITEA_SEED_SOURCE_REPO_BRANCH="${GITEA_SEED_SOURCE_REPO_BRANCH:-__GITEA_SEED_SOURCE_REPO_BRANCH__}"
+			GITEA_SEED_SOURCE_TOKEN="${GITEA_SEED_SOURCE_TOKEN:-}"
+			GITEA_SEED_TARGET_OWNER="${GITEA_SEED_TARGET_OWNER:-__GITEA_SEED_TARGET_OWNER__}"
+			GITEA_SEED_TARGET_REPO="${GITEA_SEED_TARGET_REPO:-__GITEA_SEED_TARGET_REPO__}"
+			PLATFORM_DISTRIBUTION="${PLATFORM_DISTRIBUTION:-__PLATFORM_DISTRIBUTION__}"
+			KS_ROLE="${KS_ROLE:-}"
+			if grep -qE '(^|[[:space:]])ks_role=' /proc/cmdline 2>/dev/null; then
+			  KS_ROLE="$(sed -nE 's/.*(^|[[:space:]])ks_role=([^[:space:]]+).*/\2/p' /proc/cmdline | tail -n1)"
+			fi
+			if grep -qE '(^|[[:space:]])ks_breakglass=' /proc/cmdline 2>/dev/null; then
+			  KS_BREAKGLASS="$(sed -nE 's/.*(^|[[:space:]])ks_breakglass=([^[:space:]]+).*/\2/p' /proc/cmdline | tail -n1)"
+			fi
+
+strip_placeholder() {
+  val="${1:-}"
+  case "${val}" in
+    __*__) printf '%s' "" ;;
+    *) printf '%s' "${val}" ;;
+  esac
+}
+
+TAILSCALE_ADVERTISE_TAGS="$(strip_placeholder "${TAILSCALE_ADVERTISE_TAGS}")"
+TAILSCALE_OAUTH_CLIENT_ID="$(strip_placeholder "${TAILSCALE_OAUTH_CLIENT_ID}")"
+TAILSCALE_OAUTH_CLIENT_SECRET="$(strip_placeholder "${TAILSCALE_OAUTH_CLIENT_SECRET}")"
+		TAILSCALE_OAUTH_TTL="$(strip_placeholder "${TAILSCALE_OAUTH_TTL}")"
+		TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR="$(strip_placeholder "${TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR}")"
+		TAILSCALE_NODE_ROLE="$(strip_placeholder "${TAILSCALE_NODE_ROLE}")"
+		TAILSCALE_CLUSTER_TAG="$(strip_placeholder "${TAILSCALE_CLUSTER_TAG}")"
+		TAILSCALE_ENFORCE_EXIT_NODE="$(strip_placeholder "${TAILSCALE_ENFORCE_EXIT_NODE}")"
+		TAILSCALE_EXIT_NODE="$(strip_placeholder "${TAILSCALE_EXIT_NODE}")"
+		TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS="$(strip_placeholder "${TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS}")"
+		KS_ROLE="$(strip_placeholder "${KS_ROLE}")"
+		KS_BREAKGLASS="$(strip_placeholder "${KS_BREAKGLASS}")"
+			ANSIBLE_RUNNER_REPO="$(strip_placeholder "${ANSIBLE_RUNNER_REPO}")"
+			ANSIBLE_RUNNER_GIT_HOST="$(strip_placeholder "${ANSIBLE_RUNNER_GIT_HOST}")"
+			ANSIBLE_RUNNER_GIT_HTTP_VERSION="$(strip_placeholder "${ANSIBLE_RUNNER_GIT_HTTP_VERSION}")"
+			ANSIBLE_RUNNER_HTTP_TOKEN="$(strip_placeholder "${ANSIBLE_RUNNER_HTTP_TOKEN}")"
+			ANSIBLE_RUNNER_DEPLOY_KEY="$(strip_placeholder "${ANSIBLE_RUNNER_DEPLOY_KEY}")"
+			ANSIBLE_RUNNER_DEPLOY_KEY_B64="$(strip_placeholder "${ANSIBLE_RUNNER_DEPLOY_KEY_B64}")"
+			GITHUB_APP_ID="$(strip_placeholder "${GITHUB_APP_ID}")"
+			GITHUB_APP_INSTALLATION_ID="$(strip_placeholder "${GITHUB_APP_INSTALLATION_ID}")"
+			GITHUB_APP_PRIVATE_KEY_B64="$(strip_placeholder "${GITHUB_APP_PRIVATE_KEY_B64}")"
+			GITEA_SEED_SOURCE_REPO_URL="$(strip_placeholder "${GITEA_SEED_SOURCE_REPO_URL}")"
+			GITEA_SEED_SOURCE_REPO_BRANCH="$(strip_placeholder "${GITEA_SEED_SOURCE_REPO_BRANCH}")"
+			GITEA_SEED_SOURCE_TOKEN="$(strip_placeholder "${GITEA_SEED_SOURCE_TOKEN}")"
+			GITEA_SEED_TARGET_OWNER="$(strip_placeholder "${GITEA_SEED_TARGET_OWNER}")"
+			GITEA_SEED_TARGET_REPO="$(strip_placeholder "${GITEA_SEED_TARGET_REPO}")"
+			PLATFORM_DISTRIBUTION="$(strip_placeholder "${PLATFORM_DISTRIBUTION}")"
+
+normalize_ks_role() {
+  role_raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${role_raw}" in
+    server|controlplane|control-plane|etcd|master)
+      printf 'server'
+      ;;
+    agent|worker)
+      printf 'agent'
+      ;;
+    *)
+      printf ''
+      ;;
+  esac
+}
+
+KS_ROLE="$(normalize_ks_role "${KS_ROLE}")"
+
+if [ -z "${TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR}" ]; then
+  case "$(printf '%s' "${KS_BREAKGLASS}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR="1" ;;
+    *) TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR="0" ;;
+  esac
+fi
+
+if [ -z "${TAILSCALE_CLUSTER_TAG}" ]; then
+  TAILSCALE_CLUSTER_TAG="tag:cluster"
+fi
+if [ -n "${TAILSCALE_CLUSTER_TAG}" ] && ! printf '%s' "${TAILSCALE_CLUSTER_TAG}" | grep -q '^tag:'; then
+  TAILSCALE_CLUSTER_TAG="tag:${TAILSCALE_CLUSTER_TAG}"
+fi
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+tailscale_diagnostics_enabled() {
+  is_true "${BOOTSTRAP_DIAGNOSTICS_TAILSCALE}"
+}
+
+base64url() {
+  openssl base64 -A | tr '+/' '-_' | tr -d '='
+}
+
+github_app_token() {
+  if [ -z "${GITHUB_APP_ID}" ] || [ -z "${GITHUB_APP_INSTALLATION_ID}" ] || [ -z "${GITHUB_APP_PRIVATE_KEY_B64}" ]; then
+    return 1
+  fi
+  key_file="$(mktemp)"
+  if ! printf "%s" "${GITHUB_APP_PRIVATE_KEY_B64}" | base64 -d > "${key_file}" 2>/dev/null; then
+    rm -f "${key_file}"
+    return 1
+  fi
+  now="$(date +%s)"
+  iat=$((now - 60))
+  exp=$((now + 540))
+  header='{"alg":"RS256","typ":"JWT"}'
+  payload="{\"iat\":${iat},\"exp\":${exp},\"iss\":\"${GITHUB_APP_ID}\"}"
+  unsigned="$(printf '%s' "${header}" | base64url).$(printf '%s' "${payload}" | base64url)"
+  signature="$(printf '%s' "${unsigned}" | openssl dgst -sha256 -sign "${key_file}" | base64url)"
+  rm -f "${key_file}"
+  jwt="${unsigned}.${signature}"
+  token_json="$(
+    curl -fsSL -X POST "https://api.github.com/app/installations/${GITHUB_APP_INSTALLATION_ID}/access_tokens" \
+      -H "Authorization: Bearer ${jwt}" \
+      -H "Accept: application/vnd.github+json"
+  )" || return 1
+  printf '%s' "${token_json}" | python3 - <<'PY'
+import json,sys
+try:
+    print(json.load(sys.stdin).get("token",""))
+except Exception:
+    print("")
+PY
+}
+
+github_app_token_debug() {
+  if [ -z "${GITHUB_APP_ID}" ] || [ -z "${GITHUB_APP_INSTALLATION_ID}" ] || [ -z "${GITHUB_APP_PRIVATE_KEY_B64}" ]; then
+    echo "[BOOTSTRAP] GitHub App vars missing for repo auth" >&2
+    echo "[BOOTSTRAP]   GITHUB_APP_ID=${GITHUB_APP_ID:-<empty>}" >&2
+    echo "[BOOTSTRAP]   GITHUB_APP_INSTALLATION_ID=${GITHUB_APP_INSTALLATION_ID:-<empty>}" >&2
+    echo "[BOOTSTRAP]   GITHUB_APP_PRIVATE_KEY_B64_len=${#GITHUB_APP_PRIVATE_KEY_B64}" >&2
+    return 1
+  fi
+  key_file="$(mktemp)"
+  if ! printf "%s" "${GITHUB_APP_PRIVATE_KEY_B64}" | base64 -d > "${key_file}" 2>/dev/null; then
+    rm -f "${key_file}"
+    echo "[BOOTSTRAP] GitHub App private key decode failed (GITHUB_APP_PRIVATE_KEY_B64)" >&2
+    return 1
+  fi
+  now="$(date +%s)"
+  iat=$((now - 60))
+  exp=$((now + 540))
+  header='{"alg":"RS256","typ":"JWT"}'
+  payload="{\"iat\":${iat},\"exp\":${exp},\"iss\":\"${GITHUB_APP_ID}\"}"
+  unsigned="$(printf '%s' "${header}" | base64url).$(printf '%s' "${payload}" | base64url)"
+  signature="$(printf '%s' "${unsigned}" | openssl dgst -sha256 -sign "${key_file}" | base64url)"
+  rm -f "${key_file}"
+  jwt="${unsigned}.${signature}"
+
+  tmp="$(mktemp)"
+  http_code="$(curl -sS -o "${tmp}" -w "%{http_code}" -X POST "https://api.github.com/app/installations/${GITHUB_APP_INSTALLATION_ID}/access_tokens" \
+    -H "Authorization: Bearer ${jwt}" \
+    -H "Accept: application/vnd.github+json" || true)"
+  if [ "${http_code}" != "201" ] && [ "${http_code}" != "200" ]; then
+    echo "[BOOTSTRAP] GitHub App token mint failed (HTTP ${http_code})" >&2
+    msg="$(python3 -c 'import json; import sys; d=json.load(open(sys.argv[1])); print(d.get("message",""))' "${tmp}" 2>/dev/null || true)"
+    if [ -n "${msg}" ]; then
+      echo "[BOOTSTRAP] GitHub API message: ${msg}" >&2
+    fi
+    rm -f "${tmp}" 2>/dev/null || true
+    return 1
+  fi
+  token="$(python3 -c 'import json; import sys; d=json.load(open(sys.argv[1])); print(d.get("token",""))' "${tmp}" 2>/dev/null || true)"
+  repo_sel="$(python3 -c 'import json; import sys; d=json.load(open(sys.argv[1])); print(d.get("repository_selection",""))' "${tmp}" 2>/dev/null || true)"
+  perm_contents="$(python3 -c 'import json; import sys; d=json.load(open(sys.argv[1])); p=d.get("permissions",{}) or {}; print(p.get("contents",""))' "${tmp}" 2>/dev/null || true)"
+  rm -f "${tmp}" 2>/dev/null || true
+
+  if [ -n "${repo_sel}" ] || [ -n "${perm_contents}" ]; then
+    echo "[BOOTSTRAP] GitHub App token minted (repository_selection=${repo_sel:-unknown}, contents=${perm_contents:-unknown})" >&2
+  fi
+  if [ -z "${token}" ]; then
+    echo "[BOOTSTRAP] GitHub App token mint returned empty token" >&2
+    return 1
+  fi
+  printf '%s' "${token}"
+}
+
+git_clone_private_https() {
+  repo_url="$1"
+  token="$2"
+  dest="$3"
+  if [ -z "${token}" ]; then
+    return 1
+  fi
+
+  export GIT_TERMINAL_PROMPT=0
+  export GIT_ASKPASS=/bin/false
+  export SSH_ASKPASS=/bin/false
+
+  echo "[BOOTSTRAP] Cloning ansible-runner repo (https) into ${dest}"
+  echo "[BOOTSTRAP] Repo URL: ${repo_url}"
+
+  # Match the repo auth validation behavior used during local setup/testing:
+  # - Use an `Authorization: Basic ...` extraHeader (x-access-token:<token>)
+  # - Isolate git config so system/user git config can't interfere
+  #
+  # Some first-boot environments intermittently fail GitHub clones over HTTP/2
+  # (e.g. "HTTP/2 stream ... PROTOCOL_ERROR"). If the first attempt fails, retry
+  # once while forcing HTTP/1.1.
+  basic_b64="$(TOKEN="${token}" python3 -c 'import base64,os; t=os.environ.get("TOKEN",""); print(base64.b64encode(("x-access-token:"+t).encode()).decode())' 2>/dev/null || true)"
+  if [ -z "${basic_b64}" ]; then
+    echo "[BOOTSTRAP] Failed to build git HTTP Authorization header"
+    return 1
+  fi
+
+  gitcfg="$(mktemp)"
+  printf '%s\n' '[http]' >"${gitcfg}"
+  printf '%s\n' "    extraHeader = Authorization: Basic ${basic_b64}" >>"${gitcfg}"
+  export GIT_CONFIG_GLOBAL="${gitcfg}"
+  export GIT_CONFIG_NOSYSTEM=1
+
+  http_version_opt=()
+  if [ -n "${ANSIBLE_RUNNER_GIT_HTTP_VERSION:-}" ]; then
+    http_version_opt=(-c "http.version=${ANSIBLE_RUNNER_GIT_HTTP_VERSION}")
+  fi
+
+  set +e
+  git "${http_version_opt[@]}" clone --depth 1 "${repo_url}" "${dest}"
+  rc=$?
+  if [ "${rc}" != "0" ]; then
+    echo "[BOOTSTRAP] git clone failed (rc=${rc}); retrying with http.version=HTTP/1.1"
+    rm -rf "${dest}" 2>/dev/null || true
+    git -c http.version=HTTP/1.1 clone --depth 1 "${repo_url}" "${dest}"
+    rc=$?
+  fi
+  set -e
+
+  rm -f "${gitcfg}" 2>/dev/null || true
+  unset GIT_CONFIG_GLOBAL || true
+  unset GIT_CONFIG_NOSYSTEM || true
+  unset GIT_TERMINAL_PROMPT || true
+  unset GIT_ASKPASS || true
+  unset SSH_ASKPASS || true
+  return "${rc}"
+}
+
+github_repo_access_preflight() {
+  repo_url="$1"
+  token="$2"
+
+  # Only supports GitHub HTTPS URLs like https://github.com/org/repo(.git)
+  repo_path="$(printf '%s' "${repo_url}" | sed -nE 's#^https://github.com/([^/]+/[^/]+)\\.git$#\1#p')"
+  if [ -z "${repo_path}" ]; then
+    repo_path="$(printf '%s' "${repo_url}" | sed -nE 's#^https://github.com/([^/]+/[^/]+)$#\1#p')"
+  fi
+  if [ -z "${repo_path}" ]; then
+    echo "[BOOTSTRAP] Skipping GitHub repo access preflight (unrecognized URL): ${repo_url}"
+    return 0
+  fi
+
+  tmp="$(mktemp)"
+  curl_http_opt=()
+  if [ "${ANSIBLE_RUNNER_GIT_HTTP_VERSION:-}" = "HTTP/1.1" ]; then
+    curl_http_opt=(--http1.1)
+  fi
+  curl_rc=0
+  http_code="$(curl "${curl_http_opt[@]}" -sS -o "${tmp}" -w "%{http_code}" \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${repo_path}" || curl_rc=$?)"
+  if [ "${curl_rc}" != "0" ] || [ "${http_code}" = "000" ] || [ -z "${http_code}" ]; then
+    if [ "${ANSIBLE_RUNNER_GIT_HTTP_VERSION:-}" = "HTTP/1.1" ]; then
+      echo "[BOOTSTRAP] GitHub repo access check curl failed (rc=${curl_rc}, http_code=${http_code:-<empty>})"
+    else
+    echo "[BOOTSTRAP] GitHub repo access check curl failed (rc=${curl_rc}, http_code=${http_code:-<empty>}); retrying with --http1.1"
+    curl_rc=0
+    http_code="$(curl --http1.1 -sS -o "${tmp}" -w "%{http_code}" \
+      -H "Authorization: Bearer ${token}" \
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/${repo_path}" || curl_rc=$?)"
+    fi
+  fi
+  if [ "${curl_rc}" != "0" ] || [ "${http_code}" = "000" ] || [ -z "${http_code}" ]; then
+    echo "[BOOTSTRAP] GitHub repo access check skipped due to curl failure (rc=${curl_rc}, http_code=${http_code:-<empty>})"
+    rm -f "${tmp}" 2>/dev/null || true
+    return 2
+  fi
+  if [ "${http_code}" != "200" ]; then
+    echo "[BOOTSTRAP] GitHub repo access check failed for ${repo_path} (HTTP ${http_code})"
+    msg="$(python3 -c 'import json; import sys; d=json.load(open(sys.argv[1])); print(d.get("message",""))' "${tmp}" 2>/dev/null || true)"
+    if [ -n "${msg}" ]; then
+      echo "[BOOTSTRAP] GitHub API message: ${msg}"
+    fi
+    echo "[BOOTSTRAP] Hint: for GitHub Apps with \"Only select repositories\", ensure this repo is selected for the installation."
+    rm -f "${tmp}" 2>/dev/null || true
+    return 1
+  fi
+  rm -f "${tmp}" 2>/dev/null || true
+  echo "[BOOTSTRAP] GitHub repo access check OK for ${repo_path}"
+  return 0
+}
+
+ensure_ansible_runner_repo() {
+  if [ -d /opt/ansible-runner/ansible ]; then
+    return 0
+  fi
+  if [ -z "${ANSIBLE_RUNNER_REPO}" ]; then
+    echo "[BOOTSTRAP] ansible-runner repo URL not configured (ANSIBLE_RUNNER_REPO empty)"
+    return 1
+  fi
+  echo "[BOOTSTRAP] Ensuring ansible-runner repo is present"
+  echo "[BOOTSTRAP] ansible-runner repo URL: ${ANSIBLE_RUNNER_REPO}"
+  if ! command -v git >/dev/null 2>&1; then
+    install_pkg git || return 1
+  fi
+  mkdir -p /opt
+  rm -rf /opt/ansible-runner
+
+  using_ssh=false
+  case "${ANSIBLE_RUNNER_REPO}" in
+    git@*:*|ssh://*) using_ssh=true ;;
+  esac
+
+  if [ -n "${ANSIBLE_RUNNER_DEPLOY_KEY_B64}" ] || [ -n "${ANSIBLE_RUNNER_DEPLOY_KEY}" ]; then
+    install -d -m 0700 /root/.ssh
+    if [ -n "${ANSIBLE_RUNNER_DEPLOY_KEY_B64}" ]; then
+      printf "%s" "${ANSIBLE_RUNNER_DEPLOY_KEY_B64}" | base64 -d >/root/.ssh/id_ed25519 2>/dev/null || true
+    else
+      printf "%s\n" "${ANSIBLE_RUNNER_DEPLOY_KEY}" >/root/.ssh/id_ed25519
+    fi
+    chmod 0600 /root/.ssh/id_ed25519 || true
+    using_ssh=true
+    if [ -n "${ANSIBLE_RUNNER_GIT_HOST}" ]; then
+      ssh-keyscan -H "${ANSIBLE_RUNNER_GIT_HOST}" >>/root/.ssh/known_hosts 2>/dev/null || true
+    fi
+  fi
+
+  if [ "${using_ssh}" = true ]; then
+    export GIT_TERMINAL_PROMPT=0
+    export GIT_ASKPASS=/bin/false
+    export SSH_ASKPASS=/bin/false
+    echo "[BOOTSTRAP] Cloning ansible-runner repo (ssh) into /opt/ansible-runner"
+    git clone --depth 1 "${ANSIBLE_RUNNER_REPO}" /opt/ansible-runner
+    rc=$?
+    unset GIT_TERMINAL_PROMPT || true
+    unset GIT_ASKPASS || true
+    unset SSH_ASKPASS || true
+    return "${rc}"
+  fi
+
+  if [ -n "${ANSIBLE_RUNNER_HTTP_TOKEN}" ]; then
+    echo "[BOOTSTRAP] Using ANSIBLE_RUNNER_HTTP_TOKEN for ansible-runner repo clone"
+    git_clone_private_https "${ANSIBLE_RUNNER_REPO}" "${ANSIBLE_RUNNER_HTTP_TOKEN}" /opt/ansible-runner
+    return $?
+  fi
+
+  if [ -z "${GITHUB_APP_ID}" ] || [ -z "${GITHUB_APP_INSTALLATION_ID}" ] || [ -z "${GITHUB_APP_PRIVATE_KEY_B64}" ]; then
+    echo "[BOOTSTRAP] No credentials available for HTTPS clone of ansible-runner repo."
+    echo "[BOOTSTRAP] Set one of:"
+    echo "[BOOTSTRAP]   - ANSIBLE_RUNNER_HTTP_TOKEN for direct HTTPS access, or"
+    echo "[BOOTSTRAP]   - GitHub App vars: GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY_B64, or"
+    echo "[BOOTSTRAP]   - SSH deploy key (ANSIBLE_RUNNER_DEPLOY_KEY_B64) and set ANSIBLE_RUNNER_REPO to an SSH URL."
+    return 1
+  fi
+
+  echo "[BOOTSTRAP] Using GitHub App installation token for ansible-runner repo clone"
+  token="$(github_app_token_debug 2>/dev/null || true)"
+  if [ -z "${token}" ]; then
+    echo "[BOOTSTRAP] GitHub App token missing; cannot clone ansible-runner repo"
+    return 1
+  fi
+  preflight_rc=0
+  github_repo_access_preflight "${ANSIBLE_RUNNER_REPO}" "${token}" || preflight_rc=$?
+  if [ "${preflight_rc}" = "1" ]; then
+    return 1
+  fi
+  git_clone_private_https "${ANSIBLE_RUNNER_REPO}" "${token}" /opt/ansible-runner
+}
+
+enforce_exit_node() {
+  if ! is_true "${TAILSCALE_ENFORCE_EXIT_NODE}"; then
+    return 0
+  fi
+  if [ -z "${TAILSCALE_EXIT_NODE}" ]; then
+    fail_firstboot "TAILSCALE_EXIT_NODE is required when TAILSCALE_ENFORCE_EXIT_NODE=1"
+  fi
+
+  allow_lan="false"
+  if is_true "${TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS}"; then
+    allow_lan="true"
+  fi
+
+  echo "[BOOTSTRAP] Enforcing Tailscale exit node: ${TAILSCALE_EXIT_NODE} (allow_lan=${allow_lan})"
+
+  set_rc=0
+  if command -v tailscale >/dev/null 2>&1 && tailscale set --help >/dev/null 2>&1; then
+    tailscale set --exit-node="${TAILSCALE_EXIT_NODE}" --exit-node-allow-lan-access="${allow_lan}" || set_rc=$?
+  else
+    tailscale up --exit-node="${TAILSCALE_EXIT_NODE}" --exit-node-allow-lan-access="${allow_lan}" || set_rc=$?
+  fi
+  if [ "${set_rc}" != "0" ]; then
+    fail_firstboot "failed to set Tailscale exit node (rc=${set_rc})"
+  fi
+
+  i=1
+  while [ "${i}" -le 30 ]; do
+    if ip route get 1.1.1.1 2>/dev/null | grep -q "dev tailscale0"; then
+      echo "[BOOTSTRAP] Exit node routing active (default traffic via tailscale0)"
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+
+  fail_firstboot "exit node routing not active (expected default traffic via tailscale0)"
+}
+
+start_log_stream() {
+  log_path="$1"
+  log_name="$2"
+  if ! is_true "${LOG_UPLOAD_EVENTUAL}"; then
+    return 0
+  fi
+  if [ -z "${LOG_UPLOAD_URL}" ] || [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
+    return 0
+  fi
+  (
+    while true; do
+      upload_log "${log_path}" "${log_name}"
+      sleep 15
+    done
+  ) &
+  LOG_STREAM_PID=$!
+}
+
+stop_log_stream() {
+  if [ -n "${LOG_STREAM_PID:-}" ]; then
+    kill "${LOG_STREAM_PID}" >/dev/null 2>&1 || true
+    wait "${LOG_STREAM_PID}" 2>/dev/null || true
+    unset LOG_STREAM_PID
+  fi
+}
+
+firstboot_service_name="${BOOTSTRAP_FIRSTBOOT_SERVICE_NAME:-tailscale-firstboot.service}"
+tailscaled_service_name="$(bootstrap_tailscale_service_name 2>/dev/null || printf 'tailscaled')"
+
+firstboot_err_trap() {
+  rc="$?"
+  echo "[BOOTSTRAP] ERROR: first-boot script failed (rc=${rc}) in step: ${CURRENT_STEP:-unknown} at line ${BASH_LINENO[0]}: ${BASH_COMMAND}"
+  echo "[BOOTSTRAP] ERROR: attempting diagnostics + log upload before exiting"
+  echo "[BOOTSTRAP] ---- early diagnostics ----"
+  bootstrap_service_status "${firstboot_service_name}" || true
+  journalctl -u "${firstboot_service_name}" --no-pager -n 200 || true
+  if tailscale_diagnostics_enabled; then
+    bootstrap_service_status "${tailscaled_service_name}" || true
+    journalctl -u "${tailscaled_service_name}" --no-pager -n 200 || true
+  fi
+  journalctl -b --no-pager -n 200 || true
+  ip addr || true
+  ip route || true
+  cat /etc/resolv.conf || true
+  echo "[BOOTSTRAP] ---- end early diagnostics ----"
+  stop_log_stream || true
+  upload_log "${log_file}" first-boot.log || true
+  exit 99
+}
+trap firstboot_err_trap ERR
+
+FIRSTBOOT_EXIT_TRAP_RUNNING=0
+firstboot_exit_trap() {
+  rc="$?"
+  if [ "${FIRSTBOOT_EXIT_TRAP_RUNNING}" = "1" ]; then
+    return "${rc}"
+  fi
+  FIRSTBOOT_EXIT_TRAP_RUNNING=1
+  ui_restore_console || true
+  if [ "${rc}" -ne 0 ]; then
+    echo "[BOOTSTRAP] EXIT trap: rc=${rc}; attempting final log upload"
+    stop_log_stream || true
+    upload_log "${log_file}" first-boot.log || true
+  fi
+  return "${rc}"
+}
+trap firstboot_exit_trap EXIT
+
+retry_cmd() {
+  label="$1"
+  shift
+  attempts=5
+  delay=5
+  i=1
+  while [ "${i}" -le "${attempts}" ]; do
+    if "$@"; then
+      return 0
+    fi
+    echo "[BOOTSTRAP] ${label} failed (attempt ${i}/${attempts}); retrying in ${delay}s"
+    sleep "${delay}"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+clock_synchronized() {
+  if command -v timedatectl >/dev/null 2>&1; then
+    ntp_sync="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+    case "${ntp_sync}" in
+      yes|YES|true|TRUE|1) return 0 ;;
+    esac
+  fi
+
+  if command -v chronyc >/dev/null 2>&1; then
+    if chronyc tracking 2>/dev/null | grep -q 'Leap status[[:space:]]*:[[:space:]]*Normal'; then
+      return 0
+    fi
+  fi
+
+  # Fallback guard: if we cannot query sync state, at least ensure we are not
+  # in an obviously stale pre-cert-validity year.
+  now_year="$(date -u +%Y 2>/dev/null || echo 1970)"
+  if [ "${now_year}" -ge 2025 ]; then
+    return 0
+  fi
+
+  return 1
+}
+
+wait_for_clock_sync() {
+  attempts="${1:-40}"
+  delay="${2:-3}"
+  i=1
+  while [ "${i}" -le "${attempts}" ]; do
+    if clock_synchronized; then
+      return 0
+    fi
+    echo "[BOOTSTRAP] Clock not synchronized yet (attempt ${i}/${attempts}); waiting ${delay}s"
+    sleep "${delay}"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+fail_firstboot() {
+  echo "[BOOTSTRAP] Tailscale first-boot failure (step=${CURRENT_STEP:-unknown}): ${1:-unknown}"
+  ui_render_result "FAILED" "${1:-unknown}" "There was an error. Check the logs."
+  if [ -n "${CURRENT_STEP:-}" ]; then
+    echo "[BOOTSTRAP] ---- end ${CURRENT_STEP} (FAILED) ----"
+  fi
+  echo "[BOOTSTRAP] ---- diagnostics ----"
+  if tailscale_diagnostics_enabled; then
+    bootstrap_service_status "${tailscaled_service_name}" || true
+    journalctl -u "${tailscaled_service_name}" --no-pager -n 200 || true
+  fi
+  journalctl -b --no-pager -n 200 || true
+  ip addr || true
+  ip route || true
+  cat /etc/resolv.conf || true
+  echo "[BOOTSTRAP] ---- end diagnostics ----"
+  stop_log_stream
+  upload_log "${log_file}" first-boot.log
+  if [ "${FIRSTBOOT_NO_POWEROFF:-0}" = "1" ] || [ "${FIRSTBOOT_NO_POWEROFF:-0}" = "true" ]; then
+    echo "[BOOTSTRAP] FIRSTBOOT_NO_POWEROFF is set; leaving system running for troubleshooting"
+  else
+    echo "[BOOTSTRAP] Powering off in 30 seconds for log capture"
+    sleep 30
+    bootstrap_poweroff || true
+  fi
+  exit 1
+}
+
+start_log_stream "${log_file}" first-boot.log
+
+apply_static_network() {
+  if [ -z "${KS_STATIC_IPV4:-}" ]; then
+    return 0
+  fi
+
+  if ! command -v nmcli >/dev/null 2>&1; then
+    fail_firstboot "nmcli not available for static network setup"
+  fi
+  if [ -z "${KS_STATIC_GW:-}" ]; then
+    fail_firstboot "KS_STATIC_GW is required when KS_STATIC_IPV4 is set"
+  fi
+
+  iface="$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | awk -F: '$2=="ethernet" && $1!="" {print $1; exit}')"
+  if [ -z "${iface}" ]; then
+    fail_firstboot "unable to detect ethernet interface for static network setup"
+  fi
+
+  con_name="$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | awk -F: -v dev="${iface}" '$2==dev {print $1; exit}')"
+  if [ -z "${con_name}" ]; then
+    con_name="Wired connection 1"
+    if ! nmcli -t -f NAME con show 2>/dev/null | grep -Fxq "${con_name}"; then
+      nmcli con add type ethernet ifname "${iface}" con-name "${con_name}" autoconnect yes >/dev/null 2>&1 || true
+    fi
+  fi
+
+  ip_addr="${KS_STATIC_IPV4}"
+  if ! printf '%s' "${ip_addr}" | grep -q '/'; then
+    ip_addr="${ip_addr}/24"
+  fi
+  dns_servers="${KS_STATIC_DNS:-${KS_STATIC_GW}}"
+
+  echo "[BOOTSTRAP] Applying static network config: iface=${iface} ip=${ip_addr} gw=${KS_STATIC_GW} dns=${dns_servers}"
+  nmcli con mod "${con_name}" \
+    ipv4.method manual \
+    ipv4.addresses "${ip_addr}" \
+    ipv4.gateway "${KS_STATIC_GW}" \
+    ipv4.dns "${dns_servers}" \
+    ipv6.method disabled \
+    connection.autoconnect yes || fail_firstboot "failed to set static network config"
+
+  nmcli con up "${con_name}" >/dev/null 2>&1 || nmcli dev connect "${iface}" >/dev/null 2>&1 || fail_firstboot "failed to activate static network config"
+}
+
+step_begin "static-network"
+apply_static_network
+step_end 0
+
+step_begin "clock-readiness"
+echo "[BOOTSTRAP] Waiting for clock synchronization (required for TLS validation)"
+if wait_for_clock_sync 40 3; then
+  echo "[BOOTSTRAP] Clock synchronized"
+else
+  echo "[BOOTSTRAP] Clock sync not confirmed after wait window; continuing with retries"
+fi
+step_end 0
+
+step_begin "network-readiness"
+echo "[BOOTSTRAP] Waiting for network readiness (first boot)"
+attempts=30
+delay=3
+i=1
+while [ "${i}" -le "${attempts}" ]; do
+  # Base network readiness should not depend on Tailscale API availability.
+  # Tailscale reachability is validated later, right before OAuth/tailscale up.
+  if ip route | grep -q '^default '; then
+    break
+  fi
+  echo "[BOOTSTRAP] Network not ready (attempt ${i}/${attempts}); waiting ${delay}s"
+  sleep "${delay}"
+  i=$((i + 1))
+done
+
+if ! ip route | grep -q '^default '; then
+  fail_firstboot "no default route detected"
+fi
+
+  upload_log "${log_file}" first-boot.log || true
+
+echo "[BOOTSTRAP] Network readiness confirmed (default route present)"
+step_end 0
+
+if ! command -v tailscale >/dev/null 2>&1; then
+  step_begin "tailscale-install"
+  echo "[BOOTSTRAP] Tailscale missing; attempting install"
+  if ! bootstrap_tailscale_ensure_installed; then
+    fail_firstboot "tailscale install failed"
+  fi
+  if ! bootstrap_service_enable "${tailscaled_service_name}"; then
+    fail_firstboot "failed to enable ${tailscaled_service_name}"
+  fi
+  step_end 0
+fi
+
+step_begin "tailscaled-start"
+echo "[BOOTSTRAP] Starting ${tailscaled_service_name}"
+if ! bootstrap_service_start "${tailscaled_service_name}"; then
+  fail_firstboot "${tailscaled_service_name} failed to start"
+fi
+step_end 0
+
+wait_for_tcp() {
+  host="$1"
+  port="$2"
+  attempts="${3:-60}"
+  delay="${4:-2}"
+  i=1
+  while [ "${i}" -le "${attempts}" ]; do
+    if command -v python3 >/dev/null 2>&1; then
+      if python3 - "${host}" "${port}" >/dev/null 2>&1 <<'PY'; then
+import socket
+import sys
+host = sys.argv[1]
+port = int(sys.argv[2])
+addrs = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+last_exc = None
+for _, _, _, _, sa in addrs:
+    try:
+        s = socket.create_connection(sa, timeout=3)
+        s.close()
+        sys.exit(0)
+    except Exception as exc:
+        last_exc = exc
+sys.exit(1)
+PY
+        return 0
+      fi
+    else
+      # Fallback: require curl for connectivity probe
+      if command -v curl >/dev/null 2>&1; then
+        if curl -fsS --connect-timeout 3 "https://${host}:${port}/" >/dev/null 2>&1; then
+          return 0
+        fi
+      fi
+    fi
+    echo "[BOOTSTRAP] Waiting for connectivity to ${host}:${port} (attempt ${i}/${attempts}); waiting ${delay}s"
+    sleep "${delay}"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Even if we have a default route + DNS, we sometimes still can't reach the
+# internet for a few seconds in some VM/network setups. OAuth enrollment needs
+# outbound HTTPS to api.tailscale.com.
+if ! wait_for_tcp "api.tailscale.com" "443" 180 2; then
+  fail_firstboot "cannot reach api.tailscale.com:443 (network not ready for OAuth)"
+fi
+
+step_begin "debug-user"
+if [ -n "${BOOTSTRAP_DEBUG_USER}" ]; then
+  if ! id -u "${BOOTSTRAP_DEBUG_USER}" >/dev/null 2>&1; then
+    echo "[BOOTSTRAP] Creating debug user ${BOOTSTRAP_DEBUG_USER}"
+    useradd -m -s /bin/bash "${BOOTSTRAP_DEBUG_USER}"
+  else
+    echo "[BOOTSTRAP] Debug user ${BOOTSTRAP_DEBUG_USER} already exists"
+  fi
+
+  if [ -n "${BOOTSTRAP_DEBUG_PASSWORD_HASH}" ]; then
+    usermod -p "${BOOTSTRAP_DEBUG_PASSWORD_HASH}" "${BOOTSTRAP_DEBUG_USER}" || true
+    passwd -u "${BOOTSTRAP_DEBUG_USER}" >/dev/null 2>&1 || true
+  elif [ -n "${BOOTSTRAP_DEBUG_PASSWORD}" ]; then
+    echo "${BOOTSTRAP_DEBUG_USER}:${BOOTSTRAP_DEBUG_PASSWORD}" | chpasswd || true
+    passwd -u "${BOOTSTRAP_DEBUG_USER}" >/dev/null 2>&1 || true
+  fi
+
+  if [ -n "${BOOTSTRAP_DEBUG_SSH_KEY}" ]; then
+    home_dir="$(getent passwd "${BOOTSTRAP_DEBUG_USER}" | cut -d: -f6)"
+    if [ -n "${home_dir}" ]; then
+      mkdir -p "${home_dir}/.ssh"
+      printf '%s\n' "${BOOTSTRAP_DEBUG_SSH_KEY}" >"${home_dir}/.ssh/authorized_keys"
+      chown -R "${BOOTSTRAP_DEBUG_USER}:${BOOTSTRAP_DEBUG_USER}" "${home_dir}/.ssh"
+      chmod 700 "${home_dir}/.ssh"
+      chmod 600 "${home_dir}/.ssh/authorized_keys"
+      restorecon -R "${home_dir}/.ssh" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if [ "${BOOTSTRAP_DEBUG_SUDO}" = "1" ] || [ "${BOOTSTRAP_DEBUG_SUDO}" = "true" ]; then
+    echo "${BOOTSTRAP_DEBUG_USER} ALL=(ALL) NOPASSWD:ALL" >"/etc/sudoers.d/${BOOTSTRAP_DEBUG_USER}"
+    chmod 440 "/etc/sudoers.d/${BOOTSTRAP_DEBUG_USER}"
+  fi
+else
+  echo "[BOOTSTRAP] Debug user not configured"
+fi
+step_end 0
+
+hostname_short="$(hostname -s)"
+step_begin "tailscale-up"
+echo "[BOOTSTRAP] Bringing node onto Tailnet (first boot)"
+attempts=10
+delay=5
+i=1
+authkey="${TAILSCALE_AUTHKEY:-}"
+oauth_client_id="${TAILSCALE_OAUTH_CLIENT_ID}"
+oauth_client_secret="${TAILSCALE_OAUTH_CLIENT_SECRET}"
+oauth_ttl="${TAILSCALE_OAUTH_TTL}"
+
+if [ "${KS_BREAKGLASS}" = "1" ] || [ "${KS_BREAKGLASS}" = "true" ]; then
+  TAILSCALE_NODE_ROLE="server"
+elif [ -n "${KS_ROLE}" ]; then
+  # Explicit GRUB role selection must override env defaults.
+  TAILSCALE_NODE_ROLE="${KS_ROLE}"
+elif [ -z "${TAILSCALE_NODE_ROLE}" ]; then
+  TAILSCALE_NODE_ROLE="server"
+fi
+
+append_tag() {
+  tag="$1"
+  [ -z "${tag}" ] && return 0
+  case ",${final_tags}," in
+    *",${tag},"*) return 0 ;;
+  esac
+  if [ -z "${final_tags}" ]; then
+    final_tags="${tag}"
+  else
+    final_tags="${final_tags},${tag}"
+  fi
+}
+
+	final_tags=""
+	os_tag="$(bootstrap_platform_os_tag 2>/dev/null || true)"
+	append_tag "${os_tag}"
+
+	# Tag the platform distribution for inventory/ACLs (rke2 only).
+	case "${PLATFORM_DISTRIBUTION}" in
+	  rke2|RKE2) append_tag "tag:rke2" ;;
+	esac
+
+	if [ -n "${TAILSCALE_ADVERTISE_TAGS}" ]; then
+	  tags_norm="$(printf '%s' "${TAILSCALE_ADVERTISE_TAGS}" | tr ' ' ',' | tr -s ',' | sed 's/^,//;s/,$//')"
+	  IFS=',' read -r -a tag_arr <<EOF
+${tags_norm}
+EOF
+  for t in "${tag_arr[@]}"; do
+    append_tag "${t}"
+  done
+else
+  if [ "${TAILSCALE_NODE_ROLE}" = "agent" ] || [ "${TAILSCALE_NODE_ROLE}" = "server" ]; then
+    append_tag "tag:${TAILSCALE_NODE_ROLE}"
+  fi
+fi
+
+if [ -n "${TAILSCALE_CLUSTER_TAG}" ]; then
+  append_tag "${TAILSCALE_CLUSTER_TAG}"
+fi
+
+tags_json="[]"
+if [ -n "${final_tags}" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    tags_json="$(FINAL_TAGS="${final_tags}" python3 - <<'PY'
+import json, os
+tags = [t for t in os.environ.get("FINAL_TAGS","").split(",") if t]
+print(json.dumps(tags))
+PY
+    )"
+  else
+    echo "[BOOTSTRAP] Warning: python3 missing; sending empty tags_json to Tailscale OAuth key API"
+    tags_json="[]"
+  fi
+fi
+
+tailscale_reuse_existing="0"
+if tailscale status --self >/dev/null 2>&1 && tailscale ip -4 >/dev/null 2>&1; then
+  existing_ts_ip="$(tailscale ip -4 | head -n1 || true)"
+  existing_ts_id="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; data=json.load(sys.stdin); print((data.get("Self") or {}).get("ID",""))' 2>/dev/null || true)"
+  echo "[BOOTSTRAP] Reusing existing Tailscale identity (device_id=${existing_ts_id:-unknown}, ip=${existing_ts_ip:-unknown})"
+  echo "[BOOTSTRAP] Skipping auth-key mint and tailscale up to avoid duplicate Tailnet entries"
+  tailscale_reuse_existing="1"
+fi
+
+if [ "${tailscale_reuse_existing}" != "1" ]; then
+  if [ -n "${oauth_client_id}" ] && [ -n "${oauth_client_secret}" ]; then
+    if [ -z "${oauth_ttl}" ]; then
+      oauth_ttl="1h"
+    fi
+    id_fingerprint="$(printf '%s' "${oauth_client_id}" | sha256sum | awk '{print $1}' | cut -c1-12)"
+    secret_fingerprint="$(printf '%s' "${oauth_client_secret}" | sha256sum | awk '{print $1}' | cut -c1-12)"
+    id_preview="${oauth_client_id}"
+    if [ "${#oauth_client_id}" -ge 8 ]; then
+      id_preview="${oauth_client_id:0:4}...${oauth_client_id: -4}"
+    fi
+    echo "[BOOTSTRAP] Tailscale OAuth client id preview: ${id_preview} (sha256:${id_fingerprint})"
+    echo "[BOOTSTRAP] Tailscale OAuth client secret sha256:${secret_fingerprint}"
+    echo "[BOOTSTRAP] Tailscale desired node role: ${TAILSCALE_NODE_ROLE}"
+    echo "[BOOTSTRAP] Tailscale cluster tag: ${TAILSCALE_CLUSTER_TAG}"
+    echo "[BOOTSTRAP] Tailscale final_tags: ${final_tags}"
+    echo "[BOOTSTRAP] OAuth auth-key request TTL: ${oauth_ttl}"
+    echo "[BOOTSTRAP] OAuth auth-key request tags_json: ${tags_json}"
+    echo "[BOOTSTRAP] Requesting Tailscale OAuth access token"
+    token_file="$(mktemp)"
+    curl_rc=0
+    token_http="$(curl -sS -u "${oauth_client_id}:${oauth_client_secret}" \
+      -H 'Accept: application/json' \
+      -d "grant_type=client_credentials" \
+      -d "scope=auth_keys" \
+      --connect-timeout 5 --max-time 25 --retry 3 --retry-delay 2 --retry-all-errors \
+      -o "${token_file}" -w "%{http_code}" \
+      https://api.tailscale.com/api/v2/oauth/token || curl_rc=$?)"
+    if [ "${curl_rc}" != "0" ]; then
+      echo "[BOOTSTRAP] OAuth token request curl failed (rc=${curl_rc})"
+    fi
+    if [ "${token_http}" != "200" ]; then
+      echo "[BOOTSTRAP] OAuth token request failed (HTTP ${token_http})"
+      head -c 800 "${token_file}" || true
+      echo
+      rm -f "${token_file}"
+      authkey=""
+    else
+      echo "[BOOTSTRAP] OAuth token HTTP ${token_http}"
+      access_token="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' < "${token_file}" 2>/dev/null || true)"
+      token_tags_space="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("tags",""))' < "${token_file}" 2>/dev/null || true)"
+      if [ -z "${access_token}" ]; then
+        echo "[BOOTSTRAP] OAuth token response did not contain access_token"
+        head -c 800 "${token_file}" || true
+        echo
+        rm -f "${token_file}"
+        authkey=""
+      else
+        rm -f "${token_file}"
+if [ -n "${token_tags_space:-}" ]; then
+          echo "[BOOTSTRAP] OAuth credential tags (from token): ${token_tags_space}"
+          DESIRED_TAGS="${final_tags}" CRED_TAGS="${token_tags_space}" python3 - <<'PY' || true
+import os
+desired = [t for t in (os.environ.get("DESIRED_TAGS","").split(",") if os.environ.get("DESIRED_TAGS") else []) if t]
+cred = [t for t in (os.environ.get("CRED_TAGS","").split(" ") if os.environ.get("CRED_TAGS") else []) if t]
+if set(desired) != set(cred):
+    print("[BOOTSTRAP] Warning: requested tags != credential tags.")
+    print("[BOOTSTRAP] Tailscale requires OAuth-created auth keys to use the credential's exact tags, unless you set up tag ownership.")
+    print("[BOOTSTRAP] Fix: mint credentials for the final device tags, or configure tagOwners so the bootstrap credential can assign them.")
+PY
+      fi
+
+      # Convert oauth_ttl (e.g. "1h", "30m") to expirySeconds for the API.
+      expiry_seconds="$(python3 - <<'PY'
+import os,re,sys
+ttl=(os.environ.get("TTL") or "3600").strip()
+m=re.fullmatch(r"(\\d+)([smhd]?)", ttl)
+if not m:
+    print("3600")
+    sys.exit(0)
+num=int(m.group(1))
+unit=m.group(2) or "s"
+mult={"s":1,"m":60,"h":3600,"d":86400}.get(unit,1)
+print(str(num*mult))
+PY
+      TTL="${oauth_ttl}")"
+
+      echo "[BOOTSTRAP] Creating one-time Tailscale auth key via OAuth (expirySeconds=${expiry_seconds})"
+      resp_file="$(mktemp)"
+      create_payload="$(EXPIRY_SECONDS="${expiry_seconds}" TAGS_JSON="${tags_json}" python3 -c 'import json,os; expiry=int(os.environ.get("EXPIRY_SECONDS") or "3600"); tags=json.loads(os.environ.get("TAGS_JSON") or "[]"); payload={"capabilities":{"devices":{"create":{"reusable":False,"ephemeral":False,"preauthorized":True,"tags":tags}}},"expirySeconds":expiry,"description":"cluster firstboot"}; print(json.dumps(payload))')"
+      curl_rc=0
+      http_code="$(curl -sS -X POST \
+        -H "Authorization: Bearer ${access_token}" \
+        -H 'Content-Type: application/json' \
+        -H 'Accept: application/json' \
+        --connect-timeout 5 --max-time 25 --retry 3 --retry-delay 2 --retry-all-errors \
+        --data-binary "${create_payload}" \
+        -o "${resp_file}" -w "%{http_code}" \
+        https://api.tailscale.com/api/v2/tailnet/-/keys || curl_rc=$?)"
+      if [ "${curl_rc}" != "0" ]; then
+        echo "[BOOTSTRAP] OAuth auth-key request curl failed (rc=${curl_rc})"
+      fi
+      if [ "${http_code}" = "200" ] || [ "${http_code}" = "201" ]; then
+        authkey="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("key",""))' < "${resp_file}" 2>/dev/null || true)"
+      else
+        echo "[BOOTSTRAP] OAuth auth-key request failed (HTTP ${http_code})"
+        head -c 800 "${resp_file}" || true
+        echo
+      fi
+      rm -f "${resp_file}"
+    fi
+  fi
+  fi
+  if [ -z "${authkey}" ]; then
+    fail_firstboot "tailscale auth key missing (OAuth/TAILSCALE_AUTHKEY)"
+  fi
+
+  ts_args="--authkey=${authkey} --hostname=${hostname_short} --accept-dns=true --ssh=true"
+  if [ -n "${final_tags}" ]; then
+    ts_args="${ts_args} --advertise-tags=${final_tags}"
+  fi
+  while [ "${i}" -le "${attempts}" ]; do
+    if tailscale up ${ts_args}; then
+      break
+    fi
+    echo "[BOOTSTRAP] tailscale up failed (attempt ${i}/${attempts}); retrying in ${delay}s"
+    sleep "${delay}"
+    i=$((i + 1))
+  done
+fi
+
+if ! tailscale status --self >/dev/null 2>&1; then
+  fail_firstboot "tailscale did not come online"
+fi
+
+if ! tailscale ip -4 >/dev/null 2>&1; then
+  fail_firstboot "tailscale IP missing"
+fi
+
+disable_node_key_expiry() {
+  local strict_key_expiry
+  strict_key_expiry="$(printf '%s' "${TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR:-0}" | tr '[:upper:]' '[:lower:]')"
+
+  if [ -z "${oauth_client_id}" ] || [ -z "${oauth_client_secret}" ]; then
+    echo "[BOOTSTRAP] Skip node key-expiry disable: OAuth credentials unavailable"
+    if [ "${strict_key_expiry}" = "1" ] || [ "${strict_key_expiry}" = "true" ] || [ "${strict_key_expiry}" = "yes" ] || [ "${strict_key_expiry}" = "on" ]; then
+      return 1
+    fi
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[BOOTSTRAP] Skip node key-expiry disable: python3 unavailable"
+    if [ "${strict_key_expiry}" = "1" ] || [ "${strict_key_expiry}" = "true" ] || [ "${strict_key_expiry}" = "yes" ] || [ "${strict_key_expiry}" = "on" ]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  echo "[BOOTSTRAP] Disabling Tailscale node key expiry"
+  token_file="$(mktemp)"
+  token_http="$(curl -sS -u "${oauth_client_id}:${oauth_client_secret}" \
+    -H 'Accept: application/json' \
+    -d "grant_type=client_credentials" \
+    -d "scope=devices:core:write" \
+    --connect-timeout 5 --max-time 25 --retry 3 --retry-delay 2 --retry-all-errors \
+    -o "${token_file}" -w "%{http_code}" \
+    "https://api.tailscale.com/api/v2/oauth/token" || true)"
+  if [ "${token_http}" != "200" ]; then
+    echo "[BOOTSTRAP] Warning: OAuth token for key-expiry disable failed (HTTP ${token_http})"
+    head -c 600 "${token_file}" || true
+    echo
+    rm -f "${token_file}"
+    if [ "${strict_key_expiry}" = "1" ] || [ "${strict_key_expiry}" = "true" ] || [ "${strict_key_expiry}" = "yes" ] || [ "${strict_key_expiry}" = "on" ]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  access_token="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' < "${token_file}" 2>/dev/null || true)"
+  rm -f "${token_file}"
+  if [ -z "${access_token}" ]; then
+    echo "[BOOTSTRAP] Warning: key-expiry disable token missing access_token"
+    if [ "${strict_key_expiry}" = "1" ] || [ "${strict_key_expiry}" = "true" ] || [ "${strict_key_expiry}" = "yes" ] || [ "${strict_key_expiry}" = "on" ]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  device_id="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; data=json.load(sys.stdin); print((data.get("Self") or {}).get("ID",""))' 2>/dev/null || true)"
+  if [ -z "${device_id}" ]; then
+    echo "[BOOTSTRAP] Warning: unable to resolve local Tailscale device ID for key-expiry disable"
+    if [ "${strict_key_expiry}" = "1" ] || [ "${strict_key_expiry}" = "true" ] || [ "${strict_key_expiry}" = "yes" ] || [ "${strict_key_expiry}" = "on" ]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  resp_file="$(mktemp)"
+  key_http="$(curl -sS -X POST \
+    -H "Authorization: Bearer ${access_token}" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json' \
+    --connect-timeout 5 --max-time 25 --retry 3 --retry-delay 2 --retry-all-errors \
+    --data '{"keyExpiryDisabled":true}' \
+    -o "${resp_file}" -w "%{http_code}" \
+    "https://api.tailscale.com/api/v2/device/${device_id}/key" || true)"
+  if [ "${key_http}" = "200" ] || [ "${key_http}" = "201" ]; then
+    echo "[BOOTSTRAP] Node key expiry disabled (device_id=${device_id})"
+    rm -f "${resp_file}"
+    return 0
+  fi
+
+  echo "[BOOTSTRAP] Warning: failed to disable node key expiry (HTTP ${key_http}, device_id=${device_id})"
+  head -c 600 "${resp_file}" || true
+  echo
+  rm -f "${resp_file}"
+  if [ "${strict_key_expiry}" = "1" ] || [ "${strict_key_expiry}" = "true" ] || [ "${strict_key_expiry}" = "yes" ] || [ "${strict_key_expiry}" = "on" ]; then
+    return 1
+  fi
+  return 0
+}
+
+disable_node_key_expiry || fail_firstboot "failed to disable Tailscale node key expiry"
+
+enforce_exit_node
+step_end 0
+
+RANCHER_PUBLIC_DOMAIN="${RANCHER_PUBLIC_DOMAIN:-__RANCHER_PUBLIC_DOMAIN__}"
+RANCHER_CLOUDFLARED_TUNNEL_TOKEN="${RANCHER_CLOUDFLARED_TUNNEL_TOKEN:-}"
+export RANCHER_PUBLIC_DOMAIN RANCHER_CLOUDFLARED_TUNNEL_TOKEN
+
+step_begin "bootstrap-ansible"
+if [ "${KS_BREAKGLASS}" = "1" ] || [ "${KS_BREAKGLASS}" = "true" ]; then
+  echo "[BOOTSTRAP] Break-glass enabled: local node bootstraps as cluster primary"
+else
+  echo "[BOOTSTRAP] Break-glass disabled: local node will attempt cluster join mode"
+fi
+if [ -f /etc/profile.d/homebrew.sh ]; then
+  # shellcheck disable=SC1091
+  . /etc/profile.d/homebrew.sh
+  hash -r 2>/dev/null || true
+fi
+ui_start_phase_monitor 1
+if [ -x /usr/local/sbin/ansible-bundle-bootstrap.sh ]; then
+  BOOTSTRAP_BREAKGLASS="${KS_BREAKGLASS}" /usr/local/sbin/ansible-bundle-bootstrap.sh || fail_firstboot "ansible bootstrap failed"
+else
+  ui_stop_phase_monitor
+  fail_firstboot "ansible-bundle-bootstrap script missing"
+fi
+ui_stop_phase_monitor
+step_end 0
+
+touch "${done_file}"
+bootstrap_service_disable "${firstboot_service_name}" || true
+stop_log_stream
+upload_log "${log_file}" first-boot.log
+ui_render_result "SUCCESS" "First-boot workflow completed" "Bootstrap completed successfully."
+echo "[BOOTSTRAP] Tailscale first-boot complete"

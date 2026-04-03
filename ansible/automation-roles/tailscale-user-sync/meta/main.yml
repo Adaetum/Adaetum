@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  author: "Infrastructure"
+  description: "Sync local Linux users from a Tailscale ACL group"
+  license: "MIT"
+  min_ansible_version: "2.14"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+        - "10"
+    - name: Debian
+      versions:
+        - "11"
+        - "12"
+dependencies: []

@@ -1,0 +1,8 @@
+  # Break-glass host targeting
+- import_playbook: _break_glass.yml
+
+- hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
+  gather_facts: false
+  become: true
+  roles:
+    - healthcheck

@@ -1,0 +1,668 @@
+%pre --interpreter=/bin/bash
+set -euo pipefail
+
+log="/tmp/ks-pre.log"
+exec > >(tee -a "${log}") 2>&1
+
+echo "[KS] pre: disk selection start"
+
+# Start a background watcher so "pending forever" storage hangs still leave
+# a timeline in /tmp/ks-storage-watch.log for console triage.
+cat > /tmp/ks-storage-watch.sh <<'EOF'
+#!/bin/bash
+set +e
+watch_log="/tmp/ks-storage-watch.log"
+while true; do
+  {
+    echo "=== $(date -u +"%Y-%m-%dT%H:%M:%SZ") ==="
+    if [ -f /tmp/ks-target-disk ]; then
+      d="$(cat /tmp/ks-target-disk 2>/dev/null || true)"
+      echo "target_disk=${d:-<unset>}"
+      if [ -n "${d:-}" ]; then
+        ls -l "/dev/${d}" "/dev/${d}"* 2>/dev/null || true
+      fi
+    else
+      echo "target_disk=<not-yet-selected>"
+    fi
+    lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,PKNAME,MODEL,TRAN 2>/dev/null || true
+    echo "--- storage.log tail ---"
+    tail -n 80 /tmp/storage.log 2>/dev/null || true
+    echo "--- program.log tail ---"
+    tail -n 80 /tmp/program.log 2>/dev/null || true
+    echo "--- anaconda.log tail ---"
+    tail -n 80 /tmp/anaconda.log 2>/dev/null || true
+    echo
+  } >>"${watch_log}"
+  sleep 5
+done
+EOF
+chmod +x /tmp/ks-storage-watch.sh
+/tmp/ks-storage-watch.sh >/dev/null 2>&1 &
+echo "$!" > /tmp/ks-storage-watch.pid
+echo "[KS] started background storage watcher pid=$(cat /tmp/ks-storage-watch.pid)"
+
+echo "[KS] kernel cmdline: $(cat /proc/cmdline 2>/dev/null || true)"
+echo "[KS] lsblk snapshot (pre-selection):"
+lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,PKNAME,MODEL,TRAN 2>/dev/null || true
+echo "[KS] blkid snapshot (pre-selection):"
+blkid 2>/dev/null || true
+
+ensure_ipv4_connectivity() {
+  local iface=""
+  local con_name=""
+  if ! command -v nmcli >/dev/null 2>&1; then
+    return 0
+  fi
+
+  iface="$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | awk -F: '$2=="ethernet" && $1!="" {print $1; exit}')"
+  if [ -z "${iface}" ]; then
+    iface="$(ip -o link show 2>/dev/null | awk -F': ' '$2 != "lo" {print $2; exit}')"
+  fi
+  if [ -z "${iface}" ]; then
+    echo "[KS] network: no candidate interface found"
+    return 0
+  fi
+
+  echo "[KS] network: ensuring IPv4 on ${iface}"
+  ip link set "${iface}" up 2>/dev/null || true
+  nmcli dev set "${iface}" managed yes 2>/dev/null || true
+
+  con_name="ks-ipv4-${iface}"
+  if ! nmcli -t -f NAME con show 2>/dev/null | grep -Fxq "${con_name}"; then
+    nmcli con add type ethernet ifname "${iface}" con-name "${con_name}" \
+      ipv4.method auto ipv6.method disabled autoconnect yes >/dev/null 2>&1 || true
+  fi
+
+  nmcli con up "${con_name}" >/dev/null 2>&1 || nmcli dev connect "${iface}" >/dev/null 2>&1 || true
+  if command -v dhclient >/dev/null 2>&1; then
+    dhclient -4 -v "${iface}" >/tmp/ks-dhclient.log 2>&1 || true
+  fi
+
+  echo "[KS] network snapshot:"
+  ip -4 addr show dev "${iface}" 2>/dev/null || true
+  ip -4 route 2>/dev/null || true
+}
+
+ensure_ipv4_connectivity || true
+
+cat > /tmp/collect-storage-diag.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+ts="$(date +%Y%m%d-%H%M%S)"
+host="$(hostname -s 2>/dev/null || echo unknown)"
+out_dir="${1:-/tmp}"
+bundle_name="storage-diag-${host}-${ts}.tar.gz"
+LOG_UPLOAD_URL="__KS_LOG_URL__"
+BOOTSTRAP_SHARED_TOKEN="__BOOTSTRAP_SHARED_TOKEN__"
+
+if [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
+  LOG_UPLOAD_URL=""
+fi
+if [[ "${BOOTSTRAP_SHARED_TOKEN}" == __*__ ]]; then
+  BOOTSTRAP_SHARED_TOKEN=""
+fi
+
+mkdir -p "${out_dir}"
+workdir="$(mktemp -d /tmp/storage-diag.XXXXXX)"
+mkdir -p "${workdir}/logs"
+manifest="${workdir}/MANIFEST.txt"
+
+add_file() {
+  local src="$1"
+  local dst_rel="$2"
+  if [ -f "${src}" ]; then
+    mkdir -p "${workdir}/logs/$(dirname "${dst_rel}")"
+    cp -f "${src}" "${workdir}/logs/${dst_rel}"
+    printf 'included: %s\n' "${src}" >> "${manifest}"
+  else
+    printf 'missing:  %s\n' "${src}" >> "${manifest}"
+  fi
+}
+
+{
+  echo "timestamp=${ts}"
+  echo "host=${host}"
+  echo "kernel=$(uname -r 2>/dev/null || true)"
+  echo "cmdline=$(cat /proc/cmdline 2>/dev/null || true)"
+  echo
+} > "${manifest}"
+
+add_file "/tmp/ks-pre.log" "installer/tmp/ks-pre.log"
+add_file "/tmp/ks-storage-watch.log" "installer/tmp/ks-storage-watch.log"
+add_file "/tmp/ks-install-watchdog.log" "installer/tmp/ks-install-watchdog.log"
+add_file "/tmp/ks-install-watchdog.pid" "installer/tmp/ks-install-watchdog.pid"
+add_file "/tmp/ks-watchdog-triggered" "installer/tmp/ks-watchdog-triggered"
+add_file "/tmp/ks-watchdog-reason" "installer/tmp/ks-watchdog-reason"
+add_file "/tmp/ks-watchdog-lastseen" "installer/tmp/ks-watchdog-lastseen"
+add_file "/tmp/ks-watchdog-proc.txt" "installer/tmp/ks-watchdog-proc.txt"
+add_file "/tmp/ks-watchdog-strace.txt" "installer/tmp/ks-watchdog-strace.txt"
+add_file "/tmp/ks-target-disk" "installer/tmp/ks-target-disk"
+add_file "/tmp/partitioning.ks" "installer/tmp/partitioning.ks"
+add_file "/tmp/storage.log" "installer/tmp/storage.log"
+add_file "/tmp/anaconda.log" "installer/tmp/anaconda.log"
+add_file "/tmp/program.log" "installer/tmp/program.log"
+add_file "/tmp/syslog" "installer/tmp/syslog"
+
+add_file "/root/bootstrap-storage-diag/ks-pre.log" "installed/root/bootstrap-storage-diag/ks-pre.log"
+add_file "/root/bootstrap-storage-diag/ks-storage-watch.log" "installed/root/bootstrap-storage-diag/ks-storage-watch.log"
+add_file "/root/bootstrap-storage-diag/ks-install-watchdog.log" "installed/root/bootstrap-storage-diag/ks-install-watchdog.log"
+add_file "/root/bootstrap-storage-diag/ks-install-watchdog.pid" "installed/root/bootstrap-storage-diag/ks-install-watchdog.pid"
+add_file "/root/bootstrap-storage-diag/ks-watchdog-triggered" "installed/root/bootstrap-storage-diag/ks-watchdog-triggered"
+add_file "/root/bootstrap-storage-diag/ks-watchdog-reason" "installed/root/bootstrap-storage-diag/ks-watchdog-reason"
+add_file "/root/bootstrap-storage-diag/ks-watchdog-lastseen" "installed/root/bootstrap-storage-diag/ks-watchdog-lastseen"
+add_file "/root/bootstrap-storage-diag/ks-target-disk" "installed/root/bootstrap-storage-diag/ks-target-disk"
+add_file "/root/bootstrap-storage-diag/partitioning.ks" "installed/root/bootstrap-storage-diag/partitioning.ks"
+add_file "/root/bootstrap-storage-diag/storage.log" "installed/root/bootstrap-storage-diag/storage.log"
+add_file "/root/bootstrap-storage-diag/anaconda.log" "installed/root/bootstrap-storage-diag/anaconda.log"
+add_file "/root/bootstrap-storage-diag/program.log" "installed/root/bootstrap-storage-diag/program.log"
+add_file "/root/bootstrap-storage-diag/syslog" "installed/root/bootstrap-storage-diag/syslog"
+add_file "/root/bootstrap-storage-diag/lsblk-post.txt" "installed/root/bootstrap-storage-diag/lsblk-post.txt"
+add_file "/root/bootstrap-storage-diag/blkid-post.txt" "installed/root/bootstrap-storage-diag/blkid-post.txt"
+
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/ks-pre.log" "sysroot/root/bootstrap-storage-diag/ks-pre.log"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/ks-storage-watch.log" "sysroot/root/bootstrap-storage-diag/ks-storage-watch.log"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/ks-install-watchdog.log" "sysroot/root/bootstrap-storage-diag/ks-install-watchdog.log"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/ks-install-watchdog.pid" "sysroot/root/bootstrap-storage-diag/ks-install-watchdog.pid"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/ks-watchdog-triggered" "sysroot/root/bootstrap-storage-diag/ks-watchdog-triggered"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/ks-watchdog-reason" "sysroot/root/bootstrap-storage-diag/ks-watchdog-reason"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/ks-watchdog-lastseen" "sysroot/root/bootstrap-storage-diag/ks-watchdog-lastseen"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/ks-target-disk" "sysroot/root/bootstrap-storage-diag/ks-target-disk"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/partitioning.ks" "sysroot/root/bootstrap-storage-diag/partitioning.ks"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/storage.log" "sysroot/root/bootstrap-storage-diag/storage.log"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/anaconda.log" "sysroot/root/bootstrap-storage-diag/anaconda.log"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/program.log" "sysroot/root/bootstrap-storage-diag/program.log"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/syslog" "sysroot/root/bootstrap-storage-diag/syslog"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/lsblk-post.txt" "sysroot/root/bootstrap-storage-diag/lsblk-post.txt"
+add_file "/mnt/sysroot/root/bootstrap-storage-diag/blkid-post.txt" "sysroot/root/bootstrap-storage-diag/blkid-post.txt"
+
+{
+  echo "=== lsblk ==="
+  lsblk -e7 -o NAME,PATH,TYPE,SIZE,RM,RO,MODEL,SERIAL,TRAN,PKNAME,FSTYPE,MOUNTPOINT 2>&1 || true
+  echo
+  echo "=== blkid ==="
+  blkid 2>&1 || true
+  echo
+  echo "=== /proc/partitions ==="
+  cat /proc/partitions 2>&1 || true
+  echo
+  echo "=== findmnt install mounts ==="
+  findmnt -n -o TARGET,SOURCE /run/install/repo /run/install/source 2>&1 || true
+} > "${workdir}/logs/runtime-storage-snapshot.txt"
+
+{
+  echo "=== /proc/cmdline ==="
+  cat /proc/cmdline 2>/dev/null || true
+  echo
+  echo "=== deprecated/removed installer args check ==="
+  cat /proc/cmdline 2>/dev/null | egrep -o "inst.nompath|inst.nodmraid|inst.nomdadm|--ipv6=ignore|ipv6=ignore" || true
+} > "${workdir}/logs/runtime-cmdline-check.txt"
+
+{
+  echo "=== installer boot warning snippet ==="
+  if [ -f /tmp/anaconda.log ]; then
+    grep -n "Installer errors encountered during boot" -A8 /tmp/anaconda.log 2>/dev/null || true
+    echo
+    egrep -n "inst.nompath|inst.nodmraid|inst.nomdadm|invalid ipv6|ipv6=ignore" /tmp/anaconda.log 2>/dev/null || true
+  else
+    echo "/tmp/anaconda.log missing"
+  fi
+  echo
+  echo "=== payload source errors (CD-ROM/repo) ==="
+  egrep -n "SourceSetupError|Found no CD-ROM|mount-0000-cdrom|SetUpDNFSourcesTask|Thread Failed: AnaTaskThread-SetUpDNFSourcesTask" \
+    /tmp/anaconda.log /tmp/syslog 2>/dev/null || true
+} > "${workdir}/logs/runtime-boot-warning-check.txt"
+
+{
+  echo "=== dmesg storage excerpts ==="
+  dmesg -T 2>/dev/null | egrep -i "nvme|blk|sd|scsi|I/O error|reset|timeout|failed" || true
+} > "${workdir}/logs/runtime-dmesg-storage.txt"
+
+{
+  echo "=== process snapshot ==="
+  ps -eo pid,ppid,stat,etime,pcpu,pmem,comm,args 2>/dev/null | egrep -i "anaconda|dnf|rpm|python|blivet|nmcli|NetworkManager|dracut|systemd" || true
+  echo
+  for name in anaconda dnf rpm python3; do
+    for p in $(pgrep -x "${name}" 2>/dev/null || true); do
+      echo "--- /proc/${p}/status (${name}) ---"
+      cat "/proc/${p}/status" 2>/dev/null || true
+      echo "--- /proc/${p}/wchan (${name}) ---"
+      cat "/proc/${p}/wchan" 2>/dev/null || true
+      echo "--- /proc/${p}/stack (${name}) ---"
+      cat "/proc/${p}/stack" 2>/dev/null || true
+      echo
+    done
+  done
+} > "${workdir}/logs/runtime-process-snapshot.txt"
+
+out_path="${out_dir%/}/${bundle_name}"
+tar -C "${workdir}" -czf "${out_path}" .
+rm -rf "${workdir}"
+
+if [ -n "${LOG_UPLOAD_URL}" ] && command -v curl >/dev/null 2>&1; then
+  if command -v nmcli >/dev/null 2>&1; then
+    iface="$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | awk -F: '$2=="ethernet" && $1!="" {print $1; exit}')"
+    if [ -z "${iface}" ]; then
+      iface="$(ip -o link show 2>/dev/null | awk -F': ' '$2 != "lo" {print $2; exit}')"
+    fi
+    if [ -n "${iface}" ]; then
+      ip link set "${iface}" up 2>/dev/null || true
+      nmcli dev set "${iface}" managed yes 2>/dev/null || true
+      con_name="ks-ipv4-${iface}"
+      if ! nmcli -t -f NAME con show 2>/dev/null | grep -Fxq "${con_name}"; then
+        nmcli con add type ethernet ifname "${iface}" con-name "${con_name}" \
+          ipv4.method auto ipv6.method disabled autoconnect yes >/dev/null 2>&1 || true
+      fi
+      nmcli con up "${con_name}" >/dev/null 2>&1 || nmcli dev connect "${iface}" >/dev/null 2>&1 || true
+      if command -v dhclient >/dev/null 2>&1; then
+        dhclient -4 -v "${iface}" >/tmp/ks-dhclient.log 2>&1 || true
+      fi
+    fi
+  fi
+
+  upload_url="${LOG_UPLOAD_URL}"
+  if [ -n "${BOOTSTRAP_SHARED_TOKEN}" ] && ! printf '%s' "${upload_url}" | grep -qE '(^|[?&])token='; then
+    if printf '%s' "${upload_url}" | grep -q '?'; then
+      upload_url="${upload_url}&token=${BOOTSTRAP_SHARED_TOKEN}"
+    else
+      upload_url="${upload_url}?token=${BOOTSTRAP_SHARED_TOKEN}"
+    fi
+  fi
+  sep='?'
+  if printf '%s' "${upload_url}" | grep -q '?'; then
+    sep='&'
+  fi
+  upload_url="${upload_url}${sep}host=${host}&file=${bundle_name}"
+  tmp_resp="$(mktemp /tmp/storage-diag-upload.XXXXXX)"
+  curl_rc=0
+  http_code="$(curl -4 --http1.1 -sS -o "${tmp_resp}" -w "%{http_code}" --connect-timeout 5 --max-time 90 --retry 2 \
+    -X POST --data-binary @"${out_path}" "${upload_url}" || curl_rc=$?)"
+  if [ "${curl_rc}" = "0" ] && [ -n "${http_code}" ] && [ "${http_code}" != "000" ] && [ "${http_code}" -ge 200 ] && [ "${http_code}" -lt 300 ]; then
+    echo "[KS] storage diag upload ok http=${http_code} file=${bundle_name}" >&2
+  else
+    echo "[KS] storage diag upload failed rc=${curl_rc} http=${http_code:-<empty>} url=$(printf '%s' "${upload_url}" | sed -E 's/([?&]token=)[^&]+/\1REDACTED/g')" >&2
+    if [ -s "${tmp_resp}" ]; then
+      echo "[KS] storage diag upload response: $(tr '\n' ' ' < "${tmp_resp}" | cut -c1-300)" >&2
+    fi
+  fi
+  rm -f "${tmp_resp}"
+fi
+
+echo "${out_path}"
+EOF
+chmod +x /tmp/collect-storage-diag.sh
+echo "[KS] wrote /tmp/collect-storage-diag.sh (run: /tmp/collect-storage-diag.sh /tmp)"
+
+cat > /tmp/ks-install-watchdog.sh <<'EOF'
+#!/bin/bash
+set +e
+
+watch_log="/tmp/ks-install-watchdog.log"
+start_epoch="$(date +%s)"
+cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
+
+read_cmdline_opt() {
+  local key="$1"
+  printf '%s' "${cmdline}" | sed -nE "s/.*(^|[[:space:]])${key}=([^[:space:]]+).*/\\2/p" | tail -n1
+}
+
+stall_minutes="$(read_cmdline_opt ks_watchdog_stall_minutes)"
+late_stall_minutes="$(read_cmdline_opt ks_watchdog_late_stall_minutes)"
+max_minutes="$(read_cmdline_opt ks_watchdog_max_minutes)"
+grace_minutes="$(read_cmdline_opt ks_watchdog_grace_minutes)"
+action="$(read_cmdline_opt ks_watchdog_action)"
+
+stall_minutes="${stall_minutes:-2}"
+late_stall_minutes="${late_stall_minutes:-10}"
+max_minutes="${max_minutes:-6}"
+grace_minutes="${grace_minutes:-1}"
+action="${action:-terminate}"
+
+if ! printf '%s' "${stall_minutes}" | grep -Eq '^[0-9]+$'; then
+  stall_minutes=2
+fi
+if ! printf '%s' "${late_stall_minutes}" | grep -Eq '^[0-9]+$'; then
+  late_stall_minutes=10
+fi
+if ! printf '%s' "${max_minutes}" | grep -Eq '^[0-9]+$'; then
+  max_minutes=6
+fi
+if ! printf '%s' "${grace_minutes}" | grep -Eq '^[0-9]+$'; then
+  grace_minutes=1
+fi
+if ! printf '%s' "${action}" | grep -Eq '^(terminate|reboot|collect-only)$'; then
+  action="terminate"
+fi
+
+printf '%s\n' "[KS] watchdog start stall_minutes=${stall_minutes} late_stall_minutes=${late_stall_minutes} max_minutes=${max_minutes} grace_minutes=${grace_minutes} action=${action}" >>"${watch_log}"
+
+build_semantic_signature() {
+  {
+    for f in /tmp/program.log /tmp/anaconda.log /tmp/storage.log; do
+      [ -f "${f}" ] || continue
+      tail -n 120 "${f}" 2>/dev/null || true
+    done
+  } | sed -E \
+      -e 's/^[[:space:]]*[0-9]{1,2}:[0-9]{2}:[0-9]{2}[,\.][0-9]+[[:space:]]+//' \
+      -e 's/[[:space:]]+/ /g' \
+      -e 's/\.{3,}/.../g' \
+      -e 's/^ +//; s/ +$//' \
+    | grep -Ev '^(|\.{1,}|Running\.\.\.|running\.\.\.|systemd-userwork: waiting\.\.\.|waiting\.\.\.)$' \
+    | tail -n 200 \
+    | sha256sum 2>/dev/null | awk '{print $1}'
+}
+
+payload_cpu_ticks() {
+  local total=0
+  local p=""
+  local stat=""
+  local utime=0
+  local stime=0
+  for name in dnf rpm dracut; do
+    for p in $(pgrep -x "${name}" 2>/dev/null || true); do
+      [ -r "/proc/${p}/stat" ] || continue
+      stat="$(cat "/proc/${p}/stat" 2>/dev/null || true)"
+      [ -n "${stat}" ] || continue
+      # /proc/<pid>/stat fields: 14=utime, 15=stime
+      utime="$(printf '%s\n' "${stat}" | awk '{print $14+0}')"
+      stime="$(printf '%s\n' "${stat}" | awk '{print $15+0}')"
+      total="$((total + utime + stime))"
+    done
+  done
+  printf '%s\n' "${total}"
+}
+
+last_sem_sig=""
+last_sem_change="${start_epoch}"
+last_payload_ticks=0
+last_payload_change="${start_epoch}"
+while true; do
+  now="$(date +%s)"
+  elapsed="$((now - start_epoch))"
+  newest=0
+  for f in /tmp/anaconda.log /tmp/storage.log /tmp/program.log; do
+    [ -f "${f}" ] || continue
+    m="$(stat -c %Y "${f}" 2>/dev/null || true)"
+    if [ -n "${m}" ] && [ "${m}" -gt "${newest}" ]; then
+      newest="${m}"
+    fi
+  done
+
+  if [ "${newest}" -gt 0 ]; then
+    mtime_idle="$((now - newest))"
+  else
+    mtime_idle="${elapsed}"
+  fi
+
+  sem_sig="$(build_semantic_signature)"
+  if [ -n "${sem_sig}" ]; then
+    if [ "${sem_sig}" != "${last_sem_sig}" ]; then
+      last_sem_sig="${sem_sig}"
+      last_sem_change="${now}"
+    fi
+    sem_idle="$((now - last_sem_change))"
+  else
+    sem_idle="${mtime_idle}"
+  fi
+
+  payload_ticks="$(payload_cpu_ticks)"
+  if [ "${payload_ticks}" -gt 0 ]; then
+    if [ "${payload_ticks}" -ne "${last_payload_ticks}" ]; then
+      last_payload_ticks="${payload_ticks}"
+      last_payload_change="${now}"
+    fi
+    payload_idle="$((now - last_payload_change))"
+  else
+    payload_idle="${sem_idle}"
+  fi
+
+  activity_idle="${sem_idle}"
+  if [ "${payload_idle}" -lt "${activity_idle}" ]; then
+    activity_idle="${payload_idle}"
+  fi
+
+  in_late_phase=0
+  if [ -f /tmp/anaconda.log ]; then
+    if tail -n 300 /tmp/anaconda.log 2>/dev/null | grep -Eq \
+      'Queue started: (Configuration queue|Initramfs generation|Post installation scripts)|Task started: Configuration queue|Create rescue images|Generate initramfs'; then
+      in_late_phase=1
+    fi
+  fi
+  effective_stall_minutes="${stall_minutes}"
+  if [ "${in_late_phase}" = "1" ] && [ "${late_stall_minutes}" -gt "${effective_stall_minutes}" ]; then
+    effective_stall_minutes="${late_stall_minutes}"
+  fi
+
+  printf 'ts=%s elapsed=%ss mtime_idle=%ss sem_idle=%ss payload_idle=%ss activity_idle=%ss effective_stall_minutes=%s late_phase=%s newest=%s sem_sig=%s payload_ticks=%s\n' \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "${elapsed}" "${mtime_idle}" "${sem_idle}" "${payload_idle}" "${activity_idle}" "${effective_stall_minutes}" "${in_late_phase}" "${newest}" "${sem_sig:-none}" "${payload_ticks}" >/tmp/ks-watchdog-lastseen
+
+  reason=""
+  if [ "${max_minutes}" -gt 0 ] && [ "${elapsed}" -ge "$((max_minutes * 60))" ]; then
+    reason="max-runtime-exceeded"
+  elif [ "${effective_stall_minutes}" -gt 0 ] && [ "${elapsed}" -ge "$((grace_minutes * 60))" ] && [ "${activity_idle}" -ge "$((effective_stall_minutes * 60))" ]; then
+    reason="installer-semantic-stall"
+  fi
+
+  if [ -n "${reason}" ]; then
+    printf '%s\n' "${reason}" > /tmp/ks-watchdog-reason
+    touch /tmp/ks-watchdog-triggered
+    {
+      echo "=== watchdog process snapshot $(date -u +"%Y-%m-%dT%H:%M:%SZ") ==="
+      ps -eo pid,ppid,stat,etime,pcpu,pmem,comm,args 2>/dev/null | egrep -i "anaconda|dnf|rpm|python|blivet|nmcli|NetworkManager|dracut|systemd" || true
+      echo
+      for name in anaconda dnf rpm python3; do
+        for p in $(pgrep -x "${name}" 2>/dev/null || true); do
+          echo "--- /proc/${p}/status (${name}) ---"
+          cat "/proc/${p}/status" 2>/dev/null || true
+          echo "--- /proc/${p}/wchan (${name}) ---"
+          cat "/proc/${p}/wchan" 2>/dev/null || true
+          echo "--- /proc/${p}/stack (${name}) ---"
+          cat "/proc/${p}/stack" 2>/dev/null || true
+          echo
+        done
+      done
+    } > /tmp/ks-watchdog-proc.txt 2>&1
+
+    if command -v strace >/dev/null 2>&1; then
+      apid="$(pgrep -xo anaconda 2>/dev/null || true)"
+      if [ -n "${apid}" ]; then
+        timeout 8 strace -tt -T -f -p "${apid}" -o /tmp/ks-watchdog-strace.txt >/dev/null 2>&1 || true
+      fi
+    fi
+
+    {
+      echo "[KS] watchdog trigger reason=${reason} elapsed=${elapsed}s mtime_idle=${mtime_idle}s sem_idle=${sem_idle}s"
+      lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,PKNAME,MODEL,TRAN 2>/dev/null || true
+      ip -4 addr 2>/dev/null || true
+      ip -4 route 2>/dev/null || true
+      tail -n 120 /tmp/program.log 2>/dev/null || true
+      tail -n 120 /tmp/anaconda.log 2>/dev/null || true
+      tail -n 120 /tmp/storage.log 2>/dev/null || true
+    } >>"${watch_log}" 2>&1
+
+    if [ -x /tmp/collect-storage-diag.sh ]; then
+      /tmp/collect-storage-diag.sh /tmp >>"${watch_log}" 2>&1 || true
+    fi
+    sync || true
+
+    case "${action}" in
+      terminate)
+        echo "[KS] watchdog action: terminate anaconda" >>"${watch_log}"
+        pkill -TERM -f '/sbin/anaconda' >/dev/null 2>&1 || true
+        sleep 8
+        pkill -KILL -f '/sbin/anaconda' >/dev/null 2>&1 || true
+        ;;
+      reboot)
+        echo "[KS] watchdog action: reboot" >>"${watch_log}"
+        systemctl --force --force reboot >/dev/null 2>&1 || reboot -f >/dev/null 2>&1 || true
+        ;;
+      collect-only)
+        echo "[KS] watchdog action: collect-only" >>"${watch_log}"
+        ;;
+    esac
+    exit 0
+  fi
+
+  sleep 20
+done
+EOF
+chmod +x /tmp/ks-install-watchdog.sh
+watchdog_enabled="$(
+  cat /proc/cmdline 2>/dev/null | sed -nE 's/.*(^|[[:space:]])ks_watchdog_enabled=([^[:space:]]+).*/\2/p' | tail -n1
+)"
+watchdog_enabled="${watchdog_enabled:-0}"
+case "${watchdog_enabled}" in
+  1|true|TRUE|yes|YES|on|ON)
+    /tmp/ks-install-watchdog.sh >/dev/null 2>&1 &
+    echo "$!" > /tmp/ks-install-watchdog.pid
+    echo "[KS] started install watchdog pid=$(cat /tmp/ks-install-watchdog.pid)"
+    ;;
+  *)
+    echo "[KS] install watchdog disabled (set ks_watchdog_enabled=1 to enable)"
+    ;;
+esac
+
+install_src=""
+for mp in /run/install/repo /run/install/source; do
+  if findmnt -n "${mp}" >/dev/null 2>&1; then
+    install_src="$(findmnt -n -o SOURCE "${mp}" 2>/dev/null | head -n1 || true)"
+    break
+  fi
+done
+
+normalize_disk_name() {
+  local candidate="$1"
+  local resolved=""
+  local pk=""
+  local dtype=""
+  [ -n "${candidate}" ] || return 0
+  case "${candidate}" in
+    /dev/*) ;;
+    *) candidate="/dev/${candidate}" ;;
+  esac
+  resolved="$(readlink -f "${candidate}" 2>/dev/null || printf '%s' "${candidate}")"
+  if [ ! -b "${resolved}" ]; then
+    return 0
+  fi
+  dtype="$(lsblk -dn -o TYPE "${resolved}" 2>/dev/null | head -n1 || true)"
+  if [ "${dtype}" = "disk" ]; then
+    basename "${resolved}"
+    return 0
+  fi
+  pk="$(lsblk -ndo PKNAME "${resolved}" 2>/dev/null | head -n1 || true)"
+  if [ -n "${pk}" ]; then
+    printf '%s\n' "${pk}"
+    return 0
+  fi
+  return 0
+}
+
+install_disk=""
+if [ -n "${install_src}" ] && printf '%s' "${install_src}" | grep -q '^/dev/'; then
+  install_disk="$(normalize_disk_name "${install_src}")"
+fi
+
+echo "[KS] install_src=${install_src:-<none>} install_disk=${install_disk:-<none>}"
+
+target_disk=""
+target_size=0
+
+while read -r name type rm size; do
+  [ "${type}" = "disk" ] || continue
+  [ "${rm}" = "0" ] || continue
+  if [ -n "${install_disk}" ] && [ "${name}" = "${install_disk}" ]; then
+    continue
+  fi
+  target_disk="${name}"
+  target_size="${size}"
+  break
+done < <(lsblk -dbn -o NAME,TYPE,RM,SIZE 2>/dev/null || true)
+
+if [ -z "${target_disk}" ]; then
+  # Fallback: first non-removable disk if install media couldn't be identified.
+  while read -r name type rm size; do
+    [ "${type}" = "disk" ] || continue
+    [ "${rm}" = "0" ] || continue
+    if [ -n "${install_disk}" ] && [ "${name}" = "${install_disk}" ]; then
+      continue
+    fi
+    target_disk="${name}"
+    target_size="${size}"
+    break
+  done < <(lsblk -dbn -o NAME,TYPE,RM,SIZE 2>/dev/null || true)
+fi
+
+if [ -z "${target_disk}" ]; then
+  echo "[KS] ERROR: no suitable target disk found."
+  if [ -n "${install_disk}" ]; then
+    echo "[KS] installer source appears to use /dev/${install_disk}; refusing to repartition install media."
+  fi
+  lsblk -o NAME,TYPE,RM,SIZE,MODEL,TRAN || true
+  exit 1
+fi
+
+target_disk="$(normalize_disk_name "${target_disk}")"
+if [ -z "${target_disk}" ]; then
+  echo "[KS] ERROR: selected target disk could not be normalized to a whole disk name."
+  lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,PKNAME,MODEL,TRAN || true
+  exit 1
+fi
+
+echo "[KS] selected target_disk=${target_disk} bytes=${target_size}"
+printf '%s\n' "${target_disk}" > /tmp/ks-target-disk
+
+target_dev="/dev/${target_disk}"
+if [ ! -b "${target_dev}" ]; then
+  echo "[KS] ERROR: selected device missing: ${target_dev}"
+  lsblk -o NAME,TYPE,RM,SIZE,MODEL,TRAN || true
+  exit 1
+fi
+target_dtype="$(lsblk -dn -o TYPE "${target_dev}" 2>/dev/null | head -n1 || true)"
+if [ "${target_dtype}" != "disk" ]; then
+  echo "[KS] ERROR: target device is not a whole disk: ${target_dev} (type=${target_dtype:-<unknown>})"
+  lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,PKNAME,MODEL,TRAN || true
+  exit 1
+fi
+
+# Proactively clear stale partition/signature metadata so Anaconda does not
+# trip over prior layouts (common on recycled break-glass hardware).
+echo "[KS] sanitizing target device metadata: ${target_dev}"
+if command -v wipefs >/dev/null 2>&1; then
+  echo "[KS] wipefs before sanitize:"
+  wipefs "${target_dev}" || true
+  wipefs -af "${target_dev}"
+  echo "[KS] wipefs after sanitize:"
+  wipefs "${target_dev}" || true
+fi
+if command -v sgdisk >/dev/null 2>&1; then
+  sgdisk --zap-all "${target_dev}" || true
+fi
+if command -v partprobe >/dev/null 2>&1; then
+  partprobe "${target_dev}" || true
+fi
+if command -v udevadm >/dev/null 2>&1; then
+  udevadm settle || true
+fi
+if [ ! -b "${target_dev}" ]; then
+  echo "[KS] ERROR: target device disappeared after sanitize: ${target_dev}"
+  lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,PKNAME,MODEL,TRAN || true
+  exit 1
+fi
+
+cat > /tmp/partitioning.ks <<EOF
+ignoredisk --only-use=${target_disk}
+zerombr
+clearpart --all --initlabel --drives=${target_disk}
+# Use explicit partitioning instead of autopart to reduce blivet/anaconda
+# edge-case hangs on problematic firmware/metadata combinations.
+# Intentionally no swap LV: RKE2/Kubernetes nodes run with swap disabled by default.
+reqpart --add-boot
+part pv.01 --ondisk=${target_disk} --grow --size=1
+volgroup vg_sys pv.01
+logvol / --vgname=vg_sys --name=lv_root --fstype=xfs --grow --size=10240
+EOF
+
+echo "[KS] wrote /tmp/partitioning.ks:"
+cat /tmp/partitioning.ks
+echo "[KS] pre: disk selection done"
+%end

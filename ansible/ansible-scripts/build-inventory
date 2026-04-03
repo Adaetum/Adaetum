@@ -1,0 +1,439 @@
+#!/bin/sh
+set -eu
+
+root="${1:-/ansible/ansible}"
+out_file="${root}/node-inventory.yml"
+
+tailnet_domain="${TAILSCALE_DOMAIN:-}"
+tailscale_cluster_tag="${TAILSCALE_CLUSTER_TAG:-}"
+tailscale_server_tag="tag:server"
+tailscale_agent_tag="tag:agent"
+tailscale_require_remote_server="${TAILSCALE_REQUIRE_REMOTE_SERVER:-0}"
+tailscale_discovery_timeout="${TAILSCALE_DISCOVERY_TIMEOUT_SECONDS:-0}"
+tailscale_discovery_interval="${TAILSCALE_DISCOVERY_RETRY_INTERVAL_SECONDS:-5}"
+ansible_user="${ANSIBLE_USER:-ansible}"
+ansible_python="${ANSIBLE_PYTHON_INTERPRETER:-/usr/bin/python3}"
+ssh_common_args="${ANSIBLE_SSH_COMMON_ARGS:--o StrictHostKeyChecking=no}"
+ssh_probe_timeout="${TAILSCALE_SSH_PROBE_TIMEOUT_SECONDS:-4}"
+
+local_hostname="$(hostname -s)"
+local_fqdn="$(hostname -f 2>/dev/null || true)"
+ssh_probe_cmd=""
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+write_inventory() {
+  # YAML single-quote escape: ' -> ''
+  yaml_squote() {
+    printf '%s' "${1:-}" | sed "s/'/''/g"
+  }
+
+  printf "all:\n" >"${out_file}"
+  printf "  vars:\n" >>"${out_file}"
+  printf "    ansible_user: '%s'\n" "$(yaml_squote "${ansible_user}")" >>"${out_file}"
+  printf "    ansible_ssh_common_args: '%s'\n" "$(yaml_squote "${ssh_common_args}")" >>"${out_file}"
+  printf "  children:\n" >>"${out_file}"
+  printf "    servers:\n" >>"${out_file}"
+  printf "      hosts:\n" >>"${out_file}"
+  for host in ${server_hosts}; do
+    printf "        %s:\n" "${host}" >>"${out_file}"
+    printf "          ansible_python_interpreter: '%s'\n" "$(yaml_squote "${ansible_python}")" >>"${out_file}"
+    printf "          rke2_role: 'server'\n" >>"${out_file}"
+  done
+  printf "    agents:\n" >>"${out_file}"
+  printf "      hosts:\n" >>"${out_file}"
+  for host in ${agent_hosts}; do
+    printf "        %s:\n" "${host}" >>"${out_file}"
+    printf "          ansible_python_interpreter: '%s'\n" "$(yaml_squote "${ansible_python}")" >>"${out_file}"
+    printf "          rke2_role: 'agent'\n" >>"${out_file}"
+  done
+}
+
+normalize_host() {
+  name="$1"
+  if printf "%s" "${name}" | grep -q '\.'; then
+    printf "%s" "${name}"
+  elif [ -n "${tailnet_domain}" ]; then
+    printf "%s.%s" "${name}" "${tailnet_domain}"
+  else
+    printf "%s" "${name}"
+  fi
+}
+
+is_local_host() {
+  host="${1:-}"
+  short_host="${host%%.*}"
+  if [ "${host}" = "${local_hostname}" ]; then
+    return 0
+  fi
+  if [ -n "${local_fqdn}" ] && [ "${host}" = "${local_fqdn}" ]; then
+    return 0
+  fi
+  if [ "${short_host}" = "${local_hostname}" ]; then
+    return 0
+  fi
+  return 1
+}
+
+count_remote_server_hosts() {
+  count=0
+  for host in ${server_hosts}; do
+    if ! is_local_host "${host}"; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s' "${count}"
+}
+
+probe_remote_server_hosts_for_ssh() {
+  reachable=""
+  unreachable=""
+  local_hosts=""
+  host=""
+
+  for host in ${server_hosts}; do
+    [ -n "${host}" ] || continue
+    if is_local_host "${host}"; then
+      if [ -z "${local_hosts}" ]; then
+        local_hosts="${host}"
+      else
+        local_hosts="${local_hosts} ${host}"
+      fi
+      continue
+    fi
+
+    if [ -z "${ssh_probe_cmd}" ]; then
+      # No probe capability; preserve behavior and keep host eligible.
+      if [ -z "${reachable}" ]; then
+        reachable="${host}"
+      else
+        reachable="${reachable} ${host}"
+      fi
+      continue
+    fi
+
+    if "${ssh_probe_cmd}" \
+      -o BatchMode=yes \
+      -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout="${ssh_probe_timeout}" \
+      "${ansible_user}@${host}" "exit 0" >/dev/null 2>&1; then
+      if [ -z "${reachable}" ]; then
+        reachable="${host}"
+      else
+        reachable="${reachable} ${host}"
+      fi
+    else
+      if [ -z "${unreachable}" ]; then
+        unreachable="${host}"
+      else
+        unreachable="${unreachable} ${host}"
+      fi
+    fi
+  done
+
+  if [ -n "${reachable}" ]; then
+    if [ -n "${local_hosts}" ]; then
+      server_hosts="${reachable} ${local_hosts}"
+    else
+      server_hosts="${reachable}"
+    fi
+  elif is_true "${tailscale_require_remote_server}"; then
+    # In strict join mode, remote servers must be SSH reachable.
+    server_hosts="${local_hosts}"
+  fi
+
+  discovery_remote_server_ssh_reachable_hosts="${reachable}"
+  discovery_remote_server_ssh_unreachable_hosts="${unreachable}"
+}
+
+merge_server_hosts_from_discovery() {
+  # If parser/env edge cases drop SERVER_HOSTS despite discovery reporting
+  # remote server hosts, merge those hosts back into server_hosts.
+  local merged=""
+  local host=""
+  local seen=""
+
+  for host in ${server_hosts} ${discovery_remote_server_online_hosts}; do
+    [ -n "${host}" ] || continue
+    case " ${seen} " in
+      *" ${host} "*) continue ;;
+    esac
+    seen="${seen} ${host}"
+    if [ -z "${merged}" ]; then
+      merged="${host}"
+    else
+      merged="${merged} ${host}"
+    fi
+  done
+
+  server_hosts="${merged}"
+}
+
+server_hosts=""
+agent_hosts=""
+tailscale_cmd=""
+discovery_total_peers="0"
+discovery_remote_server_online="0"
+discovery_remote_server_offline="0"
+discovery_remote_server_online_hosts=""
+discovery_remote_server_offline_hosts=""
+discovery_backend_state=""
+discovery_self_host=""
+discovery_self_tags=""
+discovery_missing_tag_peers="0"
+discovery_online_peers="0"
+discovery_offline_peers="0"
+discovery_dual_role_hosts=""
+discovery_dual_role_count="0"
+discovery_remote_server_ssh_reachable_hosts=""
+discovery_remote_server_ssh_unreachable_hosts=""
+
+if [ -z "${tailscale_cluster_tag}" ]; then
+  echo "TAILSCALE_CLUSTER_TAG is not set; defaulting to local host-only inventory."
+  if [ -n "${local_fqdn}" ]; then
+    server_hosts="${local_fqdn}"
+  else
+    server_hosts="${local_hostname}"
+  fi
+  write_inventory
+  echo "[ansible-runner] wrote ${out_file}"
+  exit 0
+fi
+
+if command -v tailscale >/dev/null 2>&1; then
+  tailscale_cmd="tailscale"
+elif command -v tailscale.exe >/dev/null 2>&1; then
+  tailscale_cmd="tailscale.exe"
+fi
+
+if [ -n "${tailscale_cmd}" ]; then
+  if command -v ssh >/dev/null 2>&1; then
+    ssh_probe_cmd="ssh"
+  elif command -v ssh.exe >/dev/null 2>&1; then
+    ssh_probe_cmd="ssh.exe"
+  fi
+  if [ -z "${ssh_probe_cmd}" ]; then
+    echo "ssh client not found; join candidate SSH reachability probe disabled."
+  fi
+
+  tailscale_deadline=0
+  if [ "${tailscale_discovery_timeout}" -gt 0 ] 2>/dev/null; then
+    tailscale_deadline=$(( $(date +%s) + tailscale_discovery_timeout ))
+  fi
+  tailscale_attempt=1
+  while :; do
+    tailscale_json_tmp="$(mktemp)"
+    "${tailscale_cmd}" status --json >"${tailscale_json_tmp}" 2>/dev/null || true
+    eval "$(
+      TAILSCALE_CLUSTER_TAG="${tailscale_cluster_tag}" \
+      TAILSCALE_DOMAIN="${tailnet_domain}" \
+      TAILSCALE_SERVER_TAG="${tailscale_server_tag}" \
+      TAILSCALE_AGENT_TAG="${tailscale_agent_tag}" \
+      python3 - "${tailscale_json_tmp}" <<'PY'
+import json
+import os
+import sys
+import shlex
+
+def emit_empty():
+    print("SERVER_HOSTS=''")
+    print("AGENT_HOSTS=''")
+    print("DISCOVERY_TOTAL_PEERS='0'")
+    print("DISCOVERY_REMOTE_SERVER_ONLINE='0'")
+    print("DISCOVERY_REMOTE_SERVER_OFFLINE='0'")
+    print("DISCOVERY_REMOTE_SERVER_ONLINE_HOSTS=''")
+    print("DISCOVERY_REMOTE_SERVER_OFFLINE_HOSTS=''")
+    print("DISCOVERY_BACKEND_STATE=''")
+    print("DISCOVERY_SELF_HOST=''")
+    print("DISCOVERY_SELF_TAGS=''")
+    print("DISCOVERY_MISSING_TAG_PEERS='0'")
+    print("DISCOVERY_ONLINE_PEERS='0'")
+    print("DISCOVERY_OFFLINE_PEERS='0'")
+    print("DISCOVERY_DUAL_ROLE_HOSTS=''")
+    print("DISCOVERY_DUAL_ROLE_COUNT='0'")
+
+raw = ""
+if len(sys.argv) > 1:
+    try:
+        with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as handle:
+            raw = handle.read()
+    except OSError:
+        raw = ""
+if not raw.strip():
+    emit_empty()
+    raise SystemExit(0)
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    emit_empty()
+    raise SystemExit(0)
+tailnet_domain = os.environ.get("TAILSCALE_DOMAIN", "")
+cluster_tag = os.environ.get("TAILSCALE_CLUSTER_TAG", "")
+server_tag = os.environ.get("TAILSCALE_SERVER_TAG", "tag:server")
+agent_tag = os.environ.get("TAILSCALE_AGENT_TAG", "tag:agent")
+
+cluster_tag = cluster_tag.strip()
+if cluster_tag and not cluster_tag.startswith("tag:"):
+    cluster_tag = f"tag:{cluster_tag}"
+
+def host_for(entry):
+    dns_name = (entry.get("DNSName") or "").rstrip(".")
+    host_name = entry.get("HostName") or ""
+    if dns_name:
+        return dns_name
+    if host_name and tailnet_domain and "." not in host_name:
+        return f"{host_name}.{tailnet_domain}"
+    return host_name
+
+entries = []
+self_entry = data.get("Self")
+if self_entry:
+    entries.append((self_entry, True))
+for peer in (data.get("Peer") or {}).values():
+    entries.append((peer, False))
+
+servers = []
+agents = []
+seen = set()
+remote_online_servers = []
+remote_offline_servers = []
+missing_tag_peers = 0
+online_peers = 0
+offline_peers = 0
+dual_role_hosts = []
+for entry, is_self in entries:
+    entry_tags = entry.get("Tags") or []
+    if not is_self:
+        if bool(entry.get("Online", False)):
+            online_peers += 1
+        else:
+            offline_peers += 1
+        if not entry_tags:
+            missing_tag_peers += 1
+    if cluster_tag and cluster_tag not in entry_tags:
+        continue
+    if not is_self and (server_tag in entry_tags) and (agent_tag in entry_tags):
+        dual_host = host_for(entry)
+        if dual_host:
+            dual_role_hosts.append(dual_host)
+    if not is_self and (server_tag in entry_tags):
+        host_for_diag = host_for(entry)
+        if host_for_diag:
+            if bool(entry.get("Online", False)):
+                remote_online_servers.append(host_for_diag)
+            else:
+                remote_offline_servers.append(host_for_diag)
+    if not is_self:
+        # Join candidates must be currently online, not merely known peers.
+        if not bool(entry.get("Online", False)):
+            continue
+    host = host_for(entry)
+    if host and host not in seen:
+        seen.add(host)
+        # If both tags are present, treat node as server for join-primary selection.
+        if server_tag in entry_tags:
+            servers.append(host)
+        elif agent_tag in entry_tags:
+            agents.append(host)
+        else:
+            servers.append(host)
+
+# Keep host ordering deterministic regardless of which node generated inventory.
+servers = sorted(servers)
+agents = sorted(agents)
+
+print(f"SERVER_HOSTS={shlex.quote(' '.join(servers))}")
+print(f"AGENT_HOSTS={shlex.quote(' '.join(agents))}")
+print(f"DISCOVERY_TOTAL_PEERS={shlex.quote(str(len(data.get('Peer') or {})))}")
+print(f"DISCOVERY_REMOTE_SERVER_ONLINE={shlex.quote(str(len(remote_online_servers)))}")
+print(f"DISCOVERY_REMOTE_SERVER_OFFLINE={shlex.quote(str(len(remote_offline_servers)))}")
+print(f"DISCOVERY_REMOTE_SERVER_ONLINE_HOSTS={shlex.quote(' '.join(sorted(remote_online_servers)[:15]))}")
+print(f"DISCOVERY_REMOTE_SERVER_OFFLINE_HOSTS={shlex.quote(' '.join(sorted(remote_offline_servers)[:15]))}")
+print(f"DISCOVERY_BACKEND_STATE={shlex.quote(str(data.get('BackendState') or ''))}")
+print(f"DISCOVERY_SELF_HOST={shlex.quote(str(host_for(self_entry) if self_entry else ''))}")
+print(f"DISCOVERY_SELF_TAGS={shlex.quote(' '.join((self_entry.get('Tags') or []) if self_entry else []))}")
+print(f"DISCOVERY_MISSING_TAG_PEERS={shlex.quote(str(missing_tag_peers))}")
+print(f"DISCOVERY_ONLINE_PEERS={shlex.quote(str(online_peers))}")
+print(f"DISCOVERY_OFFLINE_PEERS={shlex.quote(str(offline_peers))}")
+print(f"DISCOVERY_DUAL_ROLE_COUNT={shlex.quote(str(len(dual_role_hosts)))}")
+print(f"DISCOVERY_DUAL_ROLE_HOSTS={shlex.quote(' '.join(sorted(dual_role_hosts)[:15]))}")
+PY
+    )"
+    rm -f "${tailscale_json_tmp}" 2>/dev/null || true
+    discovery_total_peers="${DISCOVERY_TOTAL_PEERS:-0}"
+    discovery_remote_server_online="${DISCOVERY_REMOTE_SERVER_ONLINE:-0}"
+    discovery_remote_server_offline="${DISCOVERY_REMOTE_SERVER_OFFLINE:-0}"
+    discovery_remote_server_online_hosts="${DISCOVERY_REMOTE_SERVER_ONLINE_HOSTS:-}"
+    discovery_remote_server_offline_hosts="${DISCOVERY_REMOTE_SERVER_OFFLINE_HOSTS:-}"
+    discovery_backend_state="${DISCOVERY_BACKEND_STATE:-}"
+    discovery_self_host="${DISCOVERY_SELF_HOST:-}"
+    discovery_self_tags="${DISCOVERY_SELF_TAGS:-}"
+    discovery_missing_tag_peers="${DISCOVERY_MISSING_TAG_PEERS:-0}"
+    discovery_online_peers="${DISCOVERY_ONLINE_PEERS:-0}"
+    discovery_offline_peers="${DISCOVERY_OFFLINE_PEERS:-0}"
+    discovery_dual_role_hosts="${DISCOVERY_DUAL_ROLE_HOSTS:-}"
+    discovery_dual_role_count="${DISCOVERY_DUAL_ROLE_COUNT:-0}"
+    merge_server_hosts_from_discovery
+    probe_remote_server_hosts_for_ssh
+
+    if ! is_true "${tailscale_require_remote_server}"; then
+      break
+    fi
+
+    remote_server_count="$(count_remote_server_hosts)"
+    if [ "${remote_server_count}" -gt 0 ]; then
+      break
+    fi
+
+    if [ "${tailscale_deadline}" -le 0 ]; then
+      break
+    fi
+    now_epoch="$(date +%s)"
+    if [ "${now_epoch}" -ge "${tailscale_deadline}" ]; then
+      echo "Timed out waiting for remote tagged server peers; proceeding with current inventory."
+      echo "Discovery summary: backend_state=${discovery_backend_state:-unknown}, self_host=${discovery_self_host:-unknown}"
+      if [ -n "${discovery_self_tags}" ]; then
+        echo "Discovery summary: self_tags=${discovery_self_tags}"
+      fi
+      echo "Discovery summary: peers=${discovery_total_peers}, online_peers=${discovery_online_peers}, offline_peers=${discovery_offline_peers}, missing_tag_peers=${discovery_missing_tag_peers}"
+      echo "Discovery summary: online_remote_servers=${discovery_remote_server_online}, offline_remote_servers=${discovery_remote_server_offline}"
+      if [ "${discovery_dual_role_count}" -gt 0 ] 2>/dev/null; then
+        echo "Discovery summary: dual_role_hosts=${discovery_dual_role_hosts}"
+      fi
+      if [ -n "${discovery_remote_server_online_hosts}" ]; then
+        echo "Discovery summary: online_remote_server_hosts=${discovery_remote_server_online_hosts}"
+      fi
+      if [ -n "${discovery_remote_server_offline_hosts}" ]; then
+        echo "Discovery summary: offline_remote_server_hosts=${discovery_remote_server_offline_hosts}"
+      fi
+      if [ -n "${discovery_remote_server_ssh_reachable_hosts}" ]; then
+        echo "Discovery summary: ssh_reachable_remote_server_hosts=${discovery_remote_server_ssh_reachable_hosts}"
+      fi
+      if [ -n "${discovery_remote_server_ssh_unreachable_hosts}" ]; then
+        echo "Discovery summary: ssh_unreachable_remote_server_hosts=${discovery_remote_server_ssh_unreachable_hosts}"
+      fi
+      break
+    fi
+
+    echo "No SSH-reachable remote tagged server peers yet (attempt ${tailscale_attempt}); retrying in ${tailscale_discovery_interval}s... backend_state=${discovery_backend_state:-unknown}, peers=${discovery_total_peers}, online_peers=${discovery_online_peers}, missing_tag_peers=${discovery_missing_tag_peers}, online_remote_servers=${discovery_remote_server_online}, offline_remote_servers=${discovery_remote_server_offline}, ssh_reachable_remote_server_hosts='${discovery_remote_server_ssh_reachable_hosts}', ssh_unreachable_remote_server_hosts='${discovery_remote_server_ssh_unreachable_hosts}', effective_server_hosts='${server_hosts}'"
+    sleep "${tailscale_discovery_interval}"
+    tailscale_attempt=$((tailscale_attempt + 1))
+  done
+else
+  echo "tailscale CLI not found; falling back to local hostname."
+  server_hosts="${local_hostname}"
+fi
+
+if [ -z "${server_hosts}" ] && [ -z "${agent_hosts}" ]; then
+  server_hosts="${local_hostname}"
+fi
+
+write_inventory
+echo "Discovery effective inventory hosts: servers='${server_hosts}' agents='${agent_hosts}'"
+echo "[ansible-runner] wrote ${out_file}"

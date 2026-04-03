@@ -1,0 +1,11 @@
+SCRIPT
+
+# Guard against CRLF/template drift breaking first-boot shell parsing.
+sed -i 's/\r$//' /usr/local/sbin/tailscale-firstboot.sh
+if ! bash -n /usr/local/sbin/tailscale-firstboot.sh; then
+  echo "[KS] tailscale-firstboot.sh failed syntax validation" >&2
+  exit 1
+fi
+
+chmod 0700 /usr/local/sbin/tailscale-firstboot.sh
+

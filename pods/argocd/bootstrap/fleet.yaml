@@ -1,0 +1,13 @@
+defaultNamespace: argocd
+helm:
+  releaseName: argocd
+  chart: argo-cd
+  repo: https://argoproj.github.io/argo-helm
+  version: ""
+  values:
+    configs:
+      secret:
+        createSecret: true
+    server:
+      service:
+        type: ClusterIP

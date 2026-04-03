@@ -1,0 +1,3 @@
+---
+# Role variables for os-bootstrap
+os_bootstrap_swap_fstab_regex: '^\\s*[^#].*\\bswap\\b.*$'

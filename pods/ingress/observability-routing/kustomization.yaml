@@ -1,0 +1,73 @@
+resources:
+  - alertmanager-ingress.yaml
+  - alertmanager-public-ingress.yaml
+  - grafana-ingress.yaml
+  - grafana-public-ingress.yaml
+  - prometheus-ingress.yaml
+  - prometheus-public-ingress.yaml
+  - observability-routing-cluster-config.yaml
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.ALERTMANAGER_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: alertmanager-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.ALERTMANAGER_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: alertmanager-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.GRAFANA_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: grafana-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.GRAFANA_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: grafana-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.PROMETHEUS_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: prometheus-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.PROMETHEUS_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: prometheus-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]

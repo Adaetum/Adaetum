@@ -1,0 +1,35 @@
+configs:
+  cm:
+    accounts.readonly: apiKey
+  rbac:
+    policy.csv: "g, readonly, role:readonly"
+  secret:
+    createSecret: true
+{% if argocd_admin_password | length > 0 %}
+    argocdServerAdminPassword: "{{ argocd_admin_password_hash_effective }}"
+{% endif %}
+  params:
+    server.insecure: "true"
+
+server:
+  service:
+    type: ClusterIP
+
+repoServer:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  readinessProbe:
+    initialDelaySeconds: 20
+    timeoutSeconds: 10
+    periodSeconds: 10
+    failureThreshold: 6
+  livenessProbe:
+    initialDelaySeconds: 60
+    timeoutSeconds: 10
+    periodSeconds: 20
+    failureThreshold: 10

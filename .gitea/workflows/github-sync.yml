@@ -1,0 +1,81 @@
+name: Sync Repo To GitHub
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_SYNC_URL: ${{ secrets.GITHUB_SYNC_URL }}
+      GITHUB_SYNC_OWNER: ${{ secrets.GITHUB_SYNC_OWNER }}
+      GITHUB_SYNC_REPO: ${{ secrets.GITHUB_SYNC_REPO }}
+      GITHUB_SYNC_USERNAME: ${{ secrets.GITHUB_SYNC_USERNAME }}
+      GITHUB_SYNC_TOKEN: ${{ secrets.GITHUB_SYNC_TOKEN }}
+      GITHUB_SYNC_BRANCH: ${{ secrets.GITHUB_SYNC_BRANCH }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate sync settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${GITHUB_SYNC_URL:?Missing secret: GITHUB_SYNC_URL}"
+          : "${GITHUB_SYNC_OWNER:?Missing secret: GITHUB_SYNC_OWNER}"
+          : "${GITHUB_SYNC_USERNAME:?Missing secret: GITHUB_SYNC_USERNAME}"
+          : "${GITHUB_SYNC_TOKEN:?Missing secret: GITHUB_SYNC_TOKEN}"
+
+          repo="${GITHUB_SYNC_REPO:-${GITHUB_REPOSITORY#*/}}"
+          branch="${GITHUB_SYNC_BRANCH:-${GITHUB_REF_NAME:-main}}"
+          base_url="${GITHUB_SYNC_URL%/}"
+
+          case "${base_url}" in
+            http://*|https://*) ;;
+            *)
+              echo "GITHUB_SYNC_URL must be an http(s) URL."
+              exit 1
+              ;;
+          esac
+
+          echo "GITHUB_SYNC_REPO=${repo}" >> "${GITHUB_ENV}"
+          echo "GITHUB_SYNC_BRANCH=${branch}" >> "${GITHUB_ENV}"
+          echo "GITHUB_SYNC_BASE_URL=${base_url}" >> "${GITHUB_ENV}"
+
+      - name: Push current branch to GitHub
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp_askpass="$(mktemp)"
+          cat > "${tmp_askpass}" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *sername*) printf '%s\n' "${GIT_ASKPASS_USERNAME:-}" ;;
+            *) printf '%s\n' "${GIT_ASKPASS_PASSWORD:-}" ;;
+          esac
+          SH
+          chmod 0700 "${tmp_askpass}"
+
+          remote_url="${GITHUB_SYNC_BASE_URL}/${GITHUB_SYNC_OWNER}/${GITHUB_SYNC_REPO}.git"
+          git remote remove github-sync >/dev/null 2>&1 || true
+          git remote add github-sync "${remote_url}"
+
+          GIT_ASKPASS="${tmp_askpass}" \
+          GIT_ASKPASS_USERNAME="${GITHUB_SYNC_USERNAME}" \
+          GIT_ASKPASS_PASSWORD="${GITHUB_SYNC_TOKEN}" \
+          GIT_TERMINAL_PROMPT=0 \
+            git push github-sync "HEAD:${GITHUB_SYNC_BRANCH}" --force
+
+          GIT_ASKPASS="${tmp_askpass}" \
+          GIT_ASKPASS_USERNAME="${GITHUB_SYNC_USERNAME}" \
+          GIT_ASKPASS_PASSWORD="${GITHUB_SYNC_TOKEN}" \
+          GIT_TERMINAL_PROMPT=0 \
+            git push github-sync --tags
+
+          git remote remove github-sync >/dev/null 2>&1 || true
+          rm -f "${tmp_askpass}"

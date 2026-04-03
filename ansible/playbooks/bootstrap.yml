@@ -1,0 +1,21 @@
+  # Break-glass host targeting
+- import_playbook: _break_glass.yml
+
+- hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
+  become: true
+  gather_facts: true
+  roles:
+    - os-bootstrap
+
+- import_playbook: platform-bootstrap.yml
+
+- hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
+  become: true
+  gather_facts: true
+  roles:
+    - role: rancher-fleet-argocd
+      # In break-glass bootstrap, Phase 50 owns the Gitea -> Argo handoff.
+      # Starting Fleet GitRepo reconciliation earlier causes the repo to be
+      # applied before Phase 50 completes, which races Gitea bootstrap.
+      fleet_argocd_enabled: "{{ not (break_glass | default(false) | bool) }}"
+    - tailscale-user-sync

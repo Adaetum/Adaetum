@@ -1,0 +1,39 @@
+name: Repo Checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  repo-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+
+      - name: Install checks
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pre-commit jinja2
+
+      - name: Validate Kickstart Source Compiler
+        run: |
+          python3 ./tasks/scripts/compile-kickstarts.py --validate-all --check --self-test
+
+      - name: Run checks
+        run: pre-commit run --all-files

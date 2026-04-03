@@ -1,0 +1,41 @@
+
+# --- Enable SSH ---
+services --enabled=sshd
+
+# --- Grow root filesystem to fill the disk (single-disk installs) ---
+# Rocky's `autopart --type=lvm` will typically consume the whole disk for the PV,
+# but it may leave free space in the VG while the root LV/filesystem stays smaller
+# (e.g. ~70GiB root on a 150GiB virtual disk). Longhorn uses the host filesystem,
+# so this directly impacts available storage.
+%post --nochroot --interpreter=/bin/bash
+set -euo pipefail
+
+target_root="/mnt/sysroot"
+if [ -d "${target_root}" ] && command -v findmnt >/dev/null 2>&1; then
+  root_src="$(findmnt -n -o SOURCE "${target_root}" 2>/dev/null || true)"
+  root_fstype="$(findmnt -n -o FSTYPE "${target_root}" 2>/dev/null || true)"
+
+  # Only attempt to grow when root is an LVM LV and the VG has free extents.
+  if [ -n "${root_src}" ] && command -v lvs >/dev/null 2>&1 && command -v vgs >/dev/null 2>&1; then
+    if lvs --noheadings "${root_src}" >/dev/null 2>&1; then
+      vg="$(lvs --noheadings -o vg_name "${root_src}" | awk '{print $1}')"
+      free_extents="$(vgs --noheadings -o vg_free_count "${vg}" 2>/dev/null | awk '{print $1}')"
+      free_extents="${free_extents:-0}"
+
+      if [ -n "${vg}" ] && [ "${free_extents}" -gt 0 ]; then
+        {
+          echo "[BOOTSTRAP] Growing root LV to fill disk (root=${root_src}, vg=${vg}, free_extents=${free_extents}, fstype=${root_fstype})"
+        } >>"${target_root}/root/bootstrap-post.log" 2>/dev/null || true
+
+        # Extend LV to consume all free extents, then grow the filesystem.
+        lvextend -l +100%FREE "${root_src}" >/dev/null 2>&1 || true
+        case "${root_fstype}" in
+          xfs)  xfs_growfs "${target_root}" >/dev/null 2>&1 || true ;;
+          ext4) resize2fs "${root_src}" >/dev/null 2>&1 || true ;;
+          *) : ;;
+        esac
+      fi
+    fi
+  fi
+fi
+%end

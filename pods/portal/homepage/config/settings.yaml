@@ -1,0 +1,26 @@
+title: Cluster Portal
+headerStyle: boxedWidgets
+statusStyle: "dot"
+target: _self
+quicklaunch:
+  searchDescriptions: true
+  hideInternetSearch: true
+layout:
+  GitOps and Source of Truth:
+    style: row
+    columns: 2
+  Secrets, Identity, and Policy:
+    style: row
+    columns: 2
+  Cluster Foundation:
+    style: row
+    columns: 2
+  Observability, Portal, and Automation:
+    style: row
+    columns: 2
+  Networking and Edge Access:
+    style: row
+    columns: 2
+providers:
+  longhorn:
+    url: http://longhorn-frontend.longhorn-system.svc.cluster.local

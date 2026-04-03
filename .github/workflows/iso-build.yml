@@ -1,0 +1,335 @@
+name: Build and Publish ISOs
+
+on:
+  workflow_dispatch:
+    inputs:
+      ks_template_file_name:
+        description: "Optional kickstart template file name (leave empty to build all enabled kickstarts from ks-src manifests)"
+        type: string
+        default: ""
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths:
+      - ".github/workflows/iso-build.yml"
+      - "ks-src/**"
+      - "tasks/ks.yml"
+      - "tasks/scripts/compile-kickstarts.py"
+      - "Taskfile.yml"
+      - ".env.template"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/iso-build.yml"
+      - "ks-src/**"
+      - "tasks/ks.yml"
+      - "tasks/scripts/compile-kickstarts.py"
+      - "Taskfile.yml"
+      - ".env.template"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  prepare-matrix:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    outputs:
+      templates: ${{ steps.matrix.outputs.templates }}
+      variants: ${{ steps.matrix.outputs.variants }}
+      arches: ${{ steps.matrix.outputs.arches }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build matrix
+        id: matrix
+        run: |
+          set -euo pipefail
+          input_ks="${{ inputs.ks_template_file_name }}"
+          if [ -n "${input_ks}" ]; then
+            templates_json="$(python3 -c 'import json,os; name=os.environ["INPUT_KS"]; print(json.dumps([{"ks_template_file_name": name}]))')"
+          else
+            templates_json="$(python3 -c $'import json\nfrom pathlib import Path\n\ntemplates = []\nfor path in sorted(Path(\"ks-src/manifests\").glob(\"*.json\")):\n    data = json.loads(path.read_text(encoding=\"utf-8\"))\n    if not data.get(\"enabled\", True):\n        continue\n    if data.get(\"installer_type\") != \"kickstart\":\n        continue\n    output = (data.get(\"output\") or \"\").strip()\n    if not output:\n        continue\n    templates.append({\"ks_template_file_name\": Path(output).name})\nprint(json.dumps(templates))')"
+          fi
+
+          variants_json="$(python3 -c 'import json; variants=[{"name":"embedded-selector","embed_repo":"1","breakglass":"0","role":"server"}]; print(json.dumps(variants))')"
+          arches_json="$(python3 -c 'import json; print(json.dumps([{"arch":"aarch64"},{"arch":"x86_64"}]))')"
+
+          echo "templates=${templates_json}" >> "$GITHUB_OUTPUT"
+          echo "variants=${variants_json}" >> "$GITHUB_OUTPUT"
+          echo "arches=${arches_json}" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_KS: ${{ inputs.ks_template_file_name }}
+
+  build-iso:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    needs: [prepare-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        ks_template: ${{ fromJSON(needs.prepare-matrix.outputs.templates) }}
+        variant: ${{ fromJSON(needs.prepare-matrix.outputs.variants) }}
+        arch: ${{ fromJSON(needs.prepare-matrix.outputs.arches) }}
+    environment: Prod
+    permissions:
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: true
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      KS_BASE_URL: ${{ secrets.KS_BASE_URL }}
+      KS_SHARED_TOKEN: ${{ secrets.KS_SHARED_TOKEN }}
+      BOOTSTRAP_RUNTIME_ENV_CACHE_BUSTER: ${{ secrets.BOOTSTRAP_RUNTIME_ENV_CACHE_BUSTER }}
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+      TAILSCALE_OAUTH_CLIENT_SECRET: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
+      TAILSCALE_OAUTH_TTL: ${{ secrets.TAILSCALE_OAUTH_TTL }}
+      TAILSCALE_DOMAIN: ${{ secrets.TAILSCALE_DOMAIN }}
+      TAILSCALE_CLUSTER_TAG: ${{ secrets.TAILSCALE_CLUSTER_TAG }}
+      ANSIBLE_RUNNER_IMAGE: ${{ secrets.ANSIBLE_RUNNER_IMAGE }}
+      K3S_COREDNS_FORWARDERS: ${{ secrets.K3S_COREDNS_FORWARDERS }}
+      ARGOCD_GITHUB_REPO_URL: ${{ secrets.ARGOCD_GITHUB_REPO_URL }}
+      ARGOCD_GITHUB_REPO_BRANCH: ${{ secrets.ARGOCD_GITHUB_REPO_BRANCH }}
+      ARGOCD_GITHUB_USERNAME: ${{ secrets.ARGOCD_GITHUB_USERNAME }}
+      ARGOCD_GITHUB_TOKEN: ${{ secrets.ARGOCD_GITHUB_TOKEN }}
+      MONOREPO_GITHUB_APP_ID: ${{ secrets.MONOREPO_GITHUB_APP_ID }}
+      MONOREPO_GITHUB_APP_INSTALLATION_ID: ${{ secrets.MONOREPO_GITHUB_APP_INSTALLATION_ID }}
+      MONOREPO_GITHUB_APP_PRIVATE_KEY_B64: ${{ secrets.MONOREPO_GITHUB_APP_PRIVATE_KEY_B64 }}
+      GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
+      GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
+      GITHUB_APP_PRIVATE_KEY_B64: ${{ secrets.GITHUB_APP_PRIVATE_KEY_B64 }}
+      RANCHER_PUBLIC_DOMAIN: ${{ secrets.RANCHER_PUBLIC_DOMAIN }}
+      RANCHER_CLOUDFLARED_TUNNEL_TOKEN: ${{ secrets.RANCHER_CLOUDFLARED_TUNNEL_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache pip
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/iso-build.yml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso isomd5sum rsync python3-pip
+          python3 -m pip install --upgrade pip
+          python3 -m pip install awscli jinja2
+
+      - name: Validate generated kickstarts
+        run: |
+          python3 ./tasks/scripts/compile-kickstarts.py --validate-all
+
+      - name: Resolve KS template + golden ISO key
+        id: resolve-ks
+        run: |
+          set -euo pipefail
+          mkdir -p dist/ks-templates
+          ks_template_file_name="${{ matrix.ks_template.ks_template_file_name }}"
+          manifest_name="${ks_template_file_name%.ks}"
+          python3 ./tasks/scripts/compile-kickstarts.py --manifest "${manifest_name}" >/dev/null
+          ks_path="dist/ks-templates/${ks_template_file_name}"
+          if [ ! -f "${ks_path}" ]; then
+            echo "Missing rendered KS file: ${ks_path}"
+            exit 1
+          fi
+          golden_key="$(grep -E '^# GOLDEN_ISO_KEY=' "${ks_path}" | head -n1 | cut -d= -f2- | tr -d '\r')"
+          if [ -z "${golden_key}" ]; then
+            echo "Missing GOLDEN_ISO_KEY in ${ks_path}"
+            exit 1
+          fi
+          os_tag=""
+          case "${ks_template_file_name}" in
+            rocky10.ks) os_tag="tag:rocky10" ;;
+            ubuntu2404.ks) os_tag="tag:ubuntu2404" ;;
+          esac
+          if [ -z "${os_tag}" ]; then
+            echo "Unable to derive OS tag from ${ks_template_file_name}"
+            exit 1
+          fi
+          os_prefix="${os_tag#tag:}"
+          golden_key="${golden_key#/}"
+          selected_arch="${{ matrix.arch.arch }}"
+          if [ -n "${selected_arch}" ]; then
+            golden_key="$(printf '%s' "${golden_key}" | sed -E "s/(aarch64|x86_64)/${selected_arch}/g")"
+          fi
+          case "${golden_key}" in
+            */*) : ;;
+            *) golden_key="${os_prefix}/${golden_key}" ;;
+          esac
+          echo "ks_template_file_name=${ks_template_file_name}" >> "$GITHUB_OUTPUT"
+          echo "golden_iso_key=${golden_key}" >> "$GITHUB_OUTPUT"
+          echo "selected_arch=${selected_arch}" >> "$GITHUB_OUTPUT"
+          echo "os_tag=${os_tag}" >> "$GITHUB_OUTPUT"
+          echo "os_prefix=${os_prefix}" >> "$GITHUB_OUTPUT"
+          echo "R2_GOLDEN_ISO_KEY=${golden_key}" >> "$GITHUB_ENV"
+
+      - name: Install go-task
+        run: |
+          set -euo pipefail
+          curl -sSL https://taskfile.dev/install.sh | sh -s -- -d -b /usr/local/bin
+          task --version
+
+      - name: Restore golden ISO cache
+        id: cache-golden
+        uses: actions/cache@v5
+        with:
+          path: .cache/iso-cache
+          key: golden-iso-${{ steps.resolve-ks.outputs.golden_iso_key }}
+          restore-keys: |
+            golden-iso-
+
+      - name: Resolve golden ISO path
+        run: |
+          set -euo pipefail
+          iso_name="$(basename "${R2_GOLDEN_ISO_KEY}")"
+          iso_path=".cache/iso-cache/${iso_name}"
+          echo "ISO_PATH=${iso_path}" >> "$GITHUB_ENV"
+          echo "ISO_NAME=${iso_name}" >> "$GITHUB_ENV"
+          echo "ISO_PATH=${iso_path}" >> "$GITHUB_OUTPUT"
+          echo "ISO_NAME=${iso_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Download golden ISO (if missing)
+        run: |
+          set -euo pipefail
+          default_endpoint="https://f9e9e9ed2d5b7b6d6bc08f3924822b61.r2.cloudflarestorage.com"
+          default_bucket="iso"
+          endpoint="$(printf '%s' "${R2_ENDPOINT}" | tr -d '\r\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^\x27(.*)\x27$/\1/')"
+          bucket="$(printf '%s' "${R2_BUCKET}" | tr -d '\r\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^\x27(.*)\x27$/\1/')"
+          if [ -z "${endpoint}" ] || [ -z "${bucket}" ] || [ -z "${R2_GOLDEN_ISO_KEY}" ]; then
+            echo "Missing required R2 settings (R2_ENDPOINT, R2_BUCKET, R2_GOLDEN_ISO_KEY). Check Prod environment secrets."
+            exit 1
+          fi
+          if ! printf '%s' "${endpoint}" | grep -Eq '^https?://[^[:space:]]+$'; then
+            endpoint="${default_endpoint}"
+            echo "Warning: R2_ENDPOINT format check failed; using default endpoint fallback."
+          fi
+          if ! printf '%s' "${bucket}" | grep -Eq '^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])?$'; then
+            bucket="${default_bucket}"
+            echo "Warning: R2_BUCKET format check failed; using default bucket fallback."
+          fi
+          echo "R2_ENDPOINT=${endpoint}" >> "$GITHUB_ENV"
+          echo "R2_BUCKET=${bucket}" >> "$GITHUB_ENV"
+          mkdir -p .cache/iso-cache
+          if [ -f "${ISO_PATH}" ]; then
+            echo "Using cached golden ISO at ${ISO_PATH}"
+          else
+            set +e
+            cp_output="$(aws s3 cp \
+              "s3://${bucket}/${R2_GOLDEN_ISO_KEY}" \
+              "${ISO_PATH}" \
+              --endpoint-url "${endpoint}" 2>&1)"
+            cp_rc=$?
+            set -e
+            if [ "${cp_rc}" -ne 0 ]; then
+              echo "${cp_output}"
+              if printf '%s' "${cp_output}" | grep -Eqi 'NoSuchKey|404|Not Found|not exist'; then
+                echo "Warning: golden ISO object missing: s3://${bucket}/${R2_GOLDEN_ISO_KEY}"
+                echo "ISO_MISSING=1" >> "$GITHUB_ENV"
+              else
+                echo "Failed to download golden ISO for reasons other than missing object."
+                exit "${cp_rc}"
+              fi
+            fi
+          fi
+
+      - name: Build ISO variant
+        if: env.ISO_MISSING != '1'
+        run: |
+          set -u
+          mkdir -p dist/iso-out dist/ks-out .cache/ks-env
+          ks_template_file_name="${{ steps.resolve-ks.outputs.ks_template_file_name }}"
+          os_tag="${{ steps.resolve-ks.outputs.os_tag }}"
+          os_prefix="${{ steps.resolve-ks.outputs.os_prefix }}"
+          ks_src_dir="dist/ks-templates"
+          if [ ! -d "${ks_src_dir}" ]; then
+            echo "Missing KS source dir: ${ks_src_dir}"
+            exit 1
+          fi
+          ks_file="${ks_src_dir}/${ks_template_file_name}"
+          if [ ! -f "${ks_file}" ]; then
+            echo "Missing KS file: ${ks_file}"
+            exit 1
+          fi
+
+          variant_name="${{ matrix.variant.name }}-${ks_template_file_name%%.ks}"
+          variant_embed="${{ matrix.variant.embed_repo }}"
+          variant_embed_ks="1"
+          if [ "${{ matrix.variant.name }}" = "remote-ks" ]; then
+            variant_embed_ks="0"
+          fi
+          variant_breakglass="${{ matrix.variant.breakglass }}"
+          variant_role="${{ matrix.variant.role }}"
+
+          env_file=".cache/ks-env/${variant_name}.env"
+          ks_base_url="${KS_BASE_URL%/}"
+          ks_file_url=""
+          ks_log_url=""
+          if [ -n "${ks_base_url}" ]; then
+            ks_file_url="${ks_base_url}/iso/${ks_template_file_name%%.ks}-${variant_role}.ks"
+            ks_log_url="${ks_base_url}/logs"
+          fi
+          if [ -n "${KS_SHARED_TOKEN}" ]; then
+            if [ -n "${ks_file_url}" ]; then
+              ks_file_url="${ks_file_url}?token=${KS_SHARED_TOKEN}"
+            fi
+          fi
+          printf '%s\n' \
+            "TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}" \
+            "TAILSCALE_OAUTH_TTL=${TAILSCALE_OAUTH_TTL}" \
+            "TAILSCALE_ADVERTISE_TAGS=${os_tag}" \
+            "TAILSCALE_DOMAIN=${TAILSCALE_DOMAIN}" \
+            "TAILSCALE_NODE_ROLE=${variant_role}" \
+            "TAILSCALE_CLUSTER_TAG=${TAILSCALE_CLUSTER_TAG}" \
+            "KS_FILE_URL=${ks_file_url}" \
+            "KS_LOG_URL=${ks_log_url}" \
+            "KS_SHARED_TOKEN=${KS_SHARED_TOKEN}" \
+            "KS_BREAKGLASS=${variant_breakglass}" \
+            "KS_EMBED_REPO=${variant_embed}" \
+            "ANSIBLE_RUNNER_IMAGE=${ANSIBLE_RUNNER_IMAGE}" \
+            "K3S_COREDNS_FORWARDERS=${K3S_COREDNS_FORWARDERS}" \
+            "ARGOCD_GITHUB_REPO_URL=${ARGOCD_GITHUB_REPO_URL}" \
+            "ARGOCD_GITHUB_REPO_BRANCH=${ARGOCD_GITHUB_REPO_BRANCH}" \
+            "ARGOCD_GITHUB_USERNAME=${ARGOCD_GITHUB_USERNAME}" \
+            "MONOREPO_GITHUB_APP_ID=${MONOREPO_GITHUB_APP_ID}" \
+            "MONOREPO_GITHUB_APP_INSTALLATION_ID=${MONOREPO_GITHUB_APP_INSTALLATION_ID}" \
+            "GITHUB_APP_ID=${GITHUB_APP_ID}" \
+            "GITHUB_APP_INSTALLATION_ID=${GITHUB_APP_INSTALLATION_ID}" \
+            "RANCHER_PUBLIC_DOMAIN=${RANCHER_PUBLIC_DOMAIN}" \
+            > "${env_file}"
+
+          iso_out="dist/iso-out/${ISO_NAME%.iso}-${variant_name}.iso"
+          KS_ENV="${env_file}" \
+            KS_SRC_DIR="${ks_src_dir}" \
+            KS_OUT_DIR="dist/ks-out/${variant_name}" \
+            ISO_PATH="${ISO_PATH}" \
+            ISO_OUT="${iso_out}" \
+            ISO_ROLE_SELECTOR=1 \
+            ISO_BUILD_VALIDATE=1 \
+            ISO_VALIDATE_PATH="${iso_out}" \
+            ISO_INSTALL_VALIDATE=0 \
+          KS_EMBED_KS="${variant_embed_ks}" \
+          KS_FILE_URL="${ks_file_url}" \
+          KS_TEMPLATE_FILE_NAME="${ks_template_file_name}" \
+            task iso:build:external
+
+          aws s3 cp "${iso_out}" \
+            "s3://${R2_BUCKET}/${os_prefix}/${ISO_NAME%.iso}-${variant_name}.iso" \
+            --endpoint-url "${R2_ENDPOINT}"
+
+      - name: Skip matrix leg when golden ISO is unavailable
+        if: env.ISO_MISSING == '1'
+        run: |
+          echo "Skipping build for ${R2_GOLDEN_ISO_KEY}; source golden ISO is unavailable."

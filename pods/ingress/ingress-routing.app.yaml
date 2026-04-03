@@ -1,0 +1,65 @@
+name: ingress-routing
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "10"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/ingress
+ignore_differences:
+  - group: networking.k8s.io
+    kind: Ingress
+    jqPathExpressions:
+      - '.metadata.annotations."argocd.argoproj.io/tracking-id"'
+      - '.metadata.annotations."field.cattle.io/publicEndpoints"'
+      - '.metadata.annotations."kubectl.kubernetes.io/last-applied-configuration"'
+      - '.status'
+  - group: apps
+    kind: Deployment
+    name: external-dns
+    namespace: ingress
+    jsonPointers:
+      - /metadata/annotations/argocd.argoproj.io~1tracking-id
+      - /metadata/annotations/deployment.kubernetes.io~1revision
+      - /metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+      - /spec/progressDeadlineSeconds
+      - /spec/revisionHistoryLimit
+      - /spec/strategy
+      - /spec/template/spec/dnsPolicy
+      - /spec/template/spec/restartPolicy
+      - /spec/template/spec/schedulerName
+      - /spec/template/spec/serviceAccount
+      - /spec/template/spec/terminationGracePeriodSeconds
+      - /spec/template/spec/containers/0/terminationMessagePath
+      - /spec/template/spec/containers/0/terminationMessagePolicy
+      - /status
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: external-dns
+    jsonPointers:
+      - /metadata/annotations/argocd.argoproj.io~1tracking-id
+      - /metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRoleBinding
+    name: external-dns
+    jsonPointers:
+      - /metadata/annotations/argocd.argoproj.io~1tracking-id
+      - /metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+  - group: ""
+    kind: ServiceAccount
+    name: external-dns
+    namespace: ingress
+    jsonPointers:
+      - /automountServiceAccountToken
+      - /imagePullSecrets
+      - /secrets
+  - group: ""
+    kind: ConfigMap
+    name: rke2-ingress-nginx-controller
+    namespace: kube-system
+    jsonPointers:
+      - /metadata/annotations
+      - /metadata/labels
+destination_namespace: ingress
+sync_options:
+  - Prune=false
+  - RespectIgnoreDifferences=true

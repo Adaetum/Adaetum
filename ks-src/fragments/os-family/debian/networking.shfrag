@@ -1,0 +1,3 @@
+os_family_default_network_wait_cmd() {
+  printf 'ip route'
+}

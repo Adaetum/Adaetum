@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ansible-runner
+  namespace: ansible
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ansible-runner
+  template:
+    metadata:
+      labels:
+        app: ansible-runner
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      imagePullSecrets:
+        - name: gitea-registry-creds
+      containers:
+        - name: ansible-runner
+          image: registry.cluster-duck.cloud/gitea-admin/ansible-runner:latest
+          imagePullPolicy: Always
+          env:
+            - name: CRON_SCHEDULE
+              value: "*/10 * * * *"
+            - name: ANSIBLE_PLAYBOOK
+              value: "playbooks/bootstrap.yml"
+            - name: ANSIBLE_INVENTORY
+              value: "node-inventory.yml"
+            - name: ANSIBLE_EXTRA_ARGS
+              value: ""
+            - name: TAILSCALE_DOMAIN
+              value: "example.ts.net"
+            - name: TAILSCALE_CLUSTER_TAG
+              value: "tag:cluster"
+          volumeMounts:
+            - name: ansible-data
+              mountPath: /ansible
+      volumes:
+        - name: ansible-data
+          hostPath:
+            path: /opt/ansible-runner
+            type: Directory

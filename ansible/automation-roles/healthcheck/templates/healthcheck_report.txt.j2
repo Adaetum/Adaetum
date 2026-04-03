@@ -1,0 +1,35 @@
+Healthcheck report
+==================
+
+Timestamp: {{ ansible_date_time.iso8601 | default('n/a') }}
+Hostname: {{ health_hostname.stdout | default('n/a') }}
+Uptime: {{ health_uptime.stdout | default('n/a') }}
+Load: {{ health_load.stdout | default('n/a') }}
+CPU cores: {{ health_cpu_cores.stdout | default('n/a') }}
+Disk:
+{% for line in health_disk.stdout_lines | default([]) %}
+  {{ line }}
+{% endfor %}
+Inodes:
+{% for line in health_inodes.stdout_lines | default([]) %}
+  {{ line }}
+{% endfor %}
+Disk free (GB): {{ health_disk_free_gb | default('n/a') }}
+Memory:
+{% for line in health_memory.stdout_lines | default([]) %}
+  {{ line }}
+{% endfor %}
+Time sync: {{ health_time_sync.stdout | default('n/a') }}
+DNS: {{ health_dns.stdout | default('n/a') }}
+Ping rc: {{ health_ping.rc | default('n/a') }}
+Tailscale:
+{{ health_tailscale.stdout | default('n/a') }}
+Kube health: {{ health_kube.stdout | default('n/a') }}
+
+Log matches:
+{% for svc, lines in (health_log_matches | default({})).items() %}
+- {{ svc }}:
+{% for line in lines %}
+  {{ line }}
+{% endfor %}
+{% endfor %}

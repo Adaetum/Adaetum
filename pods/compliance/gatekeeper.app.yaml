@@ -1,0 +1,38 @@
+name: gatekeeper
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-19"
+source_type: helm
+source_repo_url: https://open-policy-agent.github.io/gatekeeper/charts
+source_chart: gatekeeper
+source_target_revision: "3.20.0"
+source_helm_skip_crds: true
+sync_options:
+  - RespectIgnoreDifferences=true
+source_helm_values: |
+  # Keep Gatekeeper deterministic under GitOps. Do not track an unbounded chart
+  # range during bootstrap or Argo may drift to a new chart behavior unexpectedly.
+
+  # Gatekeeper is healthy in-cluster, but the chart's namespace-label hook job
+  # is failing under Argo CD and leaves the Application degraded. Disable the
+  # post-install/post-upgrade labeling jobs and manage the exemption label
+  # explicitly if needed.
+  postInstall:
+    labelNamespace:
+      enabled: false
+  postUpgrade:
+    labelNamespace:
+      enabled: false
+
+  # Fresh installs do not need the CRD upgrade hook job. Under Argo CD this
+  # hook can leave the Application stuck waiting on gatekeeper-update-crds-hook
+  # even though no Gatekeeper resources have been applied yet.
+  upgradeCRDs:
+    enabled: false
+
+  # This chart can also create a ResourceQuota for critical-priority pods in the
+  # gatekeeper namespace. We do not need that quota in this cluster, and Argo
+  # should not remain OutOfSync on a chart-managed quota that isn't actually
+  # present in-cluster.
+  resourceQuota: false
+destination_namespace: gatekeeper-system

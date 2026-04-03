@@ -1,0 +1,41 @@
+---
+# Default variables for os-bootstrap
+os_bootstrap_packages:
+  - curl
+  - vim
+  - jq
+  - git
+  - ca-certificates
+  - chrony
+  - iscsi-initiator-utils
+  - nfs-utils
+  - cryptsetup
+
+os_bootstrap_services:
+  - chronyd
+  - iscsid
+
+os_bootstrap_disable_swap: true
+os_bootstrap_manage_fstab: true
+os_bootstrap_manage_networkmanager_wired: true
+os_bootstrap_network_connection_prefix: "ks-ipv4-"
+os_bootstrap_network_autoconnect_priority: 100
+
+# Kernel modules required for Kubernetes networking and storage.
+os_bootstrap_kernel_modules:
+  - br_netfilter
+  - overlay
+  - dm_crypt
+
+# Sysctl defaults needed for pod networking on RHEL/Rocky.
+os_bootstrap_sysctl:
+  - name: net.ipv4.ip_forward
+    value: "1"
+  - name: net.bridge.bridge-nf-call-iptables
+    value: "1"
+  - name: net.bridge.bridge-nf-call-ip6tables
+    value: "1"
+  - name: net.ipv4.conf.all.rp_filter
+    value: "0"
+  - name: net.ipv4.conf.default.rp_filter
+    value: "0"

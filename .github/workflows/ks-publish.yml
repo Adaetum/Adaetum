@@ -1,0 +1,197 @@
+name: Publish Kickstart Files
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths:
+      - "ks-src/**"
+      - "tasks/ks.yml"
+      - "tasks/scripts/compile-kickstarts.py"
+      - "Taskfile.yml"
+      - ".env.template"
+      - ".github/workflows/ks-publish.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ks-src/**"
+      - "tasks/ks.yml"
+      - "tasks/scripts/compile-kickstarts.py"
+      - "Taskfile.yml"
+      - ".env.template"
+      - ".github/workflows/ks-publish.yml"
+
+jobs:
+  publish-ks:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    environment: Prod
+    permissions:
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: true
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      KS_BASE_URL: ${{ secrets.KS_BASE_URL }}
+      KS_SHARED_TOKEN: ${{ secrets.KS_SHARED_TOKEN }}
+      BOOTSTRAP_RUNTIME_ENV_CACHE_BUSTER: ${{ secrets.BOOTSTRAP_RUNTIME_ENV_CACHE_BUSTER }}
+      GITHUB_SYNC_TOKEN: ${{ secrets.GITHUB_SYNC_TOKEN }}
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+      TAILSCALE_OAUTH_CLIENT_SECRET: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
+      TAILSCALE_OAUTH_TTL: ${{ secrets.TAILSCALE_OAUTH_TTL }}
+      TAILSCALE_DOMAIN: ${{ secrets.TAILSCALE_DOMAIN }}
+      TAILSCALE_CLUSTER_TAG: ${{ secrets.TAILSCALE_CLUSTER_TAG }}
+      ANSIBLE_RUNNER_IMAGE: ${{ secrets.ANSIBLE_RUNNER_IMAGE }}
+      K3S_COREDNS_FORWARDERS: ${{ secrets.K3S_COREDNS_FORWARDERS }}
+      ARGOCD_GITHUB_REPO_URL: ${{ secrets.ARGOCD_GITHUB_REPO_URL }}
+      ARGOCD_GITHUB_REPO_BRANCH: ${{ secrets.ARGOCD_GITHUB_REPO_BRANCH }}
+      ARGOCD_GITHUB_USERNAME: ${{ secrets.ARGOCD_GITHUB_USERNAME }}
+      ARGOCD_GITHUB_TOKEN: ${{ secrets.ARGOCD_GITHUB_TOKEN }}
+      GITEA_SEED_SOURCE_USERNAME: ${{ secrets.GITEA_SEED_SOURCE_USERNAME }}
+      GITEA_SEED_SOURCE_TOKEN: ${{ secrets.GITEA_SEED_SOURCE_TOKEN }}
+      GITEA_PUSH_MIRROR_ENABLED: ${{ secrets.GITEA_PUSH_MIRROR_ENABLED }}
+      GITEA_PUSH_MIRROR_REPO_URL: ${{ secrets.GITEA_PUSH_MIRROR_REPO_URL }}
+      GITEA_PUSH_MIRROR_USERNAME: ${{ secrets.GITEA_PUSH_MIRROR_USERNAME }}
+      GITEA_PUSH_MIRROR_TOKEN: ${{ secrets.GITEA_PUSH_MIRROR_TOKEN }}
+      MONOREPO_GITHUB_APP_ID: ${{ secrets.MONOREPO_GITHUB_APP_ID }}
+      MONOREPO_GITHUB_APP_INSTALLATION_ID: ${{ secrets.MONOREPO_GITHUB_APP_INSTALLATION_ID }}
+      MONOREPO_GITHUB_APP_PRIVATE_KEY_B64: ${{ secrets.MONOREPO_GITHUB_APP_PRIVATE_KEY_B64 }}
+      GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
+      GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
+      GITHUB_APP_PRIVATE_KEY_B64: ${{ secrets.GITHUB_APP_PRIVATE_KEY_B64 }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ZONE_API_TOKEN: ${{ secrets.CLOUDFLARE_ZONE_API_TOKEN }}
+      ANSIBLE_RUNNER_HTTP_TOKEN: ${{ secrets.ANSIBLE_RUNNER_HTTP_TOKEN }}
+      ANSIBLE_RUNNER_DEPLOY_KEY_B64: ${{ secrets.ANSIBLE_RUNNER_DEPLOY_KEY_B64 }}
+      BOOTSTRAP_BACKUP_PASSPHRASE: ${{ secrets.BOOTSTRAP_BACKUP_PASSPHRASE }}
+      BOOTSTRAP_BACKUP_PASSPHRASE_B64: ${{ secrets.BOOTSTRAP_BACKUP_PASSPHRASE_B64 }}
+      RANCHER_ADMIN_PASSWORD: ${{ secrets.RANCHER_ADMIN_PASSWORD }}
+      BOOTSTRAP_DEBUG_PASSWORD: ${{ secrets.BOOTSTRAP_DEBUG_PASSWORD }}
+      BOOTSTRAP_DEBUG_PASSWORD_HASH: ${{ secrets.BOOTSTRAP_DEBUG_PASSWORD_HASH }}
+      BOOTSTRAP_DEBUG_SSH_KEY: ${{ secrets.BOOTSTRAP_DEBUG_SSH_KEY }}
+      RANCHER_PUBLIC_DOMAIN: ${{ secrets.RANCHER_PUBLIC_DOMAIN }}
+      RANCHER_CLOUDFLARED_TUNNEL_TOKEN: ${{ secrets.RANCHER_CLOUDFLARED_TUNNEL_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache pip
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/ks-publish.yml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          python3 -m pip install --upgrade pip
+          python3 -m pip install awscli jinja2
+
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+
+      - name: Validate generated kickstarts
+        run: |
+          python3 ./tasks/scripts/compile-kickstarts.py --validate-all
+
+      - name: Validate R2 settings
+        run: |
+          set -euo pipefail
+          default_endpoint="https://f9e9e9ed2d5b7b6d6bc08f3924822b61.r2.cloudflarestorage.com"
+          default_bucket="iso"
+          endpoint="$(printf '%s' "${R2_ENDPOINT}" | tr -d '\r\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^\x27(.*)\x27$/\1/')"
+          bucket="$(printf '%s' "${R2_BUCKET}" | tr -d '\r\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^\x27(.*)\x27$/\1/')"
+          if [ -z "${endpoint}" ] || [ -z "${bucket}" ]; then
+            echo "Missing required R2 settings (R2_ENDPOINT, R2_BUCKET). Check Prod environment secrets."
+            exit 1
+          fi
+          if ! printf '%s' "${endpoint}" | grep -Eq '^https?://[^[:space:]]+$'; then
+            endpoint="${default_endpoint}"
+            echo "Warning: R2_ENDPOINT format check failed; using default endpoint fallback."
+          fi
+          if ! printf '%s' "${bucket}" | grep -Eq '^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])?$'; then
+            bucket="${default_bucket}"
+            echo "Warning: R2_BUCKET format check failed; using default bucket fallback."
+          fi
+          echo "R2_ENDPOINT=${endpoint}" >> "$GITHUB_ENV"
+          echo "R2_BUCKET=${bucket}" >> "$GITHUB_ENV"
+
+      - name: Render and publish KS files
+        run: |
+          set -euo pipefail
+          mkdir -p dist/ks-env dist/ks-publish
+
+          render_one() {
+            local os_file="$1"
+            local role="$2"
+            local ks_name="${os_file}.ks"
+            local out_name="${os_file}-${role}.ks"
+            local env_file="dist/ks-env/${os_file}-${role}.env"
+            local os_tag=""
+            case "${os_file}" in
+              rocky9) os_tag="tag:rocky9" ;;
+              rocky10) os_tag="tag:rocky10" ;;
+              ubuntu2404) os_tag="tag:ubuntu2404" ;;
+            esac
+            local log_url=""
+            if [ -n "${KS_BASE_URL}" ]; then
+              log_url="${KS_BASE_URL%/}/logs"
+            fi
+
+            printf '%s\n' \
+              "TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}" \
+              "TAILSCALE_OAUTH_TTL=${TAILSCALE_OAUTH_TTL}" \
+              "TAILSCALE_ADVERTISE_TAGS=${os_tag}" \
+              "TAILSCALE_DOMAIN=${TAILSCALE_DOMAIN}" \
+              "TAILSCALE_NODE_ROLE=${role}" \
+              "TAILSCALE_CLUSTER_TAG=${TAILSCALE_CLUSTER_TAG}" \
+              "KS_SHARED_TOKEN=${KS_SHARED_TOKEN}" \
+              "KS_BREAKGLASS=0" \
+              "KS_EMBED_REPO=0" \
+              "KS_LOG_URL=${log_url}" \
+              "ANSIBLE_RUNNER_IMAGE=${ANSIBLE_RUNNER_IMAGE}" \
+              "K3S_COREDNS_FORWARDERS=${K3S_COREDNS_FORWARDERS}" \
+              "ARGOCD_GITHUB_REPO_URL=${ARGOCD_GITHUB_REPO_URL}" \
+              "ARGOCD_GITHUB_REPO_BRANCH=${ARGOCD_GITHUB_REPO_BRANCH}" \
+              "ARGOCD_GITHUB_USERNAME=${ARGOCD_GITHUB_USERNAME}" \
+              "MONOREPO_GITHUB_APP_ID=${MONOREPO_GITHUB_APP_ID}" \
+              "MONOREPO_GITHUB_APP_INSTALLATION_ID=${MONOREPO_GITHUB_APP_INSTALLATION_ID}" \
+              "GITHUB_APP_ID=${GITHUB_APP_ID}" \
+              "GITHUB_APP_INSTALLATION_ID=${GITHUB_APP_INSTALLATION_ID}" \
+              "RANCHER_PUBLIC_DOMAIN=${RANCHER_PUBLIC_DOMAIN}" \
+              > "${env_file}"
+
+            KS_ENV="${env_file}" \
+              KS_OUT_DIR="dist/ks-publish" \
+              KS_TEMPLATE_FILE_NAME="${ks_name}" \
+              task ks:render:external
+
+            mv -f "dist/ks-publish/${ks_name}" "dist/ks-publish/${out_name}"
+
+            aws s3 cp "dist/ks-publish/${out_name}" \
+              "s3://${R2_BUCKET}/${os_file}/${out_name}" \
+              --endpoint-url "${R2_ENDPOINT}"
+          }
+
+          render_one "rocky10" "server"
+          render_one "rocky10" "agent"
+
+      - name: Build runtime bootstrap env
+        run: |
+          set -euo pipefail
+          task bundle:runtime-env:build:external
+
+      - name: Upload runtime bootstrap env to R2
+        run: |
+          set -euo pipefail
+          task bundle:runtime-env:upload-r2:external

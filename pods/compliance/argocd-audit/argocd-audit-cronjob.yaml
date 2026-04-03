@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: argocd-audit
+  namespace: compliance
+spec:
+  schedule: "15 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: argocd-audit
+          restartPolicy: OnFailure
+          containers:
+            - name: kubectl
+              image: bitnami/kubectl:latest
+              command:
+                - /bin/sh
+                - -c
+                - >-
+                  kubectl -n argocd get applications -o json > /evidence/argocd-apps-$(date +%F-%H%M%S).json &&
+                  kubectl -n argocd get applicationsets -o json > /evidence/argocd-appsets-$(date +%F-%H%M%S).json
+              volumeMounts:
+                - name: evidence
+                  mountPath: /evidence
+          volumes:
+            - name: evidence
+              persistentVolumeClaim:
+                claimName: argocd-audit-evidence

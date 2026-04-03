@@ -1,0 +1,38 @@
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Get local hostname for break-glass targeting
+      ansible.builtin.command: hostname
+      register: break_glass_hostname
+      changed_when: false
+      when: break_glass | default(false) | bool
+
+    - name: Choose matching inventory host for break-glass
+      ansible.builtin.set_fact:
+        break_glass_target: >-
+          {{
+            (
+              (groups['all'] | default([]) | select('equalto', break_glass_hostname.stdout) | list | first | default(''))
+              or
+              (groups['all'] | default([]) | select('equalto', break_glass_hostname.stdout.split('.')[0]) | list | first | default(''))
+              or
+              (break_glass_hostname.stdout.split('.')[0])
+            )
+          }}
+      when: break_glass | default(false) | bool
+
+    - name: Fail if no break-glass target matches inventory
+      ansible.builtin.fail:
+        msg: "break_glass is set but no inventory host matches this machine."
+      when:
+        - break_glass | default(false) | bool
+        - break_glass_target | default('') | length == 0
+
+    - name: Add break-glass target as local
+      ansible.builtin.add_host:
+        name: "{{ break_glass_target }}"
+        groups: break_glass
+        ansible_connection: local
+      when:
+        - break_glass | default(false) | bool
+        - break_glass_target | default('') | length > 0

@@ -1,0 +1,604 @@
+
+# --- First boot bootstrap ---
+%post --log=/root/firstboot.log --interpreter=/bin/bash
+set -Eeuo pipefail
+
+LOG_UPLOAD_URL="__KS_LOG_URL__"
+BOOTSTRAP_RUNTIME_ENV_URL="__BOOTSTRAP_RUNTIME_ENV_URL__"
+BOOTSTRAP_SHARED_TOKEN="__BOOTSTRAP_SHARED_TOKEN__"
+LOG_UPLOAD_EVENTUAL="__KS_LOG_UPLOAD_EVENTUAL__"
+LOG_UPLOAD_DEBUG="__KS_LOG_UPLOAD_DEBUG__"
+FIRSTBOOT_NO_POWEROFF="__FIRSTBOOT_NO_POWEROFF__"
+BOOTSTRAP_DEBUG_USER="__BOOTSTRAP_DEBUG_USER__"
+BOOTSTRAP_DEBUG_PASSWORD=""
+BOOTSTRAP_DEBUG_PASSWORD_HASH=""
+BOOTSTRAP_DEBUG_SSH_KEY=""
+BOOTSTRAP_DEBUG_SUDO="__BOOTSTRAP_DEBUG_SUDO__"
+KS_STATIC_HOSTNAME="__KS_STATIC_HOSTNAME__"
+KS_STATIC_IPV4="__KS_STATIC_IPV4__"
+KS_STATIC_GW="__KS_STATIC_GW__"
+KS_STATIC_DNS="__KS_STATIC_DNS__"
+BOOTSTRAP_DIAGNOSTICS_TAILSCALE="__BOOTSTRAP_DIAGNOSTICS_TAILSCALE__"
+BOOTSTRAP_BUNDLE_URL="__BOOTSTRAP_BUNDLE_URL__"
+BOOTSTRAP_BUNDLE_SHA256="__BOOTSTRAP_BUNDLE_SHA256__"
+BOOTSTRAP_BUNDLE_FORCE="__BOOTSTRAP_BUNDLE_FORCE__"
+BOOTSTRAP_PLAYBOOK="__BOOTSTRAP_PLAYBOOK__"
+ANSIBLE_RUNNER_IMAGE="__ANSIBLE_RUNNER_IMAGE__"
+ARGOCD_GITHUB_REPO_URL="__ARGOCD_GITHUB_REPO_URL__"
+ARGOCD_GITHUB_USERNAME="__ARGOCD_GITHUB_USERNAME__"
+ARGOCD_GITHUB_REPO_BRANCH="__ARGOCD_GITHUB_REPO_BRANCH__"
+GITEA_SEED_SOURCE_REPO_URL="__GITEA_SEED_SOURCE_REPO_URL__"
+GITEA_SEED_SOURCE_REPO_BRANCH="__GITEA_SEED_SOURCE_REPO_BRANCH__"
+GITEA_SEED_TARGET_OWNER="__GITEA_SEED_TARGET_OWNER__"
+GITEA_SEED_TARGET_REPO="__GITEA_SEED_TARGET_REPO__"
+GITHUB_APP_ID="__GITHUB_APP_ID__"
+GITHUB_APP_INSTALLATION_ID="__GITHUB_APP_INSTALLATION_ID__"
+export ANSIBLE_RUNNER_IMAGE
+export ARGOCD_GITHUB_REPO_URL
+export ARGOCD_GITHUB_USERNAME
+export ARGOCD_GITHUB_REPO_BRANCH
+export GITEA_SEED_SOURCE_REPO_URL
+export GITEA_SEED_SOURCE_REPO_BRANCH
+export GITEA_SEED_TARGET_OWNER
+export GITEA_SEED_TARGET_REPO
+export GITHUB_APP_ID
+export GITHUB_APP_INSTALLATION_ID
+LOG_HOST="$(hostname -s 2>/dev/null || echo node-bootstrap)"
+log_file="/root/bootstrap-post.log"
+: > "${log_file}"
+if command -v stdbuf >/dev/null 2>&1; then
+  exec > >(stdbuf -oL tee "${log_file}") 2>&1
+else
+  exec > >(tee "${log_file}") 2>&1
+fi
+
+if [[ "${BOOTSTRAP_DIAGNOSTICS_TAILSCALE}" == __*__ ]] || [ -z "${BOOTSTRAP_DIAGNOSTICS_TAILSCALE}" ]; then
+  BOOTSTRAP_DIAGNOSTICS_TAILSCALE="0"
+fi
+
+if [[ "${LOG_UPLOAD_DEBUG}" == __*__ ]] || [ -z "${LOG_UPLOAD_DEBUG}" ]; then
+  LOG_UPLOAD_DEBUG="0"
+fi
+
+log_upload_debug_enabled() {
+  case "${LOG_UPLOAD_DEBUG:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+redact_log_url() {
+  printf '%s' "${1:-}" | sed -E 's/([?&]token=)[^&]+/\1REDACTED/g'
+}
+
+auth_log_url() {
+  local base_url="${1:-}"
+  if [ -z "${base_url}" ] || [ -z "${BOOTSTRAP_SHARED_TOKEN:-}" ] || printf '%s' "${base_url}" | grep -qE '(^|[?&])token='; then
+    printf '%s' "${base_url}"
+    return 0
+  fi
+  if printf '%s' "${base_url}" | grep -q '?'; then
+    printf '%s&token=%s' "${base_url}" "${BOOTSTRAP_SHARED_TOKEN}"
+  else
+    printf '%s?token=%s' "${base_url}" "${BOOTSTRAP_SHARED_TOKEN}"
+  fi
+}
+
+upload_log() {
+  log_path="$1"
+  log_name="${2:-}"
+  if [ -z "${LOG_UPLOAD_URL}" ] || [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
+    return 0
+  fi
+  if [ ! -f "${log_path}" ]; then
+    if log_upload_debug_enabled; then
+      echo "[BOOTSTRAP] Log upload skipped (missing ${log_path})"
+    fi
+    return 0
+  fi
+  sep="?"
+  log_url="$(auth_log_url "${LOG_UPLOAD_URL}")"
+  if printf '%s' "${log_url}" | grep -q '?'; then
+    sep="&"
+  fi
+  log_url="${log_url}${sep}host=${LOG_HOST}&file=${log_name:-$(basename "${log_path}")}"
+  safe_url="$(redact_log_url "${log_url}")"
+
+  response_file="$(mktemp)"
+  curl_rc=0
+  http_code="$(curl -4 --http1.1 -sS -o "${response_file}" -w "%{http_code}" --connect-timeout 3 --max-time 10 --retry 2 --retry-delay 1 --retry-all-errors -X POST \
+    --data-binary @"${log_path}" \
+    "${log_url}" || curl_rc=$?)"
+
+  if [ "${curl_rc}" != "0" ] || [ -z "${http_code}" ] || [ "${http_code}" = "000" ]; then
+    echo "[BOOTSTRAP] Log upload failed (rc=${curl_rc}, http_code=${http_code:-<empty>}, url=${safe_url})"
+    if [ -s "${response_file}" ]; then
+      response_snip="$(head -c 200 "${response_file}" | tr '\n' ' ')"
+      if [ -n "${response_snip}" ]; then
+        echo "[BOOTSTRAP] Log upload response: ${response_snip}"
+      fi
+    fi
+    rm -f "${response_file}" 2>/dev/null || true
+    return 0
+  fi
+  if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+    echo "[BOOTSTRAP] Log upload rejected (http=${http_code}, url=${safe_url})"
+    if [ -s "${response_file}" ]; then
+      response_snip="$(head -c 200 "${response_file}" | tr '\n' ' ')"
+      if [ -n "${response_snip}" ]; then
+        echo "[BOOTSTRAP] Log upload response: ${response_snip}"
+      fi
+    fi
+    rm -f "${response_file}" 2>/dev/null || true
+    return 0
+  fi
+  if log_upload_debug_enabled; then
+    echo "[BOOTSTRAP] Log upload ok (http=${http_code}, url=${safe_url})"
+  fi
+  rm -f "${response_file}" 2>/dev/null || true
+  return 0
+}
+
+if [[ "${LOG_UPLOAD_EVENTUAL}" == __*__ ]] || [ -z "${LOG_UPLOAD_EVENTUAL}" ]; then
+  LOG_UPLOAD_EVENTUAL="1"
+fi
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+tailscale_diagnostics_enabled() {
+  is_true "${BOOTSTRAP_DIAGNOSTICS_TAILSCALE}"
+}
+
+start_log_stream() {
+  log_path="$1"
+  log_name="$2"
+  if ! is_true "${LOG_UPLOAD_EVENTUAL}"; then
+    return 0
+  fi
+  if [ -z "${LOG_UPLOAD_URL}" ] || [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
+    return 0
+  fi
+  (
+    while true; do
+      upload_log "${log_path}" "${log_name}"
+      sleep 15
+    done
+  ) &
+  LOG_STREAM_PID=$!
+}
+
+base64url() {
+  openssl base64 -A | tr '+/' '-_' | tr -d '='
+}
+
+github_app_token() {
+  if [ -z "${GITHUB_APP_ID:-}" ] || [ -z "${GITHUB_APP_INSTALLATION_ID:-}" ] || [ -z "${GITHUB_APP_PRIVATE_KEY_B64:-}" ]; then
+    return 1
+  fi
+  key_file="$(mktemp)"
+  if ! printf "%s" "${GITHUB_APP_PRIVATE_KEY_B64}" | base64 -d > "${key_file}" 2>/dev/null; then
+    rm -f "${key_file}"
+    return 1
+  fi
+  now="$(date +%s)"
+  iat=$((now - 60))
+  exp=$((now + 540))
+  header='{"alg":"RS256","typ":"JWT"}'
+  payload="{\"iat\":${iat},\"exp\":${exp},\"iss\":\"${GITHUB_APP_ID}\"}"
+  unsigned="$(printf '%s' "${header}" | base64url).$(printf '%s' "${payload}" | base64url)"
+  signature="$(printf '%s' "${unsigned}" | openssl dgst -sha256 -sign "${key_file}" | base64url)"
+  rm -f "${key_file}"
+  jwt="${unsigned}.${signature}"
+  token_json="$(
+    curl -fsSL -X POST "https://api.github.com/app/installations/${GITHUB_APP_INSTALLATION_ID}/access_tokens" \
+      -H "Authorization: Bearer ${jwt}" \
+      -H "Accept: application/vnd.github+json"
+  )" || return 1
+  token="$(printf '%s' "${token_json}" | python3 - <<'PY'
+import json,sys
+try:
+    data=json.load(sys.stdin)
+    print(data.get("token",""))
+except Exception:
+    print("")
+PY
+)"
+  if [ -z "${token}" ]; then
+    return 1
+  fi
+  printf '%s' "${token}"
+}
+
+if [ -z "${ARGOCD_GITHUB_TOKEN:-}" ]; then
+  app_token="$(github_app_token 2>/dev/null || true)"
+  if [ -n "${app_token}" ]; then
+    ARGOCD_GITHUB_TOKEN="${app_token}"
+    if [ -z "${ARGOCD_GITHUB_USERNAME:-}" ]; then
+      ARGOCD_GITHUB_USERNAME="oauth2"
+    fi
+    echo "[BOOTSTRAP] Argo CD token minted via GitHub App (expires in ~1h)"
+  fi
+fi
+
+stop_log_stream() {
+  if [ -n "${LOG_STREAM_PID:-}" ]; then
+    kill "${LOG_STREAM_PID}" >/dev/null 2>&1 || true
+    wait "${LOG_STREAM_PID}" 2>/dev/null || true
+    unset LOG_STREAM_PID
+  fi
+}
+
+CURRENT_SECTION=""
+
+section_begin() {
+  CURRENT_SECTION="$1"
+  echo "[BOOTSTRAP] ---- ${CURRENT_SECTION} ----"
+}
+
+section_end() {
+  if [ -n "${CURRENT_SECTION}" ]; then
+    echo "[BOOTSTRAP] ---- end ${CURRENT_SECTION} ----"
+  fi
+  CURRENT_SECTION=""
+}
+
+post_exit() {
+  rc="$?"
+  if [ "${rc}" -ne 0 ]; then
+    echo "[BOOTSTRAP] %post failed (rc=${rc}) in section: ${CURRENT_SECTION:-unknown}"
+  fi
+  stop_log_stream || true
+  upload_log "${log_file}" os-installation.log
+  exit "${rc}"
+}
+trap post_exit EXIT
+
+kickstart_err_trap() {
+  rc="$?"
+  BOOTSTRAP_POST_ERROR=1
+  echo "[BOOTSTRAP] ERROR: command failed (rc=${rc}) in section: ${CURRENT_SECTION:-unknown}"
+  echo "[BOOTSTRAP] ERROR: at line ${BASH_LINENO[0]}: ${BASH_COMMAND}"
+}
+trap kickstart_err_trap ERR
+
+fail_bootstrap() {
+  echo "[BOOTSTRAP] FAILURE: ${1:-unknown}"
+  echo "[BOOTSTRAP] ---- diagnostics ----"
+  if tailscale_diagnostics_enabled; then
+    systemctl status tailscaled --no-pager || true
+    journalctl -u tailscaled --no-pager -n 200 || true
+  fi
+  journalctl -b --no-pager -n 200 || true
+  ip addr || true
+  ip route || true
+  cat /etc/resolv.conf || true
+  echo "[BOOTSTRAP] ---- end diagnostics ----"
+  stop_log_stream
+  upload_log "${log_file}" os-installation.log
+  echo "[BOOTSTRAP] Bootstrap post failed; aborting installer"
+  exit 1
+}
+
+retry_cmd() {
+  label="$1"
+  shift
+  attempts=5
+  delay=5
+  i=1
+  while [ "${i}" -le "${attempts}" ]; do
+    if "$@"; then
+      return 0
+    fi
+    echo "[BOOTSTRAP] ${label} failed (attempt ${i}/${attempts}); retrying in ${delay}s"
+    sleep "${delay}"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+install_pkg() {
+  if command -v dnf >/dev/null 2>&1; then
+    dnf -y install "$@"
+    return $?
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    yum -y install "$@"
+    return $?
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y "$@"
+    return $?
+  fi
+  echo "[BOOTSTRAP] No supported package manager found for: $*"
+  return 1
+}
+
+HOSTNAME_PREFIX="node"
+if [[ "${KS_STATIC_HOSTNAME}" == __*__ ]]; then
+  KS_STATIC_HOSTNAME=""
+fi
+if [[ "${KS_STATIC_IPV4}" == __*__ ]]; then
+  KS_STATIC_IPV4=""
+fi
+if [[ "${KS_STATIC_GW}" == __*__ ]]; then
+  KS_STATIC_GW=""
+fi
+if [[ "${KS_STATIC_DNS}" == __*__ ]]; then
+  KS_STATIC_DNS=""
+fi
+if [ -n "${KS_STATIC_HOSTNAME}" ]; then
+  HOSTNAME="${KS_STATIC_HOSTNAME}"
+else
+  RAND="$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')"
+  RAND_PADDED="$(printf '%05d' "${RAND}" 2>/dev/null || printf '%s' "${RAND}")"
+  HOSTNAME="${HOSTNAME_PREFIX}-${RAND_PADDED}"
+fi
+LOG_HOST="${HOSTNAME}"
+
+section_begin "hostname"
+echo "[BOOTSTRAP] Generating hostname"
+echo "${HOSTNAME}" >/etc/hostname
+hostnamectl set-hostname "${HOSTNAME}" >/dev/null 2>&1 || hostname "${HOSTNAME}" || true
+echo "[BOOTSTRAP] Hostname set to ${HOSTNAME}"
+section_end
+
+section_begin "debug-user"
+if [ -n "${BOOTSTRAP_DEBUG_USER}" ]; then
+  if ! id -u "${BOOTSTRAP_DEBUG_USER}" >/dev/null 2>&1; then
+    echo "[BOOTSTRAP] Creating debug user ${BOOTSTRAP_DEBUG_USER}"
+    useradd -m -s /bin/bash "${BOOTSTRAP_DEBUG_USER}"
+  else
+    echo "[BOOTSTRAP] Debug user ${BOOTSTRAP_DEBUG_USER} already exists"
+  fi
+
+  if [ -n "${BOOTSTRAP_DEBUG_PASSWORD_HASH}" ]; then
+    usermod -p "${BOOTSTRAP_DEBUG_PASSWORD_HASH}" "${BOOTSTRAP_DEBUG_USER}" || true
+    passwd -u "${BOOTSTRAP_DEBUG_USER}" >/dev/null 2>&1 || true
+  elif [ -n "${BOOTSTRAP_DEBUG_PASSWORD}" ]; then
+    echo "${BOOTSTRAP_DEBUG_USER}:${BOOTSTRAP_DEBUG_PASSWORD}" | chpasswd || true
+    passwd -u "${BOOTSTRAP_DEBUG_USER}" >/dev/null 2>&1 || true
+  fi
+
+  if [ -n "${BOOTSTRAP_DEBUG_SSH_KEY}" ]; then
+    home_dir="$(getent passwd "${BOOTSTRAP_DEBUG_USER}" | cut -d: -f6)"
+    if [ -n "${home_dir}" ]; then
+      mkdir -p "${home_dir}/.ssh"
+      printf '%s\n' "${BOOTSTRAP_DEBUG_SSH_KEY}" >"${home_dir}/.ssh/authorized_keys"
+      chown -R "${BOOTSTRAP_DEBUG_USER}:${BOOTSTRAP_DEBUG_USER}" "${home_dir}/.ssh"
+      chmod 700 "${home_dir}/.ssh"
+      chmod 600 "${home_dir}/.ssh/authorized_keys"
+      # Ensure SELinux contexts are correct so sshd accepts the key.
+      restorecon -R "${home_dir}/.ssh" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if [ "${BOOTSTRAP_DEBUG_SUDO}" = "1" ] || [ "${BOOTSTRAP_DEBUG_SUDO}" = "true" ]; then
+    echo "${BOOTSTRAP_DEBUG_USER} ALL=(ALL) NOPASSWD:ALL" >"/etc/sudoers.d/${BOOTSTRAP_DEBUG_USER}"
+    chmod 440 "/etc/sudoers.d/${BOOTSTRAP_DEBUG_USER}"
+  fi
+else
+  echo "[BOOTSTRAP] Debug user not configured"
+fi
+section_end
+
+section_begin "sshd-hardening"
+echo "[BOOTSTRAP] Hardening SSH daemon"
+sed -i \
+  -e 's/^#\?PermitRootLogin.*/PermitRootLogin no/' \
+  -e 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' \
+  /etc/ssh/sshd_config
+systemctl enable sshd >/dev/null 2>&1 || true
+section_end
+
+section_begin "sudoers"
+echo "[BOOTSTRAP] Configuring passwordless sudo"
+echo "ansible ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/ansible
+chmod 440 /etc/sudoers.d/ansible
+section_end
+
+start_log_stream "${log_file}" os-installation.log
+
+section_begin "network-readiness"
+echo "[BOOTSTRAP] Waiting for network readiness"
+attempts=20
+delay=3
+i=1
+while [ "${i}" -le "${attempts}" ]; do
+  if ip route | grep -q '^default '; then
+    break
+  fi
+  echo "[BOOTSTRAP] Network not ready (attempt ${i}/${attempts}); waiting ${delay}s"
+  sleep "${delay}"
+  i=$((i + 1))
+done
+
+if ! ip route | grep -q '^default '; then
+  fail_bootstrap "no default route detected"
+fi
+
+echo "[BOOTSTRAP] Network readiness confirmed (default route present)"
+section_end
+
+section_begin "network-diagnostics"
+echo "[BOOTSTRAP] ---- network diagnostics ----"
+ip addr || true
+ip route || true
+cat /etc/resolv.conf || true
+echo "[BOOTSTRAP] DNS probe (getent)"
+getent hosts google.com || true
+echo "[BOOTSTRAP] HTTPS probe (google.com)"
+curl -fsSL --connect-timeout 5 --max-time 10 -o /dev/null https://google.com \
+  && echo "[BOOTSTRAP] HTTPS to google.com ok" \
+  || echo "[BOOTSTRAP] HTTPS to google.com failed"
+echo "[BOOTSTRAP] HTTPS probe (1.1.1.1)"
+curl -fsSL --connect-timeout 5 --max-time 10 -o /dev/null https://1.1.1.1 \
+  && echo "[BOOTSTRAP] HTTPS to 1.1.1.1 ok" \
+  || echo "[BOOTSTRAP] HTTPS to 1.1.1.1 failed"
+echo "[BOOTSTRAP] ---- end diagnostics ----"
+section_end
+
+section_begin "local-repos"
+echo "[BOOTSTRAP] Configuring local Rocky repos from install media (if present)"
+
+# Ensure dnf/yum uses the major releasever (e.g. 10) even if VERSION_ID includes a minor
+# (e.g. 10.1). Some mirrorlists return empty for minor releasever values.
+if [ -f /etc/os-release ]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release || true
+  releasever_major="${VERSION_ID%%.*}"
+  if printf '%s' "${releasever_major}" | grep -Eq '^[0-9]+$'; then
+    mkdir -p /etc/dnf/vars
+    printf '%s\n' "${releasever_major}" >/etc/dnf/vars/releasever
+  fi
+fi
+
+dnf_base_repos=""
+dnf_offline=false
+if [ -d /run/install/repo/BaseOS ] && [ -d /run/install/repo/AppStream ]; then
+  cat >/etc/yum.repos.d/rocky-local.repo <<'EOF'
+[baseos-local]
+name=Rocky BaseOS (local media)
+baseurl=file:///run/install/repo/BaseOS
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10
+
+[appstream-local]
+name=Rocky AppStream (local media)
+baseurl=file:///run/install/repo/AppStream
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10
+EOF
+  dnf_base_repos="--disablerepo=* --enablerepo=baseos-local --enablerepo=appstream-local"
+else
+  mirrorlist_url="https://mirrors.rockylinux.org/mirrorlist?arch=$(rpm --eval '%{_arch}')&repo=BaseOS-10"
+  if command -v curl >/dev/null 2>&1; then
+    echo "[BOOTSTRAP] Probing mirrorlist: ${mirrorlist_url}"
+    if ! retry_cmd "mirrorlist probe" curl -fsSL --connect-timeout 5 --max-time 15 -o /dev/null "${mirrorlist_url}"; then
+      echo "[BOOTSTRAP] Mirrorlist unreachable; using direct baseurl fallback"
+      echo "[BOOTSTRAP] Probing direct repo: https://dl.rockylinux.org/pub/rocky/10/BaseOS/$(rpm --eval '%{_arch}')/os/repodata/repomd.xml"
+      curl -fsSL --connect-timeout 5 --max-time 15 -o /dev/null \
+        "https://dl.rockylinux.org/pub/rocky/10/BaseOS/$(rpm --eval '%{_arch}')/os/repodata/repomd.xml" \
+        || echo "[BOOTSTRAP] Direct repo probe failed"
+      cat >/etc/yum.repos.d/rocky-direct.repo <<'EOF'
+[baseos-direct]
+name=Rocky BaseOS (direct)
+baseurl=https://dl.rockylinux.org/pub/rocky/10/BaseOS/$basearch/os/
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10
+
+[appstream-direct]
+name=Rocky AppStream (direct)
+baseurl=https://dl.rockylinux.org/pub/rocky/10/AppStream/$basearch/os/
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10
+EOF
+      dnf_base_repos="--disablerepo=* --enablerepo=baseos-direct --enablerepo=appstream-direct"
+    else
+      dnf_offline=false
+    fi
+  else
+    dnf_offline=true
+  fi
+fi
+
+section_end
+
+section_begin "homebrew-install"
+echo "[BOOTSTRAP] Installing Homebrew for first-boot tooling"
+install_pkg ca-certificates curl file git procps-ng gcc tar
+
+if command -v update-ca-trust >/dev/null 2>&1; then
+  update-ca-trust extract || true
+fi
+
+brew_user="linuxbrew"
+brew_group="${brew_user}"
+brew_home="/home/${brew_user}"
+brew_prefix="${brew_home}/.linuxbrew"
+brew_shellenv_file="/etc/profile.d/homebrew.sh"
+
+if ! getent group "${brew_group}" >/dev/null 2>&1; then
+  groupadd --system "${brew_group}"
+fi
+if ! id -u "${brew_user}" >/dev/null 2>&1; then
+  useradd --system --create-home --home-dir "${brew_home}" --shell /bin/bash --gid "${brew_group}" "${brew_user}"
+fi
+
+install -d -m 0755 -o "${brew_user}" -g "${brew_group}" "${brew_home}"
+install -d -m 0755 -o "${brew_user}" -g "${brew_group}" "${brew_prefix}"
+install -d -m 0755 -o "${brew_user}" -g "${brew_group}" "${brew_home}/.cache"
+install -d -m 0755 -o "${brew_user}" -g "${brew_group}" "${brew_home}/.cache/Homebrew"
+
+brew_installer="$(mktemp)"
+retry_cmd "download Homebrew installer" curl -fsSL -o "${brew_installer}" https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
+chmod 0644 "${brew_installer}"
+
+if [ ! -x "${brew_prefix}/bin/brew" ]; then
+  if ! HOME="${brew_home}" su - "${brew_user}" -c "export PATH=\"${brew_prefix}/bin:${brew_prefix}/sbin:\$PATH\"; NONINTERACTIVE=1 CI=1 /bin/bash '${brew_installer}'"; then
+    rm -f "${brew_installer}" 2>/dev/null || true
+    fail_bootstrap "Homebrew installation failed"
+  fi
+fi
+rm -f "${brew_installer}" 2>/dev/null || true
+
+if [ ! -x "${brew_prefix}/bin/brew" ]; then
+  fail_bootstrap "Homebrew binary missing after installation"
+fi
+
+if ! HOME="${brew_home}" su - "${brew_user}" -c "'${brew_prefix}/bin/brew' shellenv" >"${brew_shellenv_file}"; then
+  fail_bootstrap "failed to persist Homebrew shell environment"
+fi
+chmod 0644 "${brew_shellenv_file}"
+
+# Make the standard Homebrew path available to root-owned first-boot/systemd processes.
+# shellcheck disable=SC1090
+. "${brew_shellenv_file}"
+hash -r 2>/dev/null || true
+
+if ! command -v brew >/dev/null 2>&1; then
+  fail_bootstrap "brew not available after sourcing ${brew_shellenv_file}"
+fi
+section_end
+
+section_begin "tailscale-install"
+echo "[BOOTSTRAP] Installing Tailscale"
+tailscale_installed=false
+if [ "${dnf_offline}" = true ]; then
+  echo "[BOOTSTRAP] Skipping dnf installs (no repo access)"
+else
+  set +e
+  retry_cmd "dnf install dnf-plugins-core" dnf -y ${dnf_base_repos} install dnf-plugins-core
+  dnf_plugins_rc=$?
+  if [ "${dnf_plugins_rc}" -eq 0 ]; then
+    dnf config-manager --add-repo https://pkgs.tailscale.com/stable/fedora/tailscale.repo
+    repo_rc=$?
+    rpm --import https://pkgs.tailscale.com/stable/fedora/repo.gpg
+    gpg_rc=$?
+    retry_cmd "dnf install tailscale" dnf -y ${dnf_base_repos} --enablerepo=tailscale-stable install tailscale
+    tailscale_rc=$?
+    if [ "${repo_rc}" -eq 0 ] && [ "${gpg_rc}" -eq 0 ] && [ "${tailscale_rc}" -eq 0 ]; then
+      tailscale_installed=true
+    fi
+  fi
+  set -e
+fi
+
+if [ "${tailscale_installed}" = true ]; then
+  if ! systemctl enable tailscaled; then
+    ln -sf /usr/lib/systemd/system/tailscaled.service \
+      /etc/systemd/system/multi-user.target.wants/tailscaled.service
+  fi
+else
+  echo "[BOOTSTRAP] Tailscale install deferred to first boot"
+fi
+section_end

@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+schedule="${CRON_SCHEDULE:-*/10 * * * *}"
+playbook="${ANSIBLE_PLAYBOOK:-playbooks/bootstrap.yml}"
+inventory="${ANSIBLE_INVENTORY:-node-inventory.yml}"
+extra_args="${ANSIBLE_EXTRA_ARGS:-}"
+tailnet_domain="${TAILSCALE_DOMAIN:-}"
+tailscale_cluster_tag="${TAILSCALE_CLUSTER_TAG:-}"
+ansible_user="${ANSIBLE_USER:-}"
+ansible_python="${ANSIBLE_PYTHON_INTERPRETER:-}"
+ssh_common_args="${ANSIBLE_SSH_COMMON_ARGS:-}"
+
+cat >/etc/cron.d/ansible-runner <<EOF
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ANSIBLE_PLAYBOOK=${playbook}
+ANSIBLE_INVENTORY=${inventory}
+ANSIBLE_EXTRA_ARGS=${extra_args}
+TAILSCALE_DOMAIN=${tailnet_domain}
+TAILSCALE_CLUSTER_TAG=${tailscale_cluster_tag}
+ANSIBLE_USER=${ansible_user}
+ANSIBLE_PYTHON_INTERPRETER=${ansible_python}
+ANSIBLE_SSH_COMMON_ARGS=${ssh_common_args}
+${schedule} root /usr/local/bin/run-ansible >>/var/log/ansible-cron.log 2>&1
+EOF
+
+chmod 0644 /etc/cron.d/ansible-runner
+touch /var/log/ansible-cron.log
+
+echo "[ansible-runner] cron schedule: ${schedule}"
+cron -f

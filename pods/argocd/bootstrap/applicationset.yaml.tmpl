@@ -1,0 +1,115 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: apps
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions:
+    - missingkey=default
+
+  generators:
+    - git:
+        repoURL: __INTERNAL_GIT_REPO_URL__
+        revision: HEAD
+        files:
+          - path: pods/*/*.app.yaml
+
+  template:
+    metadata:
+      name: '{{ .name }}'
+    spec:
+      project: '{{ default "default" .project }}'
+      destination:
+        server: '{{ default "https://kubernetes.default.svc" .destination_server }}'
+        namespace: '{{ .destination_namespace }}'
+
+  # Use templatePatch for conditional source shape (git path vs helm chart).
+  # This keeps the Kubernetes YAML valid while still supporting "simple" app definition files.
+  templatePatch: |
+    {{- if .annotations }}
+    metadata:
+      annotations:
+    {{ .annotations | toYaml | nindent 8 }}
+    {{- end }}
+    {{- if eq .source_type "git" }}
+    spec:
+      source:
+        repoURL: '__INTERNAL_GIT_REPO_URL__'
+        targetRevision: '{{ .source_target_revision }}'
+        path: '{{ .source_path }}'
+      {{- if .ignore_differences }}
+      ignoreDifferences:
+    {{ .ignore_differences | toYaml | nindent 6 }}
+      {{- end }}
+      syncPolicy:
+        {{- if ne (default true .sync_automated) false }}
+        automated:
+          prune: true
+          selfHeal: true
+        {{- end }}
+        syncOptions:
+          - CreateNamespace=true
+      {{- range .sync_options }}
+          - '{{ . }}'
+      {{- end }}
+    {{- else if eq .source_type "helm" }}
+    spec:
+      {{- if .source_helm_value_files }}
+      sources:
+        - repoURL: '{{ .source_repo_url }}'
+          chart: '{{ .source_chart }}'
+          targetRevision: '{{ .source_target_revision }}'
+          helm:
+            {{- if hasKey . "source_helm_skip_crds" }}
+            skipCrds: {{ .source_helm_skip_crds }}
+            {{- end }}
+            valueFiles:
+            {{- range .source_helm_value_files }}
+              - '{{ . }}'
+            {{- end }}
+            {{- if .source_helm_values }}
+            values: |
+    {{ .source_helm_values | nindent 14 }}
+            {{- end }}
+        - repoURL: 'http://gitea-http.gitea.svc.cluster.local:3000/gitea-admin/cluster.git'
+          targetRevision: '{{ default "HEAD" .source_values_target_revision }}'
+          ref: '{{ default "values" .source_values_ref }}'
+      {{- else }}
+      source:
+        repoURL: '{{ .source_repo_url }}'
+        chart: '{{ .source_chart }}'
+        targetRevision: '{{ .source_target_revision }}'
+        helm:
+          {{- if hasKey . "source_helm_skip_crds" }}
+          skipCrds: {{ .source_helm_skip_crds }}
+          {{- end }}
+          {{- if .source_helm_value_files }}
+          valueFiles:
+          {{- range .source_helm_value_files }}
+            - '{{ . }}'
+          {{- end }}
+          {{- end }}
+          {{- if .source_helm_values }}
+          values: |
+    {{ .source_helm_values | nindent 12 }}
+          {{- end }}
+      {{- end }}
+      {{- if .ignore_differences }}
+      ignoreDifferences:
+    {{ .ignore_differences | toYaml | nindent 6 }}
+      {{- end }}
+      syncPolicy:
+        {{- if ne (default true .sync_automated) false }}
+        automated:
+          prune: true
+          selfHeal: true
+        {{- end }}
+        syncOptions:
+          - CreateNamespace=true
+      {{- range .sync_options }}
+          - '{{ . }}'
+      {{- end }}
+    {{- else }}
+    {{- fail (printf "unknown source_type=%q for name=%q" .source_type .name) }}
+    {{- end }}

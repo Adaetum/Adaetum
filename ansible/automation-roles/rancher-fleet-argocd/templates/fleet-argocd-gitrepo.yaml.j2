@@ -1,0 +1,14 @@
+apiVersion: fleet.cattle.io/v1alpha1
+kind: GitRepo
+metadata:
+  name: {{ fleet_argocd_gitrepo_name }}
+  namespace: {{ fleet_argocd_namespace }}
+spec:
+  repo: {{ fleet_argocd_repo_url }}
+  branch: {{ fleet_argocd_repo_branch }}
+  paths:
+    - {{ fleet_argocd_repo_path }}
+  targetNamespace: {{ fleet_argocd_target_namespace }}
+{% if fleet_repo_token | length > 0 %}
+  clientSecretName: {{ fleet_argocd_gitrepo_name }}-creds
+{% endif %}

@@ -1,0 +1,6 @@
+name: cloudflared
+project: default
+source_type: git
+source_target_revision: HEAD
+source_path: pods/cloudflared/cloudflared
+destination_namespace: cloudflared

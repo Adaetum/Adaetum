@@ -1,0 +1,2 @@
+cat >/usr/local/sbin/ansible-bundle-bootstrap.sh <<'SCRIPT'
+#!/bin/bash

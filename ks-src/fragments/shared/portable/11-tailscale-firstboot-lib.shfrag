@@ -1,0 +1,569 @@
+set -Eeuo pipefail
+
+done_file="/var/lib/tailscale-firstboot.done"
+if [ -f "${done_file}" ]; then
+  exit 0
+fi
+
+LOG_UPLOAD_URL="${LOG_UPLOAD_URL:-__KS_LOG_URL__}"
+LOG_UPLOAD_EVENTUAL="${LOG_UPLOAD_EVENTUAL:-__KS_LOG_UPLOAD_EVENTUAL__}"
+LOG_UPLOAD_DEBUG="${LOG_UPLOAD_DEBUG:-__KS_LOG_UPLOAD_DEBUG__}"
+FIRSTBOOT_NO_POWEROFF="${FIRSTBOOT_NO_POWEROFF:-__FIRSTBOOT_NO_POWEROFF__}"
+BOOTSTRAP_DEBUG_USER="${BOOTSTRAP_DEBUG_USER:-__BOOTSTRAP_DEBUG_USER__}"
+BOOTSTRAP_DEBUG_PASSWORD="${BOOTSTRAP_DEBUG_PASSWORD:-}"
+BOOTSTRAP_DEBUG_PASSWORD_HASH="${BOOTSTRAP_DEBUG_PASSWORD_HASH:-}"
+BOOTSTRAP_DEBUG_SSH_KEY="${BOOTSTRAP_DEBUG_SSH_KEY:-}"
+BOOTSTRAP_DEBUG_SUDO="${BOOTSTRAP_DEBUG_SUDO:-__BOOTSTRAP_DEBUG_SUDO__}"
+BOOTSTRAP_DIAGNOSTICS_TAILSCALE="${BOOTSTRAP_DIAGNOSTICS_TAILSCALE:-__BOOTSTRAP_DIAGNOSTICS_TAILSCALE__}"
+LOG_HOST="$(hostname -s 2>/dev/null || echo node-bootstrap)"
+log_file="/var/log/tailscale-firstboot.log"
+mkdir -p "$(dirname "${log_file}")"
+: > "${log_file}"
+if command -v stdbuf >/dev/null 2>&1; then
+  exec > >(stdbuf -oL tee "${log_file}") 2>&1
+else
+  exec > >(tee "${log_file}") 2>&1
+fi
+
+if [[ "${LOG_UPLOAD_DEBUG}" == __*__ ]] || [ -z "${LOG_UPLOAD_DEBUG}" ]; then
+  LOG_UPLOAD_DEBUG="0"
+fi
+
+if [[ "${FIRSTBOOT_NO_POWEROFF}" == __*__ ]] || [ -z "${FIRSTBOOT_NO_POWEROFF}" ]; then
+  FIRSTBOOT_NO_POWEROFF="0"
+fi
+
+ensure_bootstrap_runtime_env
+
+if [[ "${BOOTSTRAP_DEBUG_USER}" == __*__ ]]; then
+  BOOTSTRAP_DEBUG_USER=""
+fi
+if [[ "${BOOTSTRAP_DEBUG_SUDO}" == __*__ ]] || [ -z "${BOOTSTRAP_DEBUG_SUDO}" ]; then
+  BOOTSTRAP_DEBUG_SUDO="0"
+fi
+
+if [[ "${BOOTSTRAP_DIAGNOSTICS_TAILSCALE}" == __*__ ]] || [ -z "${BOOTSTRAP_DIAGNOSTICS_TAILSCALE}" ]; then
+  BOOTSTRAP_DIAGNOSTICS_TAILSCALE="0"
+fi
+
+log_upload_debug_enabled() {
+  case "${LOG_UPLOAD_DEBUG:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+redact_log_url() {
+  printf '%s' "${1:-}" | sed -E 's/([?&]token=)[^&]+/\1REDACTED/g'
+}
+
+upload_log() {
+  log_path="$1"
+  log_name="${2:-}"
+  if [ -z "${LOG_UPLOAD_URL}" ] || [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
+    return 0
+  fi
+  if [ ! -f "${log_path}" ]; then
+    if log_upload_debug_enabled; then
+      echo "[BOOTSTRAP] Log upload skipped (missing ${log_path})"
+    fi
+    return 0
+  fi
+  sep="?"
+  log_url="$(bootstrap_url_with_shared_token "${LOG_UPLOAD_URL}")"
+  if printf '%s' "${log_url}" | grep -q '?'; then
+    sep="&"
+  fi
+  log_url="${log_url}${sep}host=${LOG_HOST}&file=${log_name:-$(basename "${log_path}")}"
+  safe_url="$(redact_log_url "${log_url}")"
+
+  response_file="$(mktemp)"
+  curl_rc=0
+  http_code="$(curl -4 --http1.1 -sS -o "${response_file}" -w "%{http_code}" --connect-timeout 3 --max-time 10 --retry 2 --retry-delay 1 --retry-all-errors -X POST \
+    --data-binary @"${log_path}" \
+    "${log_url}" || curl_rc=$?)"
+
+  if [ "${curl_rc}" != "0" ] || [ -z "${http_code}" ] || [ "${http_code}" = "000" ]; then
+    echo "[BOOTSTRAP] Log upload failed (rc=${curl_rc}, http_code=${http_code:-<empty>}, url=${safe_url})"
+    if [ -s "${response_file}" ]; then
+      response_snip="$(head -c 200 "${response_file}" | tr '\n' ' ')"
+      if [ -n "${response_snip}" ]; then
+        echo "[BOOTSTRAP] Log upload response: ${response_snip}"
+      fi
+    fi
+    rm -f "${response_file}" 2>/dev/null || true
+    return 0
+  fi
+  if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+    echo "[BOOTSTRAP] Log upload rejected (http=${http_code}, url=${safe_url})"
+    if [ -s "${response_file}" ]; then
+      response_snip="$(head -c 200 "${response_file}" | tr '\n' ' ')"
+      if [ -n "${response_snip}" ]; then
+        echo "[BOOTSTRAP] Log upload response: ${response_snip}"
+      fi
+    fi
+    rm -f "${response_file}" 2>/dev/null || true
+    return 0
+  fi
+  if log_upload_debug_enabled; then
+    echo "[BOOTSTRAP] Log upload ok (http=${http_code}, url=${safe_url})"
+  fi
+  rm -f "${response_file}" 2>/dev/null || true
+  return 0
+}
+
+CURRENT_STEP=""
+STEP_INDEX=0
+STEP_TOTAL_HINT=0
+BOOTSTRAP_PHASE_STATUS_FILE="${BOOTSTRAP_PHASE_STATUS_FILE:-/run/bootstrap-phase-status.env}"
+STATUS_TTY_PATH=""
+STATUS_STATE="STARTING"
+STATUS_DETAIL="Preparing first-boot workflow"
+STATUS_TTY_ROWS=25
+STATUS_TTY_COLS=80
+STATUS_PANEL_HEIGHT=7
+STATUS_SCROLL_TOP=8
+STATUS_COMPACT_UI=0
+STATUS_LOG_HINT="Logs: /var/log/tailscale-firstboot.log"
+STATUS_COLOR_ENABLED=1
+
+BOOTSTRAP_PROGRESS_PHASE_ID=""
+BOOTSTRAP_PROGRESS_PHASE_KEY=""
+BOOTSTRAP_PROGRESS_PHASE_POSITION=""
+BOOTSTRAP_PROGRESS_PHASE_TOTAL=""
+BOOTSTRAP_PROGRESS_PHASE_STATE=""
+BOOTSTRAP_PROGRESS_PHASE_LABEL=""
+UI_PHASE_MONITOR_PID=""
+
+ui_phase_state_reset() {
+  BOOTSTRAP_PROGRESS_PHASE_ID=""
+  BOOTSTRAP_PROGRESS_PHASE_KEY=""
+  BOOTSTRAP_PROGRESS_PHASE_POSITION=""
+  BOOTSTRAP_PROGRESS_PHASE_TOTAL=""
+  BOOTSTRAP_PROGRESS_PHASE_STATE=""
+  BOOTSTRAP_PROGRESS_PHASE_LABEL=""
+}
+
+ui_load_bootstrap_phase_status() {
+  ui_phase_state_reset
+  if [ ! -r "${BOOTSTRAP_PHASE_STATUS_FILE}" ]; then
+    return 1
+  fi
+  # shellcheck disable=SC1090
+  . "${BOOTSTRAP_PHASE_STATUS_FILE}" 2>/dev/null || return 1
+  if ! printf '%s' "${BOOTSTRAP_PROGRESS_PHASE_POSITION:-}" | grep -Eq '^[0-9]+$'; then
+    BOOTSTRAP_PROGRESS_PHASE_POSITION=""
+  fi
+  if ! printf '%s' "${BOOTSTRAP_PROGRESS_PHASE_TOTAL:-}" | grep -Eq '^[0-9]+$'; then
+    BOOTSTRAP_PROGRESS_PHASE_TOTAL=""
+  fi
+  return 0
+}
+
+ui_open_console() {
+  for cand in /dev/tty1 /dev/console; do
+    if [ -w "${cand}" ]; then
+      STATUS_TTY_PATH="${cand}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ui_write_raw() {
+  if [ -z "${STATUS_TTY_PATH}" ]; then
+    return 0
+  fi
+  printf '%b' "${1:-}" >"${STATUS_TTY_PATH}" 2>/dev/null || true
+}
+
+ui_detect_console_size() {
+  local size="" rows="" cols=""
+  if [ -n "${STATUS_TTY_PATH}" ] && command -v stty >/dev/null 2>&1; then
+    size="$(stty -F "${STATUS_TTY_PATH}" size 2>/dev/null || true)"
+    if [ -z "${size}" ]; then
+      size="$(stty size <"${STATUS_TTY_PATH}" 2>/dev/null || true)"
+    fi
+  fi
+  if [ -z "${size}" ] && [ -n "${LINES:-}" ] && [ -n "${COLUMNS:-}" ]; then
+    size="${LINES} ${COLUMNS}"
+  fi
+  rows="$(printf '%s' "${size}" | awk '{print $1}')"
+  cols="$(printf '%s' "${size}" | awk '{print $2}')"
+  if ! printf '%s' "${rows}" | grep -Eq '^[0-9]+$'; then
+    rows=25
+  fi
+  if ! printf '%s' "${cols}" | grep -Eq '^[0-9]+$'; then
+    cols=80
+  fi
+  if [ "${rows}" -lt 10 ]; then
+    rows=10
+  fi
+  if [ "${cols}" -lt 32 ]; then
+    cols=32
+  fi
+  STATUS_TTY_ROWS="${rows}"
+  STATUS_TTY_COLS="${cols}"
+}
+
+ui_refresh_layout() {
+  ui_detect_console_size
+  STATUS_COMPACT_UI=0
+  STATUS_PANEL_HEIGHT=7
+  if [ "${STATUS_TTY_ROWS}" -lt 16 ] || [ "${STATUS_TTY_COLS}" -lt 64 ]; then
+    STATUS_PANEL_HEIGHT=6
+  fi
+  if [ "${STATUS_TTY_ROWS}" -lt 13 ] || [ "${STATUS_TTY_COLS}" -lt 48 ]; then
+    STATUS_PANEL_HEIGHT=5
+    STATUS_COMPACT_UI=1
+  fi
+  STATUS_SCROLL_TOP=$((STATUS_PANEL_HEIGHT + 1))
+  if [ "${STATUS_SCROLL_TOP}" -gt "${STATUS_TTY_ROWS}" ]; then
+    STATUS_SCROLL_TOP="${STATUS_TTY_ROWS}"
+  fi
+}
+
+ui_fit_text() {
+  local width="${1:-0}"
+  shift || true
+  local text="$*"
+  if ! printf '%s' "${width}" | grep -Eq '^[0-9]+$'; then
+    width=0
+  fi
+  if [ "${width}" -le 0 ]; then
+    printf '%s' ""
+    return 0
+  fi
+  if [ "${#text}" -le "${width}" ]; then
+    printf '%s' "${text}"
+    return 0
+  fi
+  if [ "${width}" -le 3 ]; then
+    printf '%s' "${text:0:${width}}"
+    return 0
+  fi
+  printf '%s...' "${text:0:$((width - 3))}"
+}
+
+ui_pad_right() {
+  local width="${1:-0}"
+  shift || true
+  local text="$*"
+  local fit=""
+  fit="$(ui_fit_text "${width}" "${text}")"
+  printf "%-*s" "${width}" "${fit}"
+}
+
+ui_progress_bar() {
+  local width="${1:-0}"
+  local current="${2:-0}"
+  local total="${3:-0}"
+  local filled=0 empty=0
+  if ! printf '%s' "${width}" | grep -Eq '^[0-9]+$'; then
+    width=0
+  fi
+  if ! printf '%s' "${current}" | grep -Eq '^[0-9]+$'; then
+    current=0
+  fi
+  if ! printf '%s' "${total}" | grep -Eq '^[0-9]+$'; then
+    total=0
+  fi
+  if [ "${width}" -le 0 ]; then
+    printf '%s' ""
+    return 0
+  fi
+  if [ "${total}" -le 0 ]; then
+    total=1
+  fi
+  if [ "${current}" -lt 0 ]; then
+    current=0
+  fi
+  if [ "${current}" -gt "${total}" ]; then
+    current="${total}"
+  fi
+  filled=$((current * width / total))
+  if [ "${filled}" -lt 0 ]; then
+    filled=0
+  fi
+  if [ "${filled}" -gt "${width}" ]; then
+    filled="${width}"
+  fi
+  empty=$((width - filled))
+  printf '%*s' "${filled}" '' | tr ' ' '#'
+  printf '%*s' "${empty}" '' | tr ' ' '-'
+}
+
+ui_display_phase() {
+  local phase="${1:-initializing}"
+  if [ -z "${phase}" ]; then
+    phase="initializing"
+  fi
+  phase="$(printf '%s' "${phase}" | tr '-' ' ')"
+  printf '%s' "${phase}"
+}
+
+ui_box_line() {
+  local row="${1:?row}"
+  local left="${2:-| }"
+  local text="${3:-}"
+  local right="${4:- |}"
+  local inner_width=$((STATUS_TTY_COLS - ${#left} - ${#right}))
+  if [ "${inner_width}" -lt 0 ]; then
+    inner_width=0
+  fi
+  ui_write_raw "\033[${row};1H\033[2K${left}$(ui_pad_right "${inner_width}" "${text}")${right}"
+}
+
+ui_color_for_state() {
+  case "${1:-}" in
+    SUCCESS) printf '\033[1;32m' ;;
+    FAILED|ERROR) printf '\033[1;31m' ;;
+    RUNNING|STARTING) printf '\033[1;33m' ;;
+    *) printf '\033[0m' ;;
+  esac
+}
+
+ui_box_line_color() {
+  local row="${1:?row}"
+  local color="${2:-\033[0m}"
+  local left="${3:-| }"
+  local text="${4:-}"
+  local right="${5:- |}"
+  local inner_width=$((STATUS_TTY_COLS - ${#left} - ${#right}))
+  local padded=""
+  if [ "${inner_width}" -lt 0 ]; then
+    inner_width=0
+  fi
+  padded="$(ui_pad_right "${inner_width}" "${text}")"
+  ui_write_raw "\033[${row};1H\033[2K${left}${color}${padded}\033[0m${right}"
+}
+
+ui_prepare_console() {
+  ui_refresh_layout
+  ui_write_raw "\033[?25l\033[2J\033[H\033[${STATUS_SCROLL_TOP};${STATUS_TTY_ROWS}r\033[${STATUS_SCROLL_TOP};1H"
+}
+
+ui_clear_screen() {
+  if [ -z "${STATUS_TTY_PATH}" ]; then
+    return 0
+  fi
+  ui_refresh_layout
+  ui_write_raw "\033[?25l\033[2J\033[H\033[${STATUS_SCROLL_TOP};${STATUS_TTY_ROWS}r\033[${STATUS_SCROLL_TOP};1H"
+}
+
+ui_clear_panel() {
+  local row=1
+  if [ -z "${STATUS_TTY_PATH}" ]; then
+    return 0
+  fi
+  while [ "${row}" -le "${STATUS_PANEL_HEIGHT}" ]; do
+    ui_write_raw "\033[${row};1H\033[2K"
+    row=$((row + 1))
+  done
+}
+
+ui_restore_console() {
+  if [ -z "${STATUS_TTY_PATH}" ]; then
+    return 0
+  fi
+  ui_write_raw "\033[r\033[?25h"
+}
+
+ui_render() {
+  if [ $# -ge 1 ]; then
+    STATUS_STATE="${1:-RUNNING}"
+  fi
+  if [ $# -ge 2 ]; then
+    STATUS_DETAIL="${2:-}"
+  fi
+  if [ -z "${STATUS_TTY_PATH}" ]; then
+    return 0
+  fi
+
+  ui_refresh_layout
+  local inner_width=$((STATUS_TTY_COLS - 4))
+  local progress_label_width progress_width progress_bar phase_label detail_label
+  local box_top box_mid box_bottom state_color
+  local phase_position="" phase_total="" phase_id="" phase_state="" phase_title="" progress_text="" has_bootstrap_progress=0 phase_fraction_text=""
+  if [ "${inner_width}" -lt 8 ]; then
+    inner_width=8
+  fi
+  progress_label_width=12
+  if [ "${STATUS_COMPACT_UI}" -eq 1 ]; then
+    progress_label_width=7
+  fi
+  progress_width=$((inner_width - progress_label_width))
+  if [ "${progress_width}" -lt 8 ]; then
+    progress_width=8
+  fi
+  phase_label="$(ui_display_phase "${CURRENT_STEP:-initializing}")"
+  detail_label="${STATUS_DETAIL:-Waiting for next update}"
+  if ui_load_bootstrap_phase_status; then
+    phase_position="${BOOTSTRAP_PROGRESS_PHASE_POSITION:-}"
+    phase_total="${BOOTSTRAP_PROGRESS_PHASE_TOTAL:-}"
+    phase_id="${BOOTSTRAP_PROGRESS_PHASE_ID:-}"
+    phase_state="${BOOTSTRAP_PROGRESS_PHASE_STATE:-${STATUS_STATE:-RUNNING}}"
+    if [ -n "${BOOTSTRAP_PROGRESS_PHASE_LABEL:-}" ]; then
+      phase_label="${BOOTSTRAP_PROGRESS_PHASE_LABEL}"
+    fi
+    if [ -n "${phase_position}" ] && [ -n "${phase_total}" ] && [ "${phase_position}" -gt 0 ] && [ "${phase_total}" -gt 0 ]; then
+      has_bootstrap_progress=1
+      if [ -n "${phase_id}" ]; then
+        phase_fraction_text="${phase_id}/100"
+      else
+        phase_fraction_text="${phase_position}/${phase_total}"
+      fi
+      progress_text="Progress: ${phase_fraction_text}"
+      if [ -n "${phase_id}" ]; then
+        phase_title="Phase: ${phase_fraction_text}"
+      else
+        phase_title="Phase"
+      fi
+    else
+      phase_title="Phase: pre-bootstrap"
+      progress_text="Progress: bootstrap phases pending"
+    fi
+    if [ -n "${phase_state}" ]; then
+      STATUS_STATE="${phase_state}"
+    fi
+  else
+    phase_title="Phase: pre-bootstrap"
+    progress_text="Progress: bootstrap phases pending"
+  fi
+  state_color="$(ui_color_for_state "${STATUS_STATE:-RUNNING}")"
+  box_top="+$(printf '%*s' $((STATUS_TTY_COLS - 2)) '' | tr ' ' '-')+"
+  box_mid="|$(printf '%*s' $((STATUS_TTY_COLS - 2)) '' | tr ' ' ' ')|"
+  box_bottom="${box_top}"
+
+  ui_write_raw "\033[s"
+  ui_clear_panel
+  ui_write_raw "\033[H"
+  ui_write_raw "${box_top}"
+  ui_box_line_color 2 "${state_color}" "| " "Adaetum" " |"
+  if [ "${STATUS_COMPACT_UI}" -eq 1 ]; then
+    ui_box_line_color 3 "${state_color}" "| " "State: ${STATUS_STATE:-RUNNING}" " |"
+    ui_box_line 4 "| " "${progress_text}" " |"
+  else
+    ui_box_line 3 "| " "Host: ${HOSTNAME:-unknown}" " |"
+    ui_box_line_color 4 "${state_color}" "| " "State: ${STATUS_STATE:-RUNNING}" " |"
+    ui_box_line 5 "| " "${progress_text}" " |"
+    if [ "${STATUS_PANEL_HEIGHT}" -ge 7 ]; then
+      ui_box_line 6 "| " "${STATUS_LOG_HINT}" " |"
+    fi
+  fi
+  local row=2
+  while [ "${row}" -lt "${STATUS_PANEL_HEIGHT}" ]; do
+    row=$((row + 1))
+    if [ "${STATUS_COMPACT_UI}" -eq 1 ] && [ "${row}" -le 4 ]; then
+      :
+    elif [ "${STATUS_COMPACT_UI}" -ne 1 ] && [ "${STATUS_PANEL_HEIGHT}" -ge 7 ] && [ "${row}" -le 6 ]; then
+      :
+    elif [ "${STATUS_COMPACT_UI}" -ne 1 ] && [ "${STATUS_PANEL_HEIGHT}" -eq 6 ] && [ "${row}" -le 5 ]; then
+      :
+    else
+      ui_write_raw "\033[${row};1H\033[2K${box_mid}"
+    fi
+  done
+  ui_write_raw "\033[${STATUS_PANEL_HEIGHT};1H\033[2K${box_bottom}"
+  ui_write_raw "\033[u"
+}
+
+ui_render_result() {
+  local state="${1:-SUCCESS}"
+  local detail="${2:-Completed}"
+  local extra="${3:-}"
+  local color=""
+  local inner_width=0
+  local box_top box_mid box_bottom
+
+  if [ -z "${STATUS_TTY_PATH}" ]; then
+    return 0
+  fi
+
+  STATUS_STATE="${state}"
+  STATUS_DETAIL="${detail}"
+  color="$(ui_color_for_state "${state}")"
+
+  ui_clear_screen
+  inner_width=$((STATUS_TTY_COLS - 4))
+  if [ "${inner_width}" -lt 8 ]; then
+    inner_width=8
+  fi
+  box_top="+$(printf '%*s' $((STATUS_TTY_COLS - 2)) '' | tr ' ' '-')+"
+  box_mid="|$(printf '%*s' $((STATUS_TTY_COLS - 2)) '' | tr ' ' ' ')|"
+  box_bottom="${box_top}"
+
+  ui_clear_panel
+  ui_write_raw "\033[H"
+  ui_write_raw "${box_top}"
+  ui_box_line_color 2 "${color}" "| " "Adaetum" " |"
+  ui_box_line_color 4 "${color}" "| " "Phase: 100/100    Status: ${state}" " |"
+  ui_box_line 5 "| " "Detail: ${detail}" " |"
+  if [ -n "${extra}" ]; then
+    ui_box_line 6 "| " "${extra}" " |"
+  fi
+  ui_box_line 8 "| " "${STATUS_LOG_HINT}" " |"
+  local row=2
+  while [ "${row}" -lt "${STATUS_PANEL_HEIGHT}" ]; do
+    row=$((row + 1))
+    if [ "${row}" -eq 2 ] || [ "${row}" -eq 4 ] || [ "${row}" -eq 5 ] || [ "${row}" -eq 6 ] || [ "${row}" -eq 8 ]; then
+      :
+    else
+      ui_write_raw "\033[${row};1H\033[2K${box_mid}"
+    fi
+  done
+  ui_write_raw "\033[${STATUS_PANEL_HEIGHT};1H\033[2K${box_bottom}"
+  ui_write_raw "\033[${STATUS_SCROLL_TOP};1H"
+}
+
+ui_start_phase_monitor() {
+  local interval="${1:-1}"
+  if [ -z "${STATUS_TTY_PATH}" ]; then
+    return 0
+  fi
+  if [ -n "${UI_PHASE_MONITOR_PID:-}" ] && kill -0 "${UI_PHASE_MONITOR_PID}" 2>/dev/null; then
+    return 0
+  fi
+  (
+    while true; do
+      sleep "${interval}"
+      ui_render "${STATUS_STATE:-RUNNING}" "${STATUS_DETAIL:-Waiting for next update}"
+    done
+  ) &
+  UI_PHASE_MONITOR_PID=$!
+}
+
+ui_stop_phase_monitor() {
+  if [ -n "${UI_PHASE_MONITOR_PID:-}" ]; then
+    kill "${UI_PHASE_MONITOR_PID}" >/dev/null 2>&1 || true
+    wait "${UI_PHASE_MONITOR_PID}" 2>/dev/null || true
+    UI_PHASE_MONITOR_PID=""
+  fi
+}
+
+if ui_open_console; then
+  ui_prepare_console
+  ui_render "STARTING" "Preparing first-boot workflow"
+fi
+
+step_begin() {
+  CURRENT_STEP="$1"
+  STEP_INDEX=$((STEP_INDEX + 1))
+  echo "[BOOTSTRAP] ---- ${CURRENT_STEP} ----"
+  ui_stop_phase_monitor
+  ui_clear_screen
+  ui_render "RUNNING" "Entered ${CURRENT_STEP}"
+}
+step_end() {
+  rc="${1:-0}"
+  ui_stop_phase_monitor
+  ui_clear_screen
+  if [ "${rc}" = "0" ]; then
+    echo "[BOOTSTRAP] ---- end ${CURRENT_STEP} (ok) ----"
+    ui_render "RUNNING" "Completed ${CURRENT_STEP}"
+  else
+    echo "[BOOTSTRAP] ---- end ${CURRENT_STEP} (FAILED rc=${rc}) ----"
+    ui_render "FAILED" "Failed ${CURRENT_STEP} (rc=${rc})"
+  fi
+  CURRENT_STEP=""
+}

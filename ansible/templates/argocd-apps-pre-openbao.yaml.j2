@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-pre-openbao
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: "{{ argo_repo_url }}"
+    targetRevision: "{{ argo_repo_revision }}"
+    path: "{{ argo_repo_path }}/pre-openbao"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

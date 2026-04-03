@@ -1,0 +1,8 @@
+---
+# Role metadata for healthcheck
+galaxy_info:
+  role_name: healthcheck
+  author: ansible-runner
+  description: Lightweight host checks for connectivity and basic system health
+  license: MIT
+  min_ansible_version: "2.14"

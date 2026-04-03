@@ -1,0 +1,12 @@
+name: gatekeeper-policy-constraints
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-17"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/compliance/gatekeeper-policy-samples/constraints
+sync_options:
+  - CreateNamespace=true
+  - SkipDryRunOnMissingResource=true
+  - PruneLast=true
+destination_namespace: gatekeeper-system

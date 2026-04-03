@@ -1,0 +1,425 @@
+version: "3"
+
+tasks:
+  build:external:
+    desc: External wrapper for bundle build (used by setup scripts)
+    deps: [':hooks:ensure']
+    cmds:
+      - task: build
+
+  build:
+    internal: true
+    desc: Create a tarball of ansible bits for offline use
+    deps: [':hooks:ensure']
+    cmds:
+      - mkdir -p dist
+      - |
+        set -euo pipefail
+        python3 - <<'PY'
+        import io
+        import os
+        import stat
+        import tarfile
+        from pathlib import Path
+
+        out_path = Path("{{.BUNDLE_OUT}}")
+        include_paths = [Path(p) for p in "{{.BUNDLE_INCLUDE}}".split()]
+        normalize_prefix = Path("ansible/ansible-scripts")
+
+        def add_file(tf: tarfile.TarFile, src: Path, arcname: str) -> None:
+            st = src.stat()
+            mode = stat.S_IMODE(st.st_mode)
+            if src.as_posix().startswith(normalize_prefix.as_posix()):
+                data = src.read_bytes().replace(b"\r\n", b"\n")
+                info = tarfile.TarInfo(name=arcname)
+                info.size = len(data)
+                info.mode = mode
+                info.mtime = int(st.st_mtime)
+                tf.addfile(info, io.BytesIO(data))
+                return
+            tf.add(src.as_posix(), arcname=arcname, recursive=False)
+
+        with tarfile.open(out_path.as_posix(), "w:gz") as tf:
+            for root in include_paths:
+                if not root.exists():
+                    continue
+                if root.is_file():
+                    add_file(tf, root, root.as_posix())
+                    continue
+                for dirpath, dirnames, filenames in os.walk(root):
+                    dirnames.sort()
+                    filenames.sort()
+                    rel_dir = Path(dirpath).as_posix()
+                    tf.add(rel_dir, arcname=rel_dir, recursive=False)
+                    for name in filenames:
+                        src = Path(dirpath) / name
+                        add_file(tf, src, src.as_posix())
+        PY
+
+  upload-r2:
+    internal: true
+    desc: Upload the bundle tarball to Cloudflare R2 (direct) or via the KS Worker (for /iso/ bootstrap downloads)
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -euo pipefail
+
+        bundle="{{.BUNDLE_OUT}}"
+        if [ ! -f "${bundle}" ]; then
+          echo "Missing bundle: ${bundle}" >&2
+          echo "Run: task bundle:build" >&2
+          exit 1
+        fi
+
+        # This key is what the Worker fetches from R2 when a node requests:
+        #   GET /iso/firstboot-payload/ansible-runner-bundle.tar.gz?token=...
+        # The Worker maps that to R2 key:
+        #   firstboot-payload/ansible-runner-bundle.tar.gz
+        r2_key="${R2_BUNDLE_KEY:-firstboot-payload/ansible-runner-bundle.tar.gz}"
+
+        # Prefer the Worker upload path because first-boot nodes fetch the
+        # artifact through /iso/... on the Worker, not from direct R2.
+        base_url="${KS_BASE_URL:-}"
+        if [ -z "${base_url}" ] && [ -n "${KS_FILE_URL:-}" ]; then
+          base_url="$(
+            python3 -c 'import os,urllib.parse; url=os.environ.get("KS_FILE_URL",""); parsed=urllib.parse.urlparse(url); print(f"{parsed.scheme}://{parsed.netloc}") if parsed.scheme and parsed.netloc else print("")'
+          )"
+        fi
+        if [ -z "${base_url}" ]; then
+          echo "Missing upload target." >&2
+          echo "Set either:" >&2
+          echo "  - R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY (direct R2 upload), OR" >&2
+          echo "  - KS_BASE_URL (or KS_FILE_URL) plus KS_UPLOAD_TOKEN or KS_SHARED_TOKEN (Worker upload)" >&2
+          exit 1
+        fi
+        base_url="${base_url%/}"
+
+        # Task's dotenv loader does not expand shell-style references like:
+        #   KS_UPLOAD_TOKEN=${KS_SHARED_TOKEN}
+        # Treat that pattern as an alias to keep .env DRY.
+        token_source="KS_UPLOAD_TOKEN"
+        upload_token="${KS_UPLOAD_TOKEN:-}"
+        if [ "${upload_token}" = '${KS_SHARED_TOKEN}' ] || [ "${upload_token}" = '$KS_SHARED_TOKEN' ]; then
+          upload_token=""
+        fi
+        if [ -z "${upload_token}" ]; then
+          token_source="KS_SHARED_TOKEN"
+          upload_token="${KS_SHARED_TOKEN:-}"
+        fi
+        if [ -z "${upload_token}" ]; then
+          echo "Missing upload token for Worker upload." >&2
+          echo "Set KS_UPLOAD_TOKEN (preferred) or KS_SHARED_TOKEN." >&2
+          exit 1
+        fi
+
+        upload_url="${base_url}/iso/${r2_key}"
+        echo "[bundle:upload-r2] auth: using ${token_source} via x-ks-token header"
+        echo "[bundle:upload-r2] uploading (worker) ${bundle} -> ${upload_url}"
+        resp_file="$(mktemp)"
+        http_code="$(
+          curl -sS -X PUT \
+            -H "x-ks-token: ${upload_token}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary "@${bundle}" \
+            -o "${resp_file}" \
+            -w '%{http_code}' \
+            "${upload_url}" || true
+        )"
+
+        if [ "${http_code}" = "200" ] || [ "${http_code}" = "201" ] || [ "${http_code}" = "204" ]; then
+          rm -f "${resp_file}"
+          exit 0
+        fi
+
+        body_preview="$(head -c 300 "${resp_file}" 2>/dev/null || true)"
+        rm -f "${resp_file}"
+
+        if [ "${http_code}" = "401" ]; then
+          echo "Worker upload unauthorized (http=401)." >&2
+          echo "Fix: ensure the token in ${token_source} matches the Worker secret." >&2
+          if [ "${token_source}" = "KS_UPLOAD_TOKEN" ]; then
+            echo "Note: if the Worker is not configured with KS_UPLOAD_TOKEN, unset KS_UPLOAD_TOKEN locally so uploads fall back to KS_SHARED_TOKEN." >&2
+          else
+            echo "Note: if the Worker requires a dedicated upload token, set KS_UPLOAD_TOKEN locally to match the Worker secret KS_UPLOAD_TOKEN." >&2
+          fi
+          exit 2
+        fi
+
+        if [ "${http_code}" = "404" ]; then
+          echo "Worker upload endpoint not found (http=404)." >&2
+          echo "This usually means bootstrap.example.services is still running an older Worker that only supports GET /iso/*." >&2
+          echo "Fix options:" >&2
+          echo "  - Deploy the updated Worker from .github/workflows/ks-worker.yml (workflow_dispatch), then re-run." >&2
+          echo "  - Or rely on direct R2 creds (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) as a fallback upload path." >&2
+        fi
+
+        echo "Worker upload failed (http=${http_code}); trying direct R2 fallback if configured." >&2
+        if [ -n "${body_preview}" ]; then
+          echo "Response (first 300 bytes): ${body_preview}" >&2
+        fi
+
+        have_direct_r2="0"
+        if [ -n "${R2_ENDPOINT:-}" ] && [ -n "${R2_BUCKET:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]; then
+          have_direct_r2="1"
+        fi
+        if [ "${have_direct_r2}" != "1" ]; then
+          exit 1
+        fi
+        if ! command -v rclone >/dev/null 2>&1; then
+          echo "rclone is required for direct R2 uploads (bundle:upload-r2)." >&2
+          echo "Install: https://rclone.org/install/" >&2
+          exit 1
+        fi
+
+        export RCLONE_CONFIG_CLUSTER_R2_TYPE="s3"
+        export RCLONE_CONFIG_CLUSTER_R2_PROVIDER="Cloudflare"
+        export RCLONE_CONFIG_CLUSTER_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"
+        export RCLONE_CONFIG_CLUSTER_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
+        export RCLONE_CONFIG_CLUSTER_R2_ENDPOINT="${R2_ENDPOINT}"
+        export RCLONE_CONFIG_CLUSTER_R2_NO_CHECK_BUCKET="true"
+
+        echo "[bundle:upload-r2] uploading (direct fallback) ${bundle} -> s3://${R2_BUCKET}/${r2_key}"
+        RCLONE_CONFIG=/dev/null rclone copyto --log-level ERROR "${bundle}" "cluster_r2:${R2_BUCKET}/${r2_key}"
+
+  upload-r2:external:
+    desc: External wrapper for bundle upload (used by setup scripts)
+    deps: [':hooks:ensure']
+    cmds:
+      - task: upload-r2
+
+  runtime-env:build:
+    internal: true
+    desc: Build the root-only runtime bootstrap env payload
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -euo pipefail
+        bash ./tasks/scripts/build-bootstrap-runtime-env.sh dist/bootstrap-runtime.env >/dev/null
+
+  runtime-env:build:external:
+    desc: External wrapper for runtime bootstrap env build
+    deps: [':hooks:ensure']
+    cmds:
+      - task: runtime-env:build
+
+  runtime-env:upload-r2:
+    internal: true
+    desc: Upload the runtime bootstrap env payload to Cloudflare R2 via direct creds or the KS Worker
+    deps: [':hooks:ensure', runtime-env:build]
+    cmds:
+      - |
+        set -euo pipefail
+
+        env_file="dist/bootstrap-runtime.env"
+        if [ ! -f "${env_file}" ]; then
+          echo "Missing runtime env payload: ${env_file}" >&2
+          exit 1
+        fi
+
+        r2_key="${R2_RUNTIME_ENV_KEY:-firstboot-payload/bootstrap-runtime.env}"
+
+        # Prefer the Worker upload path because first-boot nodes fetch the
+        # artifact through /iso/... on the Worker, not from direct R2.
+        base_url="${KS_BASE_URL:-}"
+        if [ -z "${base_url}" ] && [ -n "${KS_FILE_URL:-}" ]; then
+          base_url="$(
+            python3 -c 'import os,urllib.parse; url=os.environ.get("KS_FILE_URL",""); parsed=urllib.parse.urlparse(url); print(f"{parsed.scheme}://{parsed.netloc}") if parsed.scheme and parsed.netloc else print("")'
+          )"
+        fi
+        if [ -z "${base_url}" ]; then
+          echo "Missing upload target." >&2
+          echo "Set either direct R2 creds or KS_BASE_URL/KS_FILE_URL plus KS_UPLOAD_TOKEN or KS_SHARED_TOKEN." >&2
+          exit 1
+        fi
+        base_url="${base_url%/}"
+
+        token_source="KS_UPLOAD_TOKEN"
+        upload_token="${KS_UPLOAD_TOKEN:-}"
+        if [ "${upload_token}" = '${KS_SHARED_TOKEN}' ] || [ "${upload_token}" = '$KS_SHARED_TOKEN' ]; then
+          upload_token=""
+        fi
+        if [ -z "${upload_token}" ]; then
+          token_source="KS_SHARED_TOKEN"
+          upload_token="${KS_SHARED_TOKEN:-}"
+        fi
+        if [ -z "${upload_token}" ]; then
+          echo "Missing upload token for Worker upload." >&2
+          exit 1
+        fi
+
+        upload_url="${base_url}/iso/${r2_key}"
+        echo "[bundle:runtime-env:upload-r2] auth: using ${token_source} via x-ks-token header"
+        echo "[bundle:runtime-env:upload-r2] uploading (worker) ${env_file} -> ${upload_url}"
+        resp_file="$(mktemp)"
+        http_code="$(
+          curl -sS -X PUT \
+            -H "x-ks-token: ${upload_token}" \
+            -H "Content-Type: text/plain" \
+            --data-binary "@${env_file}" \
+            -o "${resp_file}" \
+            -w '%{http_code}' \
+            "${upload_url}" || true
+        )"
+
+        if [ "${http_code}" = "200" ] || [ "${http_code}" = "201" ] || [ "${http_code}" = "204" ]; then
+          rm -f "${resp_file}"
+          exit 0
+        fi
+
+        body_preview="$(head -c 300 "${resp_file}" 2>/dev/null || true)"
+        rm -f "${resp_file}"
+        echo "Worker upload failed (http=${http_code}); trying direct R2 fallback if configured." >&2
+        if [ -n "${body_preview}" ]; then
+          echo "Response (first 300 bytes): ${body_preview}" >&2
+        fi
+
+        have_direct_r2="0"
+        if [ -n "${R2_ENDPOINT:-}" ] && [ -n "${R2_BUCKET:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]; then
+          have_direct_r2="1"
+        fi
+        if [ "${have_direct_r2}" != "1" ]; then
+          exit 1
+        fi
+        if ! command -v rclone >/dev/null 2>&1; then
+          echo "rclone is required for direct R2 uploads (bundle:runtime-env:upload-r2)." >&2
+          exit 1
+        fi
+
+        export RCLONE_CONFIG_CLUSTER_R2_TYPE="s3"
+        export RCLONE_CONFIG_CLUSTER_R2_PROVIDER="Cloudflare"
+        export RCLONE_CONFIG_CLUSTER_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"
+        export RCLONE_CONFIG_CLUSTER_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
+        export RCLONE_CONFIG_CLUSTER_R2_ENDPOINT="${R2_ENDPOINT}"
+        export RCLONE_CONFIG_CLUSTER_R2_NO_CHECK_BUCKET="true"
+
+        echo "[bundle:runtime-env:upload-r2] uploading (direct fallback) ${env_file} -> s3://${R2_BUCKET}/${r2_key}"
+        RCLONE_CONFIG=/dev/null rclone copyto --log-level ERROR "${env_file}" "cluster_r2:${R2_BUCKET}/${r2_key}"
+
+  runtime-env:upload-r2:external:
+    desc: External wrapper for runtime bootstrap env upload
+    deps: [':hooks:ensure']
+    cmds:
+      - task: runtime-env:upload-r2
+
+  download:
+    internal: true
+    desc: Download a prebuilt ansible bundle into dist/
+    deps: [':hooks:ensure']
+    preconditions:
+      - sh: test -n "{{.BUNDLE_URL}}"
+        msg: "Set BUNDLE_URL to the bundle tarball URL"
+    cmds:
+      - mkdir -p dist
+      - curl -fsSL "{{.BUNDLE_URL}}" -o "{{.BUNDLE_OUT}}"
+
+  publish:external:
+    desc: Force rebuild, upload, and verify the live Worker-served bootstrap bundle/runtime env
+    deps: [':hooks:ensure']
+    cmds:
+      - task: build
+      - task: upload-r2
+      - |
+        set -euo pipefail
+        if [ -n "${R2_ENDPOINT:-}" ] && [ -n "${R2_BUCKET:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ] && command -v rclone >/dev/null 2>&1; then
+          export RCLONE_CONFIG_CLUSTER_R2_TYPE="s3"
+          export RCLONE_CONFIG_CLUSTER_R2_PROVIDER="Cloudflare"
+          export RCLONE_CONFIG_CLUSTER_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"
+          export RCLONE_CONFIG_CLUSTER_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
+          export RCLONE_CONFIG_CLUSTER_R2_ENDPOINT="${R2_ENDPOINT}"
+          export RCLONE_CONFIG_CLUSTER_R2_NO_CHECK_BUCKET="true"
+          echo "[bundle:publish] forcing direct R2 overwrite for bundle"
+          RCLONE_CONFIG=/dev/null rclone copyto --log-level ERROR "{{.BUNDLE_OUT}}" "cluster_r2:${R2_BUCKET}/firstboot-payload/ansible-runner-bundle.tar.gz"
+        else
+          echo "[bundle:publish] direct R2 overwrite skipped (missing creds or rclone)"
+        fi
+      - task: runtime-env:build
+      - task: runtime-env:upload-r2
+      - |
+        set -euo pipefail
+        if [ -n "${R2_ENDPOINT:-}" ] && [ -n "${R2_BUCKET:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ] && command -v rclone >/dev/null 2>&1; then
+          export RCLONE_CONFIG_CLUSTER_R2_TYPE="s3"
+          export RCLONE_CONFIG_CLUSTER_R2_PROVIDER="Cloudflare"
+          export RCLONE_CONFIG_CLUSTER_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"
+          export RCLONE_CONFIG_CLUSTER_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
+          export RCLONE_CONFIG_CLUSTER_R2_ENDPOINT="${R2_ENDPOINT}"
+          export RCLONE_CONFIG_CLUSTER_R2_NO_CHECK_BUCKET="true"
+          echo "[bundle:publish] forcing direct R2 overwrite for runtime env"
+          RCLONE_CONFIG=/dev/null rclone copyto --log-level ERROR "dist/bootstrap-runtime.env" "cluster_r2:${R2_BUCKET}/firstboot-payload/bootstrap-runtime.env"
+        else
+          echo "[bundle:publish] direct R2 overwrite skipped for runtime env (missing creds or rclone)"
+        fi
+      - |
+        set -euo pipefail
+
+        shared_token="${KS_SHARED_TOKEN:-}"
+        if [ -z "${shared_token}" ]; then
+          echo "Missing KS_SHARED_TOKEN for live verification." >&2
+          exit 1
+        fi
+
+        local_bundle="{{.BUNDLE_OUT}}"
+        if [ ! -f "${local_bundle}" ]; then
+          echo "Missing bundle after publish: ${local_bundle}" >&2
+          exit 1
+        fi
+
+        local_bundle_sha="$(sha256sum "${local_bundle}" | awk '{print $1}')"
+        runtime_env_content="$(
+          curl -fsSL \
+            -H "x-ks-token: ${shared_token}" \
+            "${KS_BASE_URL%/}/iso/firstboot-payload/bootstrap-runtime.env"
+        )"
+
+        runtime_bundle_url="$(printf '%s\n' "${runtime_env_content}" | sed -n 's/^BOOTSTRAP_BUNDLE_URL=//p' | head -n1)"
+        runtime_bundle_sha="$(printf '%s\n' "${runtime_env_content}" | sed -n 's/^BOOTSTRAP_BUNDLE_SHA256=//p' | head -n1)"
+
+        if [ -z "${runtime_bundle_url}" ] || [ -z "${runtime_bundle_sha}" ]; then
+          echo "Live runtime env is missing BOOTSTRAP_BUNDLE_URL or BOOTSTRAP_BUNDLE_SHA256." >&2
+          exit 1
+        fi
+
+        # The runtime env is shell-escaped with %q; decode it before fetch.
+        runtime_bundle_url="$(eval "printf '%s' ${runtime_bundle_url}")"
+        runtime_bundle_sha="$(eval "printf '%s' ${runtime_bundle_sha}")"
+
+        if [ "${runtime_bundle_sha}" != "${local_bundle_sha}" ]; then
+          echo "Live runtime env bundle sha mismatch." >&2
+          echo "  local: ${local_bundle_sha}" >&2
+          echo "  live : ${runtime_bundle_sha}" >&2
+          exit 1
+        fi
+
+        expected_runtime_bundle_url="${KS_BASE_URL%/}/iso/firstboot-payload/ansible-runner-bundle.tar.gz"
+        if [ "${runtime_bundle_url}" != "${expected_runtime_bundle_url}" ]; then
+          echo "Live runtime env bundle URL does not match the expected stable Worker path." >&2
+          echo "  expected: ${expected_runtime_bundle_url}" >&2
+          echo "  live    : ${runtime_bundle_url}" >&2
+          exit 1
+        fi
+
+        if printf '%s' "${runtime_bundle_url}" | grep -Fq '?v='; then
+          echo "Live runtime env bundle URL must not contain ?v= cache busting." >&2
+          echo "  url: ${runtime_bundle_url}" >&2
+          exit 1
+        fi
+
+        live_bundle_url="${runtime_bundle_url}"
+        case "${live_bundle_url}" in
+          *\?*) live_bundle_url="${live_bundle_url}&token=${shared_token}" ;;
+          *) live_bundle_url="${live_bundle_url}?token=${shared_token}" ;;
+        esac
+
+        mkdir -p dist
+        live_bundle_tmp="dist/.live-ansible-runner-bundle.tar.gz"
+        trap 'rm -f "${live_bundle_tmp}"' EXIT
+        curl -fsSL "${live_bundle_url}" -o "${live_bundle_tmp}"
+
+        live_bundle_sha="$(sha256sum "${live_bundle_tmp}" | awk '{print $1}')"
+        if [ "${live_bundle_sha}" != "${local_bundle_sha}" ]; then
+          echo "Live bundle sha mismatch after publish." >&2
+          echo "  local: ${local_bundle_sha}" >&2
+          echo "  live : ${live_bundle_sha}" >&2
+          exit 1
+        fi
+
+        echo "[bundle:publish] verified live Worker bundle sha=${live_bundle_sha}"

@@ -1,0 +1,1200 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# shellcheck disable=SC1091
+. "${script_dir}/diagnostics.sh"
+
+ANSIBLE_INVENTORY="${ANSIBLE_INVENTORY:-ansible/node-inventory.yml}"
+ANSIBLE_PLAYBOOK="${ANSIBLE_PLAYBOOK:-ansible/playbooks/healthcheck.yml}"
+BOOTSTRAP_BREAKGLASS="${BOOTSTRAP_BREAKGLASS:-1}"
+BOOTSTRAP_PHASE70_LOCAL_ONLY="${BOOTSTRAP_PHASE70_LOCAL_ONLY:-1}"
+BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
+OPENBAO_NAMESPACE="${OPENBAO_NAMESPACE:-openbao}"
+OPENBAO_POD="${OPENBAO_POD:-openbao-0}"
+phase70_log_root="${BOOTSTRAP_PHASE_LOG_DIR:-/var/log/bootstrap}"
+PHASE70_LOG_FILE="${PHASE70_LOG_FILE:-${phase70_log_root}/phase70.log}"
+BOOTSTRAP_DIAG_PHASE="phase70"
+BOOTSTRAP_DIAG_LOG_PATH="${PHASE70_LOG_FILE}"
+bootstrap_diag_init
+phase70_start_ts="$(date +%s)"
+phase70_last_error_cmd=""
+phase70_last_error_line=""
+
+if [[ -z "${BUNDLE_BOOTSTRAP_LOG_FILE:-}" ]]; then
+  mkdir -p "$(dirname "${PHASE70_LOG_FILE}")"
+  exec >>"${PHASE70_LOG_FILE}" 2>&1
+fi
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)"
+cd "${repo_root}"
+
+if [[ -z "${ANSIBLE_CONFIG:-}" && -f "${repo_root}/ansible/ansible.cfg" ]]; then
+  export ANSIBLE_CONFIG="${repo_root}/ansible/ansible.cfg"
+fi
+export ANSIBLE_ROLES_PATH="${repo_root}/ansible/automation-roles:${repo_root}/ansible/playbooks/roles:/etc/ansible/roles:/usr/share/ansible/roles"
+
+if [[ -z "${KUBECONFIG:-}" && -f /etc/rancher/rke2/rke2.yaml ]]; then
+  export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+fi
+
+kubectl_bin=""
+if command -v kubectl >/dev/null 2>&1; then
+  kubectl_bin="$(command -v kubectl)"
+elif [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
+  kubectl_bin="/var/lib/rancher/rke2/bin/kubectl"
+fi
+
+read_secret_file() {
+  local path="${1:-}"
+  if [[ -z "${path}" || ! -f "${path}" ]]; then
+    return 0
+  fi
+  tr -d '\r' <"${path}" | awk 'NF{line=$0} END{printf "%s", line}'
+}
+
+retry_cmd() {
+  local attempts="${1:-5}"
+  local sleep_seconds="${2:-5}"
+  shift 2
+  local i=1
+  while (( i <= attempts )); do
+    if "$@"; then
+      return 0
+    fi
+    if (( i == attempts )); then
+      return 1
+    fi
+    sleep "${sleep_seconds}"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+phase70_failures=0
+phase70_critical_failures=0
+
+phase70_exit_trap() {
+  local rc=$?
+  local end_ts duration
+  end_ts="$(date +%s)"
+  duration="$((end_ts - phase70_start_ts))"
+  if [[ "${rc}" -eq 0 ]]; then
+    bootstrap_diag_record \
+      "phase=phase70" \
+      "step=phase70" \
+      "component=phase70" \
+      "operation=run-complete" \
+      "severity=info" \
+      "exit_code=0" \
+      "duration_seconds=${duration}" \
+      "summary=phase70 complete" \
+      "log_path=${PHASE70_LOG_FILE}"
+  else
+    bootstrap_diag_record \
+      "phase=phase70" \
+      "step=phase70" \
+      "component=phase70" \
+      "operation=run-failed" \
+      "severity=error" \
+      "exit_code=${rc}" \
+      "duration_seconds=${duration}" \
+      "failure_kind=$(bootstrap_diag_classify_failure_kind "${phase70_last_error_cmd}")" \
+      "summary=phase70 failed at line ${phase70_last_error_line:-unknown}: ${phase70_last_error_cmd:-unknown}" \
+      "log_path=${PHASE70_LOG_FILE}"
+  fi
+  exit "${rc}"
+}
+trap 'phase70_exit_trap' EXIT
+trap 'phase70_last_error_line="${BASH_LINENO[0]:-unknown}"; phase70_last_error_cmd="${BASH_COMMAND:-unknown}"' ERR
+
+bootstrap_diag_record \
+  "phase=phase70" \
+  "step=phase70" \
+  "component=phase70" \
+  "operation=run-start" \
+  "severity=info" \
+  "summary=phase70 starting" \
+  "log_path=${PHASE70_LOG_FILE}"
+
+run_phase70_step() {
+  local label="${1:-}"
+  local severity="${2:-critical}"
+  shift 2
+
+  echo "[phase70] step start: ${label}"
+
+  set +e
+  "$@"
+  local rc=$?
+  set -e
+
+  if (( rc == 0 )); then
+    echo "[phase70] step ok: ${label}"
+    return 0
+  fi
+
+  echo "[phase70] step failed: ${label} (rc=${rc})" >&2
+  phase70_failures=$((phase70_failures + 1))
+  if [[ "${severity}" == "critical" ]]; then
+    phase70_critical_failures=$((phase70_critical_failures + 1))
+  fi
+  return 0
+}
+
+read_openbao_platform_field() {
+  local field="${1:-}"
+  local token="${2:-}"
+  if [[ -z "${field}" || -z "${token}" || -z "${kubectl_bin}" ]]; then
+    return 0
+  fi
+  "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${token}" \
+    bao kv get -field="${field}" secret/bootstrap/platform 2>/dev/null | tr -d '\r\n' || true
+}
+
+read_k8s_secret_key() {
+  local namespace="${1:-}"
+  local secret_name="${2:-}"
+  local key="${3:-}"
+  if [[ -z "${kubectl_bin}" || -z "${namespace}" || -z "${secret_name}" || -z "${key}" ]]; then
+    return 0
+  fi
+  "${kubectl_bin}" -n "${namespace}" get secret "${secret_name}" -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null || true
+}
+
+read_phase70_bootstrap_field() {
+  local field="${1:-}"
+  local openbao_token="${2:-}"
+  local backup_value=""
+
+  backup_value="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/${field}")"
+  if [[ -n "${backup_value}" ]]; then
+    printf '%s' "${backup_value}"
+    return 0
+  fi
+  if [[ -n "${openbao_token}" ]]; then
+    read_openbao_platform_field "${field}" "${openbao_token}"
+  fi
+}
+
+write_phase70_bootstrap_field() {
+  local field="${1:-}"
+  local value="${2:-}"
+  local openbao_token="${3:-}"
+
+  if [[ -z "${field}" ]]; then
+    return 0
+  fi
+  if [[ -n "${BOOTSTRAP_SECRET_DIR:-}" && -d "${BOOTSTRAP_SECRET_DIR}" ]]; then
+    printf '%s\n' "${value}" > "${BOOTSTRAP_SECRET_DIR}/${field}"
+    chmod 0600 "${BOOTSTRAP_SECRET_DIR}/${field}" 2>/dev/null || true
+  fi
+  if [[ -n "${openbao_token}" ]]; then
+    "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+      env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
+      bao kv patch secret/bootstrap/platform "${field}=${value}" >/dev/null 2>&1 || true
+  fi
+}
+
+log_widget_field_phase70() {
+  local field="${1:-}"
+  local status="${2:-}"
+  local detail="${3:-}"
+  if [[ -n "${detail}" ]]; then
+    echo "[phase70] homepage field ${field}: ${status} (${detail})"
+  else
+    echo "[phase70] homepage field ${field}: ${status}"
+  fi
+}
+
+persist_widget_field_phase70() {
+  local field="${1:-}"
+  local value="${2:-}"
+  local openbao_token="${3:-}"
+  if [[ -z "${field}" || -z "${value}" ]]; then
+    return 0
+  fi
+  write_phase70_bootstrap_field "${field}" "${value}" "${openbao_token}"
+}
+
+build_homepage_widget_secret_manifest_phase70() {
+  python3 - <<'PY' "$@"
+import json
+import sys
+
+pairs = [arg.split("=", 1) for arg in sys.argv[1:] if "=" in arg]
+string_data = {k: v for k, v in pairs if v}
+doc = {
+    "apiVersion": "v1",
+    "kind": "Secret",
+    "metadata": {"name": "homepage-widget-secrets", "namespace": "homepage"},
+    "type": "Opaque",
+    "stringData": string_data,
+}
+print(json.dumps(doc), end="")
+PY
+}
+
+service_cluster_ip_phase70() {
+  local namespace="${1:-}"
+  local service_name="${2:-}"
+  if [[ -z "${kubectl_bin}" || -z "${namespace}" || -z "${service_name}" ]]; then
+    return 0
+  fi
+  "${kubectl_bin}" -n "${namespace}" get svc "${service_name}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true
+}
+
+validate_argocd_widget_key_phase70() {
+  local token="${1:-}"
+  local service_host=""
+  local status=""
+
+  if [[ -z "${token}" ]]; then
+    return 1
+  fi
+  service_host="$(service_cluster_ip_phase70 argocd argocd-server)"
+  if [[ -z "${service_host}" ]]; then
+    return 1
+  fi
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+      -H "Authorization: Bearer ${token}" \
+      "http://${service_host}:80/api/v1/applications" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+validate_grafana_admin_password_phase70() {
+  local password="${1:-}"
+  local service_host=""
+  local status=""
+
+  if [[ -z "${password}" ]]; then
+    return 1
+  fi
+  service_host="$(service_cluster_ip_phase70 observability grafana)"
+  if [[ -z "${service_host}" ]]; then
+    return 1
+  fi
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+      -u "admin:${password}" \
+      "http://${service_host}:80/api/admin/stats" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+validate_gitea_widget_auth_phase70() {
+  local token="${1:-}"
+  local service_host=""
+  local status=""
+
+  if [[ -z "${token}" ]]; then
+    return 1
+  fi
+  service_host="$(service_cluster_ip_phase70 gitea gitea-http)"
+  if [[ -z "${service_host}" ]]; then
+    return 1
+  fi
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+      -H "Authorization: token ${token}" \
+      "http://${service_host}:3000/api/v1/user" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+validate_authentik_widget_key_phase70() {
+  local token="${1:-}"
+  local service_host=""
+  local status=""
+
+  if [[ -z "${token}" ]]; then
+    return 1
+  fi
+  service_host="$(service_cluster_ip_phase70 authentik authentik-server)"
+  if [[ -z "${service_host}" ]]; then
+    return 1
+  fi
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+      -H "Authorization: Bearer ${token}" \
+      "http://${service_host}:80/api/v3/core/users/me/" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+discover_tailscale_device_id_phase70() {
+  if ! command -v tailscale >/dev/null 2>&1; then
+    return 0
+  fi
+  tailscale status --json 2>/dev/null | python3 - <<'PY'
+import json
+import sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("", end="")
+    raise SystemExit(0)
+self_data = data.get("Self") or {}
+print((self_data.get("ID") or "").strip(), end="")
+PY
+}
+
+ensure_ansible_runner_pull_secret_phase70() {
+  local openbao_token="${1:-}"
+  local registry_username=""
+  local registry_token=""
+  local registry_host=""
+  local dockerconfigjson=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase70] kubectl not available; cannot reconcile ansible-runner pull secret" >&2
+    return 1
+  fi
+
+  registry_host="$("${kubectl_bin}" -n ansible get configmap ansible-cluster-config -o jsonpath='{.data.ANSIBLE_RUNNER_IMAGE}' 2>/dev/null | python3 - <<'PY'
+import sys
+image = sys.stdin.read().strip()
+if "/" in image:
+    print(image.split("/", 1)[0], end="")
+PY
+  )"
+  if [[ -z "${registry_host}" ]]; then
+    registry_host="registry.cluster-duck.cloud"
+  fi
+
+  if [[ -z "${registry_host}" ]]; then
+    echo "[phase70] ansible-runner pull secret reconcile failed: could not determine registry host" >&2
+    return 1
+  fi
+
+  registry_username="$(read_phase70_bootstrap_field argocd_repo_username "${openbao_token}")"
+  if [[ -z "${registry_username}" ]]; then
+    registry_username="$(read_phase70_bootstrap_field gitea_admin_username "${openbao_token}")"
+  fi
+  if [[ -z "${registry_username}" ]]; then
+    registry_username="gitea-admin"
+  fi
+
+  registry_token="$(read_phase70_bootstrap_field gitea_git_token "${openbao_token}")"
+  if [[ -z "${registry_token}" ]]; then
+    registry_token="$(read_phase70_bootstrap_field argocd_repo_token "${openbao_token}")"
+  fi
+  if [[ -z "${registry_token}" ]]; then
+    echo "[phase70] ansible-runner pull secret reconcile failed: registry token unavailable from backup/OpenBao" >&2
+    return 1
+  fi
+
+  dockerconfigjson="$(
+    python3 - <<'PY' "${registry_username}" "${registry_token}" "${registry_host}"
+import base64
+import json
+import sys
+
+username = sys.argv[1]
+token = sys.argv[2]
+hosts = []
+for host in sys.argv[3:]:
+    host = host.strip()
+    if host and host not in hosts:
+        hosts.append(host)
+for host in (
+    "gitea-http.gitea.svc.cluster.local:3000",
+    "gitea-bootstrap-access.gitea.svc.cluster.local:3000",
+):
+    if host not in hosts:
+        hosts.append(host)
+auth = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("ascii")
+payload = {
+    "auths": {
+        host: {
+            "username": username,
+            "password": token,
+            "auth": auth,
+        }
+        for host in hosts
+    }
+}
+print(json.dumps(payload, separators=(",", ":")), end="")
+PY
+  )"
+
+  "${kubectl_bin}" create namespace ansible --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null 2>&1 || true
+  cat <<EOF | "${kubectl_bin}" -n ansible apply -f - >/dev/null
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitea-registry-creds
+  namespace: ansible
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: $(printf '%s' "${dockerconfigjson}" | base64 | tr -d '\r\n')
+EOF
+
+  echo "[phase70] ensured ansible-runner image pull secret for ${registry_host}"
+}
+
+ansible_runner_image_exists_phase70() {
+  local openbao_token="${1:-}"
+  local image=""
+  local registry_username=""
+  local registry_token=""
+  local registry_host=""
+  local repo_path=""
+  local image_ref=""
+  local registry_base_url=""
+  local bearer_token=""
+  local status=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    return 1
+  fi
+
+  image="$("${kubectl_bin}" -n ansible get configmap ansible-cluster-config -o jsonpath='{.data.ANSIBLE_RUNNER_IMAGE}' 2>/dev/null || true)"
+  if [[ -z "${image}" ]]; then
+    return 1
+  fi
+
+  mapfile -t image_parts < <(python3 - <<'PY' "${image}"
+import sys
+image = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if not image or "/" not in image or ":" not in image.rsplit("/", 1)[-1]:
+    raise SystemExit(1)
+left, image_ref = image.rsplit(":", 1)
+registry_host, repo_path = left.split("/", 1)
+print(registry_host)
+print(repo_path)
+print(image_ref)
+PY
+  )
+  if [[ "${#image_parts[@]}" -ne 3 ]]; then
+    return 1
+  fi
+  registry_host="${image_parts[0]}"
+  repo_path="${image_parts[1]}"
+  image_ref="${image_parts[2]}"
+
+  registry_username="$(read_phase70_bootstrap_field argocd_repo_username "${openbao_token}")"
+  if [[ -z "${registry_username}" ]]; then
+    registry_username="$(read_phase70_bootstrap_field gitea_admin_username "${openbao_token}")"
+  fi
+  if [[ -z "${registry_username}" ]]; then
+    registry_username="gitea-admin"
+  fi
+
+  registry_token="$(read_phase70_bootstrap_field gitea_git_token "${openbao_token}")"
+  if [[ -z "${registry_token}" ]]; then
+    registry_token="$(read_phase70_bootstrap_field argocd_repo_token "${openbao_token}")"
+  fi
+  if [[ -z "${registry_token}" ]]; then
+    return 1
+  fi
+
+  case "${registry_host}" in
+    *.svc|*.svc.*|*.cluster.local|*".svc:"*)
+      registry_base_url="http://${registry_host}"
+      ;;
+    *)
+      registry_base_url="https://${registry_host}"
+      ;;
+  esac
+
+  bearer_token="$(
+    curl -fsS -u "${registry_username}:${registry_token}" \
+      "${registry_base_url}/v2/token?service=container_registry&scope=repository:${repo_path}:pull" \
+      | python3 -c 'import sys, json; print(json.load(sys.stdin).get("token", ""))' 2>/dev/null || true
+  )"
+  if [[ -z "${bearer_token}" ]]; then
+    return 1
+  fi
+
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' \
+      -H "Authorization: Bearer ${bearer_token}" \
+      "${registry_base_url}/v2/${repo_path}/manifests/${image_ref}" 2>/dev/null || true
+  )"
+  [[ "${status}" == "200" ]]
+}
+
+ensure_ansible_runner_phase70() {
+  local openbao_token=""
+  local job_name="ansible-runner-image-build"
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase70] kubectl not available; cannot reconcile ansible-runner" >&2
+    return 1
+  fi
+
+  if ! "${kubectl_bin}" get namespace ansible >/dev/null 2>&1; then
+    echo "[phase70] ansible namespace missing; skipping ansible-runner reconcile"
+    return 0
+  fi
+
+  if "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token >/dev/null 2>&1; then
+    openbao_token="$(
+      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token \
+        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true
+    )"
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n gitea rollout status deploy/gitea --timeout=30s >/dev/null; then
+    echo "[phase70] Gitea deployment did not become ready in time; cannot reconcile ansible-runner" >&2
+    return 1
+  fi
+
+  ensure_ansible_runner_pull_secret_phase70 "${openbao_token}"
+
+  if "${kubectl_bin}" -n ansible get job "${job_name}" >/dev/null 2>&1; then
+    if ! "${kubectl_bin}" -n ansible wait --for=condition=complete "job/${job_name}" --timeout=10m >/dev/null 2>&1; then
+      echo "[phase70] ansible-runner image build job did not complete in time" >&2
+      return 1
+    fi
+  else
+    if ! ansible_runner_image_exists_phase70 "${openbao_token}"; then
+      echo "[phase70] ansible-runner image build job missing and runner image is not present in the registry" >&2
+      return 1
+    fi
+    echo "[phase70] ansible-runner image build job missing; existing image already present"
+  fi
+
+  "${kubectl_bin}" -n ansible rollout restart deploy/ansible-runner >/dev/null
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n ansible rollout status deploy/ansible-runner --timeout=30s >/dev/null; then
+    echo "[phase70] ansible-runner deployment did not become ready after build completion" >&2
+    return 1
+  fi
+
+  echo "[phase70] reconciled ansible-runner registry secret and restarted deployment after image build"
+}
+
+run_gitops_realization_checks_phase70() {
+  local phase60_script="${repo_root}/ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh"
+  if [[ ! -x "${phase60_script}" ]]; then
+    echo "[phase70] missing Phase 60 handoff script at ${phase60_script}" >&2
+    return 1
+  fi
+  PHASE60_MODE=realize PHASE60_RECONCILE_ONLY=1 bash "${phase60_script}"
+}
+
+mint_argocd_widget_key_phase70() {
+  local admin_password=""
+  local token=""
+  local openbao_token="${1:-}"
+  local readonly_capability=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    return 1
+  fi
+
+  admin_password="${HOMEPAGE_ARGOCD_WIDGET_KEY_PASSWORD:-${ARGOCD_ADMIN_PASSWORD:-}}"
+  if [[ -z "${admin_password}" ]]; then
+    admin_password="$(read_phase70_bootstrap_field argocd_admin_password "${openbao_token}")"
+  fi
+  if [[ -z "${admin_password}" ]]; then
+    echo "[phase70] Argo CD widget token mint skipped: admin password unavailable" >&2
+    return 1
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n argocd rollout status deploy/argocd-server --timeout=30s >/dev/null; then
+    echo "[phase70] Argo CD widget token mint failed: argocd-server not ready in time" >&2
+    return 1
+  fi
+
+  readonly_capability="$("${kubectl_bin}" -n argocd get cm argocd-cm -o jsonpath='{.data.accounts\.readonly}' 2>/dev/null || true)"
+  if [[ "${readonly_capability}" != *"apiKey"* ]]; then
+    echo "[phase70] Argo CD widget token mint failed: readonly apiKey account not configured yet" >&2
+    return 1
+  fi
+
+  token="$(
+    "${kubectl_bin}" -n argocd exec -i deploy/argocd-server -- env \
+      ARGOCD_WIDGET_ADMIN_PASSWORD="${admin_password}" \
+      /bin/sh -lc '
+        argocd login 127.0.0.1:8080 --plaintext --username admin --password "$ARGOCD_WIDGET_ADMIN_PASSWORD" >/dev/null 2>&1 &&
+        argocd account generate-token --account readonly
+      ' 2>/dev/null | tr -d '\r\n'
+  )"
+
+  if [[ -z "${token}" ]]; then
+    echo "[phase70] Argo CD widget token mint failed: unable to generate readonly account token" >&2
+    return 1
+  fi
+
+  if ! validate_argocd_widget_key_phase70 "${token}"; then
+    echo "[phase70] Argo CD widget token mint failed: minted token did not pass API validation" >&2
+    return 1
+  fi
+
+  printf '%s' "${token}"
+}
+
+mint_authentik_widget_key_phase70() {
+  local openbao_token="${1:-}"
+  local admin_username=""
+  local token=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    return 1
+  fi
+
+  admin_username="$(read_phase70_bootstrap_field authentik_admin_username "${openbao_token}")"
+  if [[ -z "${admin_username}" ]]; then
+    admin_username="akadmin"
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n authentik rollout status deploy/authentik-server --timeout=30s >/dev/null; then
+    echo "[phase70] Authentik widget token mint failed: authentik-server not ready in time" >&2
+    return 1
+  fi
+
+  token="$(
+    "${kubectl_bin}" exec -i -n authentik deploy/authentik-server -- env \
+      HOMEPAGE_AUTHENTIK_WIDGET_USERNAME="${admin_username}" \
+      /ak-root/.venv/bin/python -c \
+      'import os; os.environ.setdefault("DJANGO_SETTINGS_MODULE","authentik.root.settings"); import django; django.setup(); from authentik.core.models import Token, User; username=os.environ["HOMEPAGE_AUTHENTIK_WIDGET_USERNAME"]; user=User.objects.get(username=username); token=Token.objects.filter(identifier="homepage-widget", user=user).first(); token = token or Token(identifier="homepage-widget", user=user, intent="api", description="Homepage widget token"); token.expiring=False; token.expires=None; token.save(); print(token.key, end="")' \
+      2>/dev/null | tr -d "\r\n"
+  )"
+
+  if [[ -z "${token}" ]]; then
+    echo "[phase70] Authentik widget token mint failed: unable to generate API token" >&2
+    return 1
+  fi
+  if ! validate_authentik_widget_key_phase70 "${token}"; then
+    echo "[phase70] Authentik widget token mint failed: minted token did not pass API validation" >&2
+    return 1
+  fi
+
+  printf '%s' "${token}"
+}
+
+mint_gitea_widget_auth_phase70() {
+  local openbao_token="${1:-}"
+  local admin_username=""
+  local token=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    return 1
+  fi
+
+  admin_username="$(read_phase70_bootstrap_field gitea_admin_username "${openbao_token}")"
+  if [[ -z "${admin_username}" ]]; then
+    admin_username="gitea-admin"
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n gitea rollout status deploy/gitea --timeout=30s >/dev/null; then
+    echo "[phase70] Gitea widget token mint failed: gitea deployment not ready in time" >&2
+    return 1
+  fi
+
+  token="$("${kubectl_bin}" -n gitea exec deploy/gitea -c gitea -- sh -lc '
+    gitea admin user generate-access-token \
+      --username "'"${admin_username}"'" \
+      --token-name "homepage-widget" \
+      --scopes "all" \
+      --raw 2>/dev/null \
+    || gitea admin user generate-access-token \
+      --username "'"${admin_username}"'" \
+      --token-name "homepage-widget-$(date +%s)" \
+      --scopes "all" \
+      --raw 2>/dev/null
+  ' 2>/dev/null | tr -d '\r\n' || true)"
+
+  if [[ -z "${token}" ]]; then
+    echo "[phase70] Gitea widget token mint failed: unable to generate API token" >&2
+    return 1
+  fi
+  if ! validate_gitea_widget_auth_phase70 "${token}"; then
+    echo "[phase70] Gitea widget token mint failed: minted token did not pass API validation" >&2
+    return 1
+  fi
+
+  printf '%s' "${token}"
+}
+
+resolve_grafana_admin_password_phase70() {
+  local openbao_token="${1:-}"
+  local password=""
+  password="${HOMEPAGE_GRAFANA_ADMIN_PASSWORD:-}"
+  if [[ -z "${password}" ]]; then
+    password="$(read_phase70_bootstrap_field grafana_admin_password "${openbao_token}")"
+  fi
+  printf '%s' "${password}"
+}
+
+ensure_grafana_admin_password_phase70() {
+  local openbao_token="${1:-}"
+  local desired_password=""
+  local patch_json=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase70] kubectl not available; cannot reconcile Grafana admin password" >&2
+    return 1
+  fi
+
+  desired_password="$(resolve_grafana_admin_password_phase70 "${openbao_token}")"
+  if [[ -z "${desired_password}" ]]; then
+    echo "[phase70] Grafana admin password unavailable from bootstrap backup/OpenBao" >&2
+    return 1
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n observability rollout status deploy/grafana --timeout=30s >/dev/null; then
+    echo "[phase70] Grafana deployment did not become ready in time" >&2
+    return 1
+  fi
+
+  "${kubectl_bin}" -n observability exec deploy/grafana -- env \
+    TARGET_PW="${desired_password}" \
+    /bin/sh -lc '/usr/share/grafana/bin/grafana cli --homepath /usr/share/grafana admin reset-admin-password "$TARGET_PW"' >/dev/null
+
+  patch_json="$(
+    python3 - <<'PY' "${desired_password}"
+import json
+import sys
+print(json.dumps({"stringData": {"admin-password": sys.argv[1], "admin-user": "admin"}}))
+PY
+  )"
+  "${kubectl_bin}" -n observability patch secret grafana --type merge -p "${patch_json}" >/dev/null
+
+  if ! validate_grafana_admin_password_phase70 "${desired_password}"; then
+    echo "[phase70] Grafana admin password reconcile failed API validation" >&2
+    return 1
+  fi
+
+  echo "[phase70] reconciled Grafana admin password to bootstrap/OpenBao value"
+}
+
+ensure_homepage_widget_secrets_phase70() {
+  local openbao_token=""
+  local argocd_widget_key=""
+  local authentik_widget_key=""
+  local gitea_widget_auth=""
+  local grafana_admin_password=""
+  local cloudflare_account_id=""
+  local cloudflare_tunnel_id=""
+  local cloudflare_api_auth=""
+  local tailscale_api_auth=""
+  local tailscale_device_id=""
+  local secret_before=""
+  local secret_after=""
+  local live_grafana_admin_password=""
+  local existing_argocd_widget_key=""
+  local existing_authentik_widget_key=""
+  local existing_gitea_widget_auth=""
+  local existing_grafana_admin_password=""
+  local existing_cloudflare_account_id=""
+  local existing_cloudflare_tunnel_id=""
+  local existing_cloudflare_api_auth=""
+  local existing_tailscale_api_auth=""
+  local existing_tailscale_device_id=""
+  local secret_manifest=""
+  local failure=0
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase70] kubectl not available; skipping Homepage widget reconcile" >&2
+    return 0
+  fi
+
+  if ! "${kubectl_bin}" get namespace homepage >/dev/null 2>&1; then
+    echo "[phase70] homepage namespace missing; skipping Homepage widget reconcile"
+    return 0
+  fi
+
+  if "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token >/dev/null 2>&1; then
+    openbao_token="$(
+      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token \
+        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true
+    )"
+  fi
+
+  existing_argocd_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_ARGOCD_WIDGET_KEY)"
+  existing_authentik_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_AUTHENTIK_WIDGET_KEY)"
+  existing_gitea_widget_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GITEA_WIDGET_AUTH)"
+  existing_grafana_admin_password="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GRAFANA_ADMIN_PASSWORD)"
+  existing_cloudflare_account_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_ACCOUNT_ID)"
+  existing_cloudflare_tunnel_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_TUNNEL_ID)"
+  existing_cloudflare_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_API_AUTH)"
+  existing_tailscale_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_API_AUTH)"
+  existing_tailscale_device_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_DEVICE_ID)"
+
+  argocd_widget_key="$(mint_argocd_widget_key_phase70 "${openbao_token}" || true)"
+  if [[ -n "${argocd_widget_key}" ]]; then
+    log_widget_field_phase70 homepage_argocd_widget_key minted "validated via Argo CD API"
+  else
+    argocd_widget_key="$(read_phase70_bootstrap_field homepage_argocd_widget_key "${openbao_token}")"
+    if validate_argocd_widget_key_phase70 "${argocd_widget_key}"; then
+      log_widget_field_phase70 homepage_argocd_widget_key reused "validated from backup/OpenBao"
+    elif validate_argocd_widget_key_phase70 "${existing_argocd_widget_key}"; then
+      argocd_widget_key="${existing_argocd_widget_key}"
+      log_widget_field_phase70 homepage_argocd_widget_key reused "validated from existing secret"
+    else
+      argocd_widget_key=""
+      log_widget_field_phase70 homepage_argocd_widget_key invalid "no validated token available"
+      failure=1
+    fi
+  fi
+
+  authentik_widget_key="$(mint_authentik_widget_key_phase70 "${openbao_token}" || true)"
+  if [[ -n "${authentik_widget_key}" ]]; then
+    log_widget_field_phase70 homepage_authentik_widget_key minted "validated via Authentik API"
+  else
+    authentik_widget_key="$(read_phase70_bootstrap_field homepage_authentik_widget_key "${openbao_token}")"
+    if validate_authentik_widget_key_phase70 "${authentik_widget_key}"; then
+      log_widget_field_phase70 homepage_authentik_widget_key reused "validated from backup/OpenBao"
+    elif validate_authentik_widget_key_phase70 "${existing_authentik_widget_key}"; then
+      authentik_widget_key="${existing_authentik_widget_key}"
+      log_widget_field_phase70 homepage_authentik_widget_key reused "validated from existing secret"
+    else
+      authentik_widget_key=""
+      log_widget_field_phase70 homepage_authentik_widget_key invalid "no validated token available"
+      failure=1
+    fi
+  fi
+
+  gitea_widget_auth="$(mint_gitea_widget_auth_phase70 "${openbao_token}" || true)"
+  if [[ -n "${gitea_widget_auth}" ]]; then
+    log_widget_field_phase70 homepage_gitea_widget_auth minted "validated via Gitea API"
+  else
+    gitea_widget_auth="$(read_phase70_bootstrap_field homepage_gitea_widget_auth "${openbao_token}")"
+    if validate_gitea_widget_auth_phase70 "${gitea_widget_auth}"; then
+      log_widget_field_phase70 homepage_gitea_widget_auth reused "validated from backup/OpenBao"
+    elif validate_gitea_widget_auth_phase70 "${existing_gitea_widget_auth}"; then
+      gitea_widget_auth="${existing_gitea_widget_auth}"
+      log_widget_field_phase70 homepage_gitea_widget_auth reused "validated from existing secret"
+    else
+      gitea_widget_auth=""
+      log_widget_field_phase70 homepage_gitea_widget_auth invalid "no validated token available"
+      failure=1
+    fi
+  fi
+
+  grafana_admin_password="$(resolve_grafana_admin_password_phase70 "${openbao_token}")"
+  live_grafana_admin_password="$(read_k8s_secret_key observability grafana admin-password)"
+  if [[ -n "${live_grafana_admin_password}" ]]; then
+    grafana_admin_password="${live_grafana_admin_password}"
+  fi
+  if validate_grafana_admin_password_phase70 "${grafana_admin_password}"; then
+    log_widget_field_phase70 grafana_admin_password reused "validated from live Grafana state"
+  elif validate_grafana_admin_password_phase70 "${existing_grafana_admin_password}"; then
+    grafana_admin_password="${existing_grafana_admin_password}"
+    log_widget_field_phase70 grafana_admin_password reused "validated from existing secret"
+  else
+    grafana_admin_password=""
+    log_widget_field_phase70 grafana_admin_password invalid "no validated password available"
+    failure=1
+  fi
+
+  cloudflare_account_id="$(read_phase70_bootstrap_field cloudflare_account_id "${openbao_token}")"
+  cloudflare_tunnel_id="$(read_phase70_bootstrap_field rancher_cloudflared_tunnel_id "${openbao_token}")"
+  cloudflare_api_auth="$(read_phase70_bootstrap_field cloudflare_api_token "${openbao_token}")"
+  if [[ -z "${cloudflare_account_id}" ]]; then
+    cloudflare_account_id="${existing_cloudflare_account_id}"
+  fi
+  if [[ -z "${cloudflare_tunnel_id}" ]]; then
+    cloudflare_tunnel_id="${existing_cloudflare_tunnel_id}"
+  fi
+  if [[ -z "${cloudflare_api_auth}" ]]; then
+    cloudflare_api_auth="${existing_cloudflare_api_auth}"
+  fi
+  if [[ -n "${cloudflare_account_id}" && -n "${cloudflare_tunnel_id}" && -n "${cloudflare_api_auth}" ]]; then
+    log_widget_field_phase70 cloudflare_widget_fields reused "stable operator-provided values present"
+  else
+    log_widget_field_phase70 cloudflare_widget_fields unavailable "keeping incomplete values out of secret/OpenBao"
+    cloudflare_account_id=""
+    cloudflare_tunnel_id=""
+    cloudflare_api_auth=""
+  fi
+
+  tailscale_api_auth="$(read_phase70_bootstrap_field homepage_tailscale_api_auth "${openbao_token}")"
+  tailscale_device_id="$(read_phase70_bootstrap_field homepage_tailscale_device_id "${openbao_token}")"
+  if [[ -z "${tailscale_api_auth}" ]]; then
+    tailscale_api_auth="${existing_tailscale_api_auth}"
+  fi
+  if [[ -z "${tailscale_device_id}" ]]; then
+    tailscale_device_id="${existing_tailscale_device_id}"
+  fi
+  if [[ -n "${tailscale_api_auth}" && -z "${tailscale_device_id}" ]]; then
+    tailscale_device_id="$(discover_tailscale_device_id_phase70)"
+  fi
+  if [[ -n "${tailscale_api_auth}" && -n "${tailscale_device_id}" ]]; then
+    log_widget_field_phase70 homepage_tailscale_device_id reused "tailscale API auth and device id available"
+  else
+    log_widget_field_phase70 homepage_tailscale_device_id unavailable "keeping incomplete values out of secret/OpenBao"
+    tailscale_api_auth=""
+    tailscale_device_id=""
+  fi
+
+  persist_widget_field_phase70 homepage_argocd_widget_key "${argocd_widget_key}" "${openbao_token}"
+  persist_widget_field_phase70 homepage_authentik_widget_key "${authentik_widget_key}" "${openbao_token}"
+  persist_widget_field_phase70 homepage_gitea_widget_auth "${gitea_widget_auth}" "${openbao_token}"
+  persist_widget_field_phase70 grafana_admin_password "${grafana_admin_password}" "${openbao_token}"
+  persist_widget_field_phase70 cloudflare_account_id "${cloudflare_account_id}" "${openbao_token}"
+  persist_widget_field_phase70 rancher_cloudflared_tunnel_id "${cloudflare_tunnel_id}" "${openbao_token}"
+  persist_widget_field_phase70 cloudflare_api_token "${cloudflare_api_auth}" "${openbao_token}"
+  persist_widget_field_phase70 homepage_tailscale_api_auth "${tailscale_api_auth}" "${openbao_token}"
+  persist_widget_field_phase70 homepage_tailscale_device_id "${tailscale_device_id}" "${openbao_token}"
+
+  secret_before="$("${kubectl_bin}" -n homepage get secret homepage-widget-secrets -o json 2>/dev/null | python3 - <<'PY'
+import json
+import sys
+try:
+    print(json.dumps(json.load(sys.stdin).get("data", {}), sort_keys=True))
+except Exception:
+    print("")
+PY
+  )"
+
+  secret_manifest="$(build_homepage_widget_secret_manifest_phase70 \
+    "HOMEPAGE_ARGOCD_WIDGET_KEY=${argocd_widget_key}" \
+    "HOMEPAGE_AUTHENTIK_WIDGET_KEY=${authentik_widget_key}" \
+    "HOMEPAGE_GITEA_WIDGET_AUTH=${gitea_widget_auth}" \
+    "HOMEPAGE_GRAFANA_ADMIN_PASSWORD=${grafana_admin_password}" \
+    "HOMEPAGE_CLOUDFLARE_ACCOUNT_ID=${cloudflare_account_id}" \
+    "HOMEPAGE_CLOUDFLARE_TUNNEL_ID=${cloudflare_tunnel_id}" \
+    "HOMEPAGE_CLOUDFLARE_API_AUTH=${cloudflare_api_auth}" \
+    "HOMEPAGE_TAILSCALE_API_AUTH=${tailscale_api_auth}" \
+    "HOMEPAGE_TAILSCALE_DEVICE_ID=${tailscale_device_id}")"
+  printf '%s\n' "${secret_manifest}" | "${kubectl_bin}" -n homepage apply -f - >/dev/null
+
+  secret_after="$("${kubectl_bin}" -n homepage get secret homepage-widget-secrets -o json 2>/dev/null | python3 - <<'PY'
+import json
+import sys
+try:
+    print(json.dumps(json.load(sys.stdin).get("data", {}), sort_keys=True))
+except Exception:
+    print("")
+PY
+  )"
+
+  if [[ "${secret_before}" != "${secret_after}" ]]; then
+    "${kubectl_bin}" -n homepage rollout restart deploy/homepage >/dev/null
+    retry_cmd 30 10 \
+      "${kubectl_bin}" -n homepage rollout status deploy/homepage --timeout=30s >/dev/null || true
+    echo "[phase70] restarted Homepage deployment to pick up refreshed widget secrets"
+  fi
+
+  if (( failure > 0 )); then
+    echo "[phase70] Homepage widget reconciliation failed validation for one or more critical fields" >&2
+    return 1
+  fi
+
+  echo "[phase70] reconciled Homepage widget secrets from validated live app state"
+}
+
+ensure_authentik_admin_password_phase70() {
+  local deployment_name="authentik-server"
+  local openbao_token=""
+  local admin_username=""
+  local admin_password=""
+  local attempt=0
+  local reconcile_output=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase70] kubectl not available; cannot reconcile Authentik admin password" >&2
+    return 1
+  fi
+
+  admin_username="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
+  admin_password="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_password")"
+
+  if "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token >/dev/null 2>&1; then
+    openbao_token="$(
+      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token \
+        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true
+    )"
+  fi
+
+  if [[ -z "${admin_username}" && -n "${openbao_token}" ]]; then
+    admin_username="$(read_openbao_platform_field authentik_admin_username "${openbao_token}")"
+  fi
+  if [[ -z "${admin_password}" && -n "${openbao_token}" ]]; then
+    admin_password="$(read_openbao_platform_field authentik_admin_password "${openbao_token}")"
+    if [[ -n "${admin_password}" ]]; then
+      echo "[phase70] restored Authentik admin password from OpenBao platform secret"
+    fi
+  fi
+
+  if [[ -z "${admin_username}" ]]; then
+    admin_username="akadmin"
+  fi
+  if [[ -z "${admin_password}" ]]; then
+    echo "[phase70] Authentik admin password missing from bootstrap backup and OpenBao" >&2
+    return 1
+  fi
+
+  echo "[phase70] waiting for deploy/${deployment_name} before applying final Authentik admin password"
+  for attempt in $(seq 1 60); do
+    if "${kubectl_bin}" -n authentik get deployment "${deployment_name}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 10
+  done
+  if ! "${kubectl_bin}" -n authentik get deployment "${deployment_name}" >/dev/null 2>&1; then
+    echo "[phase70] Authentik deployment ${deployment_name} was not created in time" >&2
+    return 1
+  fi
+
+  if ! retry_cmd 30 10 \
+    "${kubectl_bin}" -n authentik rollout status "deploy/${deployment_name}" --timeout=30s >/dev/null; then
+    echo "[phase70] Authentik deployment ${deployment_name} did not become ready in time" >&2
+    return 1
+  fi
+
+  echo "[phase70] applying final Authentik admin password for ${admin_username}"
+  reconcile_output="$(
+    AUTHENTIK_BOOTSTRAP_ADMIN_USERNAME="${admin_username}" \
+    AUTHENTIK_BOOTSTRAP_ADMIN_PASSWORD="${admin_password}" \
+    "${kubectl_bin}" exec -i -n authentik "deploy/${deployment_name}" -- env \
+      AUTHENTIK_BOOTSTRAP_ADMIN_USERNAME="${admin_username}" \
+      AUTHENTIK_BOOTSTRAP_ADMIN_PASSWORD="${admin_password}" \
+      /ak-root/.venv/bin/python /manage.py shell -c \
+      'import os; from authentik.core.models import User; username=os.environ["AUTHENTIK_BOOTSTRAP_ADMIN_USERNAME"]; password=os.environ["AUTHENTIK_BOOTSTRAP_ADMIN_PASSWORD"]; email=f"{username}@bootstrap.invalid"; user=User.objects.filter(username=username).first(); created=user is None; user=user or User.objects.create_superuser(username=username, email=email, password=password); user.set_password(password); user.is_active=True; user.save(); user.refresh_from_db(); assert user.check_password(password), f"password verification failed for {username}"; print(f"created_authentik_user_for {username}" if created else f"using_existing_authentik_user_for {username}"); print(f"reconciled_password_for {username}")' \
+      2>&1 || true
+  )"
+  printf '%s\n' "${reconcile_output}"
+  if [[ "${reconcile_output}" != *"reconciled_password_for ${admin_username}"* ]]; then
+    echo "[phase70] Authentik admin password reconcile did not emit success marker for ${admin_username}" >&2
+    return 1
+  fi
+  return 0
+}
+
+normalize_phase70_repo_url() {
+  local repo_url="${1:-}"
+  python3 - <<'PY' "${repo_url}"
+import re
+import sys
+from urllib.parse import urlparse
+
+repo_url = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if not repo_url:
+    print("", end="")
+    raise SystemExit(0)
+
+parsed = urlparse(repo_url)
+host = (parsed.hostname or "").strip().lower()
+path = (parsed.path or "").strip()
+
+is_ipv4 = bool(re.fullmatch(r"\d+\.\d+\.\d+\.\d+", host))
+is_giteaish = (
+    host.startswith("gitea.")
+    or ".gitea.svc" in host
+    or host == "127.0.0.1"
+    or is_ipv4
+)
+
+if is_giteaish and path.endswith(".git"):
+    print(f"gitea:{path}", end="")
+else:
+    print(repo_url, end="")
+PY
+}
+
+verify_phase70_gitops_handoff() {
+  local repo_url=""
+  local repo_branch=""
+  local app_repo_url=""
+  local set_repo_url=""
+  local secret_repo_url=""
+  local pre_openbao_repo_url=""
+  local pre_openbao_repo_path=""
+  local repo_url_norm=""
+  local app_repo_url_norm=""
+  local set_repo_url_norm=""
+  local secret_repo_url_norm=""
+  local pre_openbao_repo_url_norm=""
+
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase70] kubectl not available; skipping GitOps handoff verification" >&2
+    return 0
+  fi
+
+  app_repo_url="$("${kubectl_bin}" -n argocd get application app-of-apps -o jsonpath='{.spec.source.repoURL}' 2>/dev/null || true)"
+  repo_branch="$("${kubectl_bin}" -n argocd get application app-of-apps -o jsonpath='{.spec.source.targetRevision}' 2>/dev/null || true)"
+  set_repo_url="$("${kubectl_bin}" -n argocd get applicationset apps -o jsonpath='{.spec.generators[0].git.repoURL}' 2>/dev/null || true)"
+  secret_repo_url="$("${kubectl_bin}" -n argocd get secret argocd-repository-bootstrap -o jsonpath='{.stringData.url}' 2>/dev/null || true)"
+  if [[ -z "${secret_repo_url}" ]]; then
+    secret_repo_url="$("${kubectl_bin}" -n argocd get secret argocd-repository-bootstrap -o jsonpath='{.data.url}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  fi
+  pre_openbao_repo_url="$("${kubectl_bin}" -n argocd get application platform-pre-openbao -o jsonpath='{.spec.source.repoURL}' 2>/dev/null || true)"
+  pre_openbao_repo_path="$("${kubectl_bin}" -n argocd get application platform-pre-openbao -o jsonpath='{.spec.source.path}' 2>/dev/null || true)"
+
+  repo_url="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_repo_url")"
+  if [[ -z "${repo_url}" ]]; then
+    repo_url="${secret_repo_url:-${app_repo_url}}"
+  fi
+  if [[ -z "${repo_branch}" ]]; then
+    repo_branch="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_repo_branch")"
+  fi
+  if [[ -z "${repo_branch}" ]]; then
+    repo_branch="HEAD"
+  fi
+  if [[ -z "${repo_url}" ]]; then
+    echo "[phase70] GitOps handoff verification failed: unable to determine expected repo URL from cluster state" >&2
+    return 1
+  fi
+
+  repo_url_norm="$(normalize_phase70_repo_url "${repo_url}")"
+  app_repo_url_norm="$(normalize_phase70_repo_url "${app_repo_url}")"
+  set_repo_url_norm="$(normalize_phase70_repo_url "${set_repo_url}")"
+  secret_repo_url_norm="$(normalize_phase70_repo_url "${secret_repo_url}")"
+  pre_openbao_repo_url_norm="$(normalize_phase70_repo_url "${pre_openbao_repo_url}")"
+
+  if [[ "${app_repo_url_norm}" != "${repo_url_norm}" ]]; then
+    echo "[phase70] GitOps handoff verification failed: app-of-apps repoURL=${app_repo_url:-<empty>} expected=${repo_url}" >&2
+    return 1
+  fi
+  if [[ "${set_repo_url_norm}" != "${repo_url_norm}" ]]; then
+    echo "[phase70] GitOps handoff verification failed: applicationset repoURL=${set_repo_url:-<empty>} expected=${repo_url}" >&2
+    return 1
+  fi
+  if [[ -n "${secret_repo_url}" && "${secret_repo_url_norm}" != "${repo_url_norm}" ]]; then
+    echo "[phase70] GitOps handoff verification failed: argocd-repository-bootstrap url=${secret_repo_url:-<empty>} expected=${repo_url}" >&2
+    return 1
+  fi
+  if [[ -n "${pre_openbao_repo_url}" && "${pre_openbao_repo_url_norm}" != "${repo_url_norm}" ]]; then
+    echo "[phase70] GitOps handoff verification failed: platform-pre-openbao repoURL=${pre_openbao_repo_url} expected=${repo_url}" >&2
+    return 1
+  fi
+  if [[ -n "${pre_openbao_repo_path}" && "${pre_openbao_repo_path}" != "pods/argocd/platform/pre-openbao" ]]; then
+    echo "[phase70] GitOps handoff verification failed: platform-pre-openbao path=${pre_openbao_repo_path} expected=pods/argocd/platform/pre-openbao" >&2
+    return 1
+  fi
+
+  echo "[phase70] verified GitOps handoff to Gitea repo ${repo_url} (${repo_branch})"
+}
+
+echo "[phase70] repo: ${repo_root}"
+echo "[phase70] running post-bootstrap healthcheck playbook"
+
+mode_raw="$(printf '%s' "${BOOTSTRAP_BREAKGLASS}" | tr '[:upper:]' '[:lower:]')"
+local_only_raw="$(printf '%s' "${BOOTSTRAP_PHASE70_LOCAL_ONLY}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${local_only_raw}" == "1" || "${local_only_raw}" == "true" || "${local_only_raw}" == "yes" || "${local_only_raw}" == "on" ]]; then
+  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}" -e break_glass=true
+elif [[ "${mode_raw}" == "1" || "${mode_raw}" == "true" || "${mode_raw}" == "yes" || "${mode_raw}" == "on" ]]; then
+  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}" -e break_glass=true
+else
+  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}"
+fi
+
+run_phase70_step "verify GitOps handoff" critical verify_phase70_gitops_handoff
+run_phase70_step "run GitOps realization checks" critical run_gitops_realization_checks_phase70
+run_phase70_step "reconcile ansible-runner" critical ensure_ansible_runner_phase70
+
+if (( phase70_failures > 0 )); then
+  echo "[phase70] completed with ${phase70_failures} failed step(s); critical=${phase70_critical_failures}" >&2
+  exit 1
+fi
+
+cat <<'INFO'
+
+Phase 70 complete (GitOps realization gate).
+
+INFO

@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apprise
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apprise
+  template:
+    metadata:
+      labels:
+        app: apprise
+    spec:
+      initContainers:
+        - name: seed-config
+          image: public.ecr.aws/docker/library/busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              cp /seed/apprise.yml /config/apprise.yml
+          volumeMounts:
+            - name: apprise-config-seed
+              mountPath: /seed
+              readOnly: true
+            - name: apprise-config
+              mountPath: /config
+      containers:
+        - name: apprise
+          image: quay.io/caronc/apprise:v0.9.3
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: APPRISE_STATEFUL_MODE
+              value: simple
+            - name: APPRISE_WORKER_COUNT
+              value: "1"
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: apprise-config
+              mountPath: /config
+            - name: apprise-attach
+              mountPath: /attach
+            - name: apprise-plugin
+              mountPath: /plugin
+            - name: apprise-tmp
+              mountPath: /tmp
+      volumes:
+        - name: apprise-config
+          emptyDir: {}
+        - name: apprise-config-seed
+          secret:
+            secretName: apprise-config
+        - name: apprise-attach
+          emptyDir: {}
+        - name: apprise-plugin
+          emptyDir: {}
+        - name: apprise-tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apprise
+  namespace: observability
+spec:
+  selector:
+    app: apprise
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP

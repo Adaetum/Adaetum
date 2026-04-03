@@ -1,0 +1,37 @@
+# Inventories with real IPs / hostnames
+ansible/node-inventory.yml
+
+# Ansible runtime
+*.retry
+*.log
+.fact_cache/
+.cache/
+
+# Build outputs
+dist/
+
+# OS install secrets
+os-install/.env
+
+# Ansible env overrides
+ansible/.env
+
+# Taskfile env overrides
+task.env
+
+# macOS junk
+.DS_Store
+
+# Editor junk
+.vscode/
+.idea/
+*.iso
+.env
+*.env
+!pods/cluster-config/cluster-config.env
+*.pyc
+__pycache__/
+# Node
+node_modules/
+cluster-local.patch
+.maintainer-overrides/

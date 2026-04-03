@@ -1,0 +1,3 @@
+os_family_pkg_install() {
+  dnf -y install "$@"
+}

@@ -1,0 +1,34 @@
+---
+# Rancher Fleet bootstrap for Argo CD
+fleet_argocd_enabled: true
+fleet_argocd_namespace: "cattle-fleet-system"
+fleet_argocd_gitrepo_name: "argocd-bootstrap"
+
+fleet_argocd_repo_url: >-
+  {{
+    lookup('ansible.builtin.env', 'ARGOCD_REPO_URL')
+    | default(lookup('ansible.builtin.env', 'ARGOCD_GITHUB_REPO_URL') | default('', true), true)
+  }}
+fleet_argocd_repo_branch: >-
+  {{
+    lookup('ansible.builtin.env', 'ARGOCD_REPO_BRANCH')
+    | default(lookup('ansible.builtin.env', 'ARGOCD_GITHUB_REPO_BRANCH') | default('master', true), true)
+  }}
+fleet_argocd_repo_path: "pods/argocd"
+
+fleet_repo_username: >-
+  {{
+    lookup('ansible.builtin.env', 'ARGOCD_REPO_USERNAME')
+    | default(lookup('ansible.builtin.env', 'ARGOCD_GITHUB_USERNAME') | default('oauth2', true), true)
+  }}
+fleet_repo_token: >-
+  {{
+    lookup('ansible.builtin.env', 'ARGOCD_REPO_TOKEN')
+    | default(lookup('ansible.builtin.env', 'ARGOCD_GITHUB_TOKEN') | default('', true), true)
+  }}
+
+fleet_argocd_target_namespace: "argocd"
+fleet_argocd_crd_wait_enabled: true
+fleet_argocd_crd_wait_retries: 24
+fleet_argocd_crd_wait_delay_seconds: 5
+fleet_argocd_require_crd: false

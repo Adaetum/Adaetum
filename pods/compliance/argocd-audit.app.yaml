@@ -1,0 +1,6 @@
+name: argocd-audit
+project: default
+source_type: git
+source_target_revision: HEAD
+source_path: pods/compliance/argocd-audit
+destination_namespace: compliance

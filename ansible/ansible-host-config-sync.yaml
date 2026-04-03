@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ansible-host-config-sync
+spec:
+  hostNetwork: true
+  restartPolicy: Never
+  imagePullSecrets:
+    - name: gitea-registry-creds
+  containers:
+    - name: ansible-host-config-sync
+      image: registry.cluster-duck.cloud/gitea-admin/ansible-runner:latest
+      imagePullPolicy: Always
+      env:
+        - name: CRON_SCHEDULE
+          value: "*/10 * * * *"
+        - name: ANSIBLE_PLAYBOOK
+          value: "playbooks/bootstrap.yml"
+        - name: ANSIBLE_INVENTORY
+          value: "node-inventory.yml"
+        # Optional. Example:
+        # -e tailscale_user_sync_enabled=true -e tailscale_user_sync_acl_group=group:local-admin
+        - name: ANSIBLE_EXTRA_ARGS
+          value: ""
+        - name: TAILSCALE_DOMAIN
+          value: "example.ts.net"
+        - name: TAILSCALE_CLUSTER_TAG
+          value: "tag:cluster"
+      volumeMounts:
+        - name: ansible-data
+          mountPath: /ansible
+  volumes:
+    - name: ansible-data
+      hostPath:
+        path: /opt/ansible-runner
+        type: Directory

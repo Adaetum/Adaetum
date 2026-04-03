@@ -1,0 +1,4 @@
+resources:
+  - argocd-audit-rbac.yaml
+  - argocd-audit-pvc.yaml
+  - argocd-audit-cronjob.yaml

@@ -1,0 +1,24 @@
+{
+  "name": "ubuntu2404",
+  "installer_type": "autoinstall",
+  "os_family": "debian",
+  "template": "templates/ubuntu2404.autoinstall.j2",
+  "output": "",
+  "enabled": false,
+  "shared_fragments": [
+    "fragments/shared/portable/dependency-bootstrap.shfrag"
+  ],
+  "os_family_adapters": {
+    "package_manager": "fragments/os-family/debian/package-manager.shfrag",
+    "service_manager": "fragments/os-family/debian/service-manager.shfrag",
+    "filesystem": "fragments/os-family/debian/filesystem.shfrag",
+    "networking": "fragments/os-family/debian/networking.shfrag"
+  },
+  "sections": [
+    {
+      "id": "header",
+      "kind": "installer",
+      "path": "fragments/installers/autoinstall/ubuntu2404/00-header.autoinstallfrag"
+    }
+  ]
+}

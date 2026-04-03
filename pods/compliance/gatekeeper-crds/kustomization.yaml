@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - assign-customresourcedefinition.yaml
+  - assignimage-customresourcedefinition.yaml
+  - assignmetadata-customresourcedefinition.yaml
+  - config-customresourcedefinition.yaml
+  - configpodstatus-customresourcedefinition.yaml
+  - connection-customresourcedefinition.yaml
+  - connectionpodstatus-customresourcedefinition.yaml
+  - constraintpodstatus-customresourcedefinition.yaml
+  - constrainttemplate-customresourcedefinition.yaml
+  - constrainttemplatepodstatus-customresourcedefinition.yaml
+  - expansiontemplate-customresourcedefinition.yaml
+  - expansiontemplatepodstatus-customresourcedefinition.yaml
+  - modifyset-customresourcedefinition.yaml
+  - mutatorpodstatus-customresourcedefinition.yaml
+  - provider-customresourcedefinition.yaml
+  - syncset-customresourcedefinition.yaml

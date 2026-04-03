@@ -1,0 +1,213 @@
+---
+- name: Sync users from Tailscale
+  when: tailscale_user_sync_enabled | bool
+  block:
+    - name: Ensure local groups exist
+      ansible.builtin.group:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - "{{ tailscale_user_sync_local_admin_group }}"
+        - "{{ tailscale_user_sync_managed_group }}"
+
+    - name: Compute desired users from source-of-truth (controller)
+      when: tailscale_user_sync_source == "tailscale_acl"
+      block:
+        - name: Fail if no Tailscale API token or OAuth client is configured
+          ansible.builtin.fail:
+            msg: >-
+              tailscale-user-sync needs either tailscale_user_sync_api_token
+              (recommended via env TAILSCALE_API_TOKEN) or an OAuth client id/secret
+              (env TAILSCALE_OAUTH_CLIENT_ID/TAILSCALE_OAUTH_CLIENT_SECRET).
+          when:
+            - (tailscale_user_sync_api_token | length) == 0
+            - (tailscale_user_sync_oauth_client_id | length) == 0
+
+        - name: Mint Tailscale OAuth access token (client credentials)
+          ansible.builtin.uri:
+            url: "{{ tailscale_user_sync_api_base_url }}/oauth/token"
+            method: POST
+            body_format: form-urlencoded
+            body:
+              grant_type: "client_credentials"
+              client_id: "{{ tailscale_user_sync_oauth_client_id }}"
+              client_secret: "{{ tailscale_user_sync_oauth_client_secret }}"
+              scope: "{{ tailscale_user_sync_oauth_scopes }}"
+            return_content: true
+            status_code: 200
+          register: tailscale_oauth_token
+          delegate_to: localhost
+          run_once: true
+          no_log: true
+          when:
+            - (tailscale_user_sync_api_token | length) == 0
+            - (tailscale_user_sync_oauth_client_id | length) > 0
+            - (tailscale_user_sync_oauth_client_secret | length) > 0
+
+        - name: Choose bearer token
+          ansible.builtin.set_fact:
+            tailscale_user_sync_bearer: >-
+              {{
+                (tailscale_user_sync_api_token | trim)
+                if (tailscale_user_sync_api_token | length) > 0
+                else (tailscale_oauth_token.json.access_token | default('') | trim)
+              }}
+          delegate_to: localhost
+          run_once: true
+          no_log: true
+
+        - name: Fail if bearer token is missing
+          ansible.builtin.fail:
+            msg: "tailscale-user-sync could not determine a usable bearer token."
+          when: (tailscale_user_sync_bearer | default('') | length) == 0
+          delegate_to: localhost
+          run_once: true
+
+        - name: Fetch Tailnet ACL policy file
+          ansible.builtin.uri:
+            url: "{{ tailscale_user_sync_api_base_url }}/tailnet/{{ tailscale_user_sync_tailnet }}/acl"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ tailscale_user_sync_bearer }}"
+              Accept: "application/json"
+            return_content: true
+            status_code: 200
+          register: tailscale_acl_policy
+          delegate_to: localhost
+          run_once: true
+          no_log: true
+
+        - name: Extract group members from ACL policy
+          ansible.builtin.command: "python3 {{ role_path }}/files/extract_acl_group_members.py {{ tailscale_user_sync_acl_group }}"
+          args:
+            stdin: >-
+              {{
+                tailscale_acl_policy.content
+                if (tailscale_acl_policy.content | default('') | length) > 0
+                else (tailscale_acl_policy.json | to_json)
+              }}
+          register: tailscale_acl_group_members
+          changed_when: false
+          delegate_to: localhost
+          run_once: true
+
+        - name: Set desired user emails from ACL group
+          ansible.builtin.set_fact:
+            tailscale_user_sync_desired_emails: "{{ tailscale_acl_group_members.stdout | from_json }}"
+          delegate_to: localhost
+          run_once: true
+
+    - name: Compute desired users from static list (controller)
+      when: tailscale_user_sync_source == "static"
+      block:
+        - name: Set desired user emails from static list
+          ansible.builtin.set_fact:
+            tailscale_user_sync_desired_emails: >-
+              {{
+                tailscale_user_sync_users
+                | map(attribute='email')
+                | select('defined')
+                | map('trim')
+                | select('length')
+                | list
+              }}
+          delegate_to: localhost
+          run_once: true
+
+    - name: Fail if desired emails is unset
+      ansible.builtin.fail:
+        msg: "tailscale-user-sync could not compute tailscale_user_sync_desired_emails."
+      when: tailscale_user_sync_desired_emails is not defined
+      delegate_to: localhost
+      run_once: true
+
+    - name: Build desired user objects (controller)
+      ansible.builtin.set_fact:
+        tailscale_user_sync_desired_users: "{{ tailscale_user_sync_desired_users | default([]) + [desired_user] }}"
+      vars:
+        email: "{{ item }}"
+        raw_username: "{{ tailscale_user_sync_username_overrides[email] | default(email.split('@')[0], true) }}"
+        desired_user:
+          email: "{{ email }}"
+          username: >-
+            {{
+              raw_username
+              | lower
+              | regex_replace('[^a-z0-9._-]+', '-')
+              | regex_replace('^-+', '')
+              | regex_replace('-+$', '')
+              | truncate(32, end='')
+            }}
+      loop: "{{ tailscale_user_sync_desired_emails }}"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Create/update managed users
+      ansible.builtin.user:
+        name: "{{ item.username }}"
+        comment: "Tailscale SSO: {{ item.email }}"
+        shell: "{{ tailscale_user_sync_shell }}"
+        create_home: "{{ tailscale_user_sync_create_home | bool }}"
+        password_lock: true
+        groups:
+          - "{{ tailscale_user_sync_local_admin_group }}"
+          - "{{ tailscale_user_sync_managed_group }}"
+        append: true
+        state: present
+      loop: "{{ hostvars['localhost'].tailscale_user_sync_desired_users }}"
+
+    - name: Install sudo policy for local admin group
+      when:
+        - tailscale_user_sync_sudo_enabled | bool
+        - tailscale_user_sync_sudoers_manage | bool
+      block:
+        - name: Ensure sudoers.d exists
+          ansible.builtin.file:
+            path: "/etc/sudoers.d"
+            state: directory
+            mode: "0750"
+
+        - name: Check whether visudo exists
+          ansible.builtin.stat:
+            path: "/usr/sbin/visudo"
+          register: tailscale_user_sync_visudo
+
+        - name: Write sudoers rule
+          ansible.builtin.copy:
+            dest: "{{ tailscale_user_sync_sudoers_path }}"
+            mode: "0440"
+            content: |
+              # Managed by Ansible (tailscale-user-sync)
+              %{{ tailscale_user_sync_local_admin_group }} ALL=(ALL) {{ 'NOPASSWD:' if tailscale_user_sync_sudo_nopasswd | bool else '' }}ALL
+            validate: "{{ '/usr/sbin/visudo -cf %s' if tailscale_user_sync_visudo.stat.exists else omit }}"
+
+    - name: Fetch current managed users (local group members)
+      ansible.builtin.command: "getent group {{ tailscale_user_sync_managed_group }}"
+      register: tailscale_user_sync_managed_group_getent
+      changed_when: false
+      failed_when: false
+
+    - name: Parse current managed user list
+      ansible.builtin.set_fact:
+        tailscale_user_sync_current_users: >-
+          {{
+            (
+              (tailscale_user_sync_managed_group_getent.stdout.split(':') | last | default(''))
+              .split(',')
+            )
+            | map('trim')
+            | select('length')
+            | list
+          }}
+
+    - name: Remove users no longer present in source-of-truth
+      ansible.builtin.user:
+        name: "{{ item }}"
+        state: absent
+        remove: "{{ tailscale_user_sync_remove_home | bool }}"
+      loop: >-
+        {{
+          tailscale_user_sync_current_users
+          | difference(hostvars['localhost'].tailscale_user_sync_desired_users | map(attribute='username') | list)
+        }}
+      when: tailscale_user_sync_remove_absent_users | bool

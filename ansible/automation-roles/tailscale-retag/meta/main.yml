@@ -1,0 +1,8 @@
+---
+# Role metadata for tailscale-retag
+galaxy_info:
+  role_name: tailscale_retag
+  author: ansible-runner
+  description: Retag Tailscale nodes after platform install
+  license: MIT
+  min_ansible_version: "2.14"

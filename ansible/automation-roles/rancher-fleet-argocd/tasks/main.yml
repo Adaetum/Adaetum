@@ -1,0 +1,132 @@
+---
+- name: Skip Fleet Argo CD bootstrap when disabled
+  ansible.builtin.debug:
+    msg: "Fleet Argo CD bootstrap is disabled."
+  when: not fleet_argocd_enabled | bool
+
+- name: Determine primary rke2 server
+  ansible.builtin.set_fact:
+    rke2_primary: >-
+      {{
+        (groups['break_glass'][0] if (break_glass | default(false) | bool) else (groups['all'] | default([inventory_hostname]))[0])
+      }}
+  when: fleet_argocd_enabled | bool
+
+- name: Determine kubectl command
+  ansible.builtin.set_fact:
+    kubectl_cmd: >-
+      {{
+        '/var/lib/rancher/rke2/bin/kubectl'
+        if lookup(
+          'ansible.builtin.first_found',
+          {'files': ['/var/lib/rancher/rke2/bin/kubectl', '/usr/local/bin/kubectl'], 'skip': true}
+        ) is not none
+        else '/usr/local/bin/kubectl'
+      }}
+  when:
+    - fleet_argocd_enabled | bool
+    - inventory_hostname == rke2_primary
+
+- name: Configure Fleet GitRepo for Argo CD
+  when:
+    - fleet_argocd_enabled | bool
+    - inventory_hostname == rke2_primary
+    - fleet_argocd_repo_url | length > 0
+  block:
+    - name: Ensure Fleet namespace exists
+      ansible.builtin.command:
+        cmd: "{{ kubectl_cmd }} create namespace {{ fleet_argocd_namespace }}"
+      register: fleet_namespace_create
+      changed_when: fleet_namespace_create.rc == 0
+      failed_when: false
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+    - name: Ensure Argo CD namespace exists
+      ansible.builtin.command:
+        cmd: "{{ kubectl_cmd }} create namespace {{ fleet_argocd_target_namespace }}"
+      register: argocd_namespace_create
+      changed_when: argocd_namespace_create.rc == 0
+      failed_when: false
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+    - name: Create Fleet repo credentials secret
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n {{ fleet_argocd_namespace }} create secret generic {{ fleet_argocd_gitrepo_name }}-creds \
+          --from-literal=username='{{ fleet_repo_username }}' \
+          --from-literal=password='{{ fleet_repo_token }}' \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n {{ fleet_argocd_namespace }} apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      no_log: true
+      when: fleet_repo_token | length > 0
+
+    - name: Create Argo CD repo credentials secret
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n {{ fleet_argocd_target_namespace }} create secret generic argocd-repo-https \
+          --from-literal=url='{{ fleet_argocd_repo_url }}' \
+          --from-literal=username='{{ fleet_repo_username }}' \
+          --from-literal=password='{{ fleet_repo_token }}' \
+          --from-literal=type=git \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n {{ fleet_argocd_target_namespace }} apply -f -
+        {{ kubectl_cmd }} -n {{ fleet_argocd_target_namespace }} label secret argocd-repo-https \
+          argocd.argoproj.io/secret-type=repo-creds --overwrite
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      no_log: true
+      when: fleet_repo_token | length > 0
+
+    - name: Render Fleet GitRepo manifest
+      ansible.builtin.template:
+        src: fleet-argocd-gitrepo.yaml.j2
+        dest: /tmp/fleet-argocd-gitrepo.yaml
+        mode: "0644"
+
+    - name: Wait for Fleet GitRepo CRD
+      ansible.builtin.command:
+        cmd: "{{ kubectl_cmd }} get crd gitrepos.fleet.cattle.io"
+      register: fleet_gitrepo_crd
+      changed_when: false
+      failed_when: false
+      retries: "{{ fleet_argocd_crd_wait_retries }}"
+      delay: "{{ fleet_argocd_crd_wait_delay_seconds }}"
+      until: fleet_gitrepo_crd.rc == 0
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      when: fleet_argocd_crd_wait_enabled | bool
+
+    - name: Determine Fleet GitRepo CRD availability
+      ansible.builtin.set_fact:
+        fleet_gitrepo_crd_available: "{{ (fleet_gitrepo_crd.rc | default(1)) == 0 }}"
+
+    - name: Fail when Fleet GitRepo CRD is required but unavailable
+      ansible.builtin.fail:
+        msg: >-
+          Fleet GitRepo CRD is unavailable after waiting
+          {{ fleet_argocd_crd_wait_retries }}x{{ fleet_argocd_crd_wait_delay_seconds }}s;
+          Rancher/Fleet is not ready yet.
+      when:
+        - not fleet_gitrepo_crd_available | bool
+        - fleet_argocd_require_crd | bool
+
+    - name: Warn when Fleet GitRepo CRD is unavailable
+      ansible.builtin.debug:
+        msg: >-
+          Fleet GitRepo CRD is unavailable; skipping Fleet GitRepo bootstrap for now.
+          Rancher/Fleet can reconcile it later once CRDs are installed.
+      when:
+        - not fleet_gitrepo_crd_available | bool
+        - not fleet_argocd_require_crd | bool
+
+    - name: Apply Fleet GitRepo manifest
+      ansible.builtin.command: "{{ kubectl_cmd }} apply -f /tmp/fleet-argocd-gitrepo.yaml"
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      when: fleet_gitrepo_crd_available | bool

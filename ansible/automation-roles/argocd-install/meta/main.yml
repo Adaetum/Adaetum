@@ -1,0 +1,8 @@
+---
+# Role metadata for argocd-install
+galaxy_info:
+  role_name: argocd-install
+  author: ansible-runner
+  description: Install Argo CD and optional bootstrap Application
+  license: MIT
+  min_ansible_version: "2.14"

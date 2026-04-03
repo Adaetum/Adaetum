@@ -1,0 +1,180 @@
+- name: Derive DNF major releasever for RedHat family
+  ansible.builtin.set_fact:
+    os_bootstrap_dnf_releasever_major: >-
+      {{
+        ansible_distribution_major_version
+        | default(
+            (ansible_distribution_version | default('') | regex_replace('\\..*$', '')),
+            true
+          )
+      }}
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure DNF major releasever override is persisted for RedHat family
+  ansible.builtin.file:
+    path: /etc/dnf/vars
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - ansible_os_family == "RedHat"
+    - (os_bootstrap_dnf_releasever_major | default('')) | length > 0
+
+- name: Write DNF major releasever override for RedHat family
+  ansible.builtin.copy:
+    dest: /etc/dnf/vars/releasever
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ os_bootstrap_dnf_releasever_major }}\n"
+  when:
+    - ansible_os_family == "RedHat"
+    - (os_bootstrap_dnf_releasever_major | default('')) | length > 0
+
+- name: Install base packages on RedHat family
+  ansible.builtin.shell: |
+    set -euo pipefail
+    dnf -y --releasever="{{ os_bootstrap_dnf_releasever_major }}" install {{ os_bootstrap_packages | map('quote') | join(' ') }}
+  args:
+    executable: /bin/bash
+  register: os_bootstrap_redhat_package_install
+  retries: 3
+  delay: 10
+  until: os_bootstrap_redhat_package_install.rc == 0
+  changed_when: >-
+    'Nothing to do.' not in (os_bootstrap_redhat_package_install.stdout | default(''))
+  when:
+    - ansible_os_family == "RedHat"
+    - (os_bootstrap_dnf_releasever_major | default('')) | length > 0
+
+- name: Install base packages on non-RedHat families
+  ansible.builtin.package:
+    name: "{{ os_bootstrap_packages }}"
+    state: present
+  when: ansible_os_family != "RedHat"
+
+- name: Ensure required kernel modules are configured for boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ os_bootstrap_kernel_modules | join('\n') }}
+
+- name: Ensure required kernel modules are loaded
+  ansible.builtin.command: "modprobe {{ item }}"
+  loop: "{{ os_bootstrap_kernel_modules }}"
+  changed_when: false
+  failed_when: false
+
+- name: Ensure Kubernetes networking sysctls are configured for boot
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k8s.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {% for entry in os_bootstrap_sysctl %}
+      {{ entry.name }} = {{ entry.value }}
+      {% endfor %}
+
+- name: Apply Kubernetes networking sysctls at runtime
+  ansible.builtin.command: "sysctl -w {{ item.name }}={{ item.value }}"
+  loop: "{{ os_bootstrap_sysctl }}"
+  changed_when: false
+  failed_when: false
+
+- name: Disable firewalld to prevent pod network isolation
+  ansible.builtin.service:
+    name: firewalld
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Enable and start required services
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop: "{{ os_bootstrap_services }}"
+
+- name: Ensure NetworkManager is enabled for wired autoconnect
+  ansible.builtin.service:
+    name: NetworkManager
+    state: started
+    enabled: true
+  when: os_bootstrap_manage_networkmanager_wired | bool
+
+- name: Discover wired interfaces from NetworkManager
+  ansible.builtin.shell: "nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2==\"ethernet\" {print $1}'"
+  args:
+    executable: /bin/bash
+  register: os_bootstrap_nmcli_devices
+  changed_when: false
+  failed_when: false
+  when: os_bootstrap_manage_networkmanager_wired | bool
+
+- name: Build wired interface list
+  ansible.builtin.set_fact:
+    os_bootstrap_wired_ifaces: "{{ os_bootstrap_nmcli_devices.stdout_lines | default([]) | reject('equalto', '') | list }}"
+  when: os_bootstrap_manage_networkmanager_wired | bool
+
+- name: Ensure wired interfaces are managed by NetworkManager
+  ansible.builtin.command: "nmcli dev set {{ item }} managed yes"
+  loop: "{{ os_bootstrap_wired_ifaces | default([]) }}"
+  changed_when: false
+  failed_when: false
+  when: os_bootstrap_manage_networkmanager_wired | bool
+
+- name: Ensure wired DHCP autoconnect profile exists
+  ansible.builtin.shell: |
+    set -euo pipefail
+    con_name="{{ os_bootstrap_network_connection_prefix }}{{ item }}"
+    if ! nmcli -t -f NAME con show | grep -Fxq "${con_name}"; then
+      nmcli con add type ethernet ifname "{{ item }}" con-name "${con_name}" \
+        ipv4.method auto ipv6.method disabled connection.autoconnect yes \
+        connection.autoconnect-priority "{{ os_bootstrap_network_autoconnect_priority }}"
+      echo created
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ os_bootstrap_wired_ifaces | default([]) }}"
+  changed_when: "'created' in (stdout | default(''))"
+  failed_when: false
+  when: os_bootstrap_manage_networkmanager_wired | bool
+
+- name: Enforce wired DHCP autoconnect profile settings
+  ansible.builtin.command: >-
+    nmcli con mod {{ os_bootstrap_network_connection_prefix }}{{ item }}
+    connection.interface-name {{ item }}
+    ipv4.method auto
+    ipv6.method disabled
+    connection.autoconnect yes
+    connection.autoconnect-priority {{ os_bootstrap_network_autoconnect_priority }}
+  loop: "{{ os_bootstrap_wired_ifaces | default([]) }}"
+  changed_when: false
+  failed_when: false
+  when: os_bootstrap_manage_networkmanager_wired | bool
+
+- name: Bring up wired DHCP autoconnect profile
+  ansible.builtin.command: "nmcli con up {{ os_bootstrap_network_connection_prefix }}{{ item }}"
+  loop: "{{ os_bootstrap_wired_ifaces | default([]) }}"
+  changed_when: false
+  failed_when: false
+  when: os_bootstrap_manage_networkmanager_wired | bool
+
+- name: Disable swap (Kubernetes requirement)
+  ansible.builtin.command: swapoff -a
+  when:
+    - os_bootstrap_disable_swap | bool
+    - ansible_facts["memswap_mb"] | default(0) | int > 0
+  changed_when: false
+
+- name: Remove swap entries from fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: "{{ os_bootstrap_swap_fstab_regex }}"
+    replace: '# \g<0>'
+  when: os_bootstrap_manage_fstab | bool

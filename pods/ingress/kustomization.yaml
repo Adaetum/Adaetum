@@ -1,0 +1,377 @@
+resources:
+  - ingress-cluster-config.yaml
+  - nginx-controller-config.yaml
+  - external-dns/deployment.yaml
+  - external-dns/rbac.yaml
+  - nginx-routing/gitea-ingress.yaml
+  - nginx-routing/gitea-public-ingress.yaml
+  - nginx-routing/argocd-ingress.yaml
+  - nginx-routing/argocd-public-ingress.yaml
+  - nginx-routing/openbao-ingress.yaml
+  - nginx-routing/openbao-public-ingress.yaml
+  - nginx-routing/authentik-ingress.yaml
+  - nginx-routing/authentik-outpost-hosts-ingress.yaml
+  - nginx-routing/headlamp-ingress.yaml
+  - nginx-routing/headlamp-public-ingress.yaml
+  - nginx-routing/homepage-ingress.yaml
+  - nginx-routing/homepage-public-ingress.yaml
+  - nginx-routing/registry-ingress.yaml
+  - nginx-routing/registry-public-ingress.yaml
+  - observability-routing
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.EXTERNAL_DNS_DOMAIN_FILTER
+    targets:
+      - select:
+          kind: Deployment
+          name: external-dns
+        fieldPaths:
+          - spec.template.spec.containers.[name=external-dns].args.7
+        options:
+          delimiter: "="
+          index: 1
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.GITEA_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: gitea-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.GITEA_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: gitea-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.ARGOCD_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: argocd-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.ARGOCD_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: argocd-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.OPENBAO_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: openbao-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.OPENBAO_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: openbao-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.AUTHENTIK_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-ui
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.AUTHENTIK_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-ui
+        fieldPaths:
+          - spec.rules.1.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.1.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.AUTHENTIK_LEGACY_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-ui
+        fieldPaths:
+          - spec.rules.2.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.ARGOCD_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.ARGOCD_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.1.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.OPENBAO_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.2.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.OPENBAO_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.3.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.GITEA_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.4.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.GITEA_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.5.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.REGISTRY_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.6.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.REGISTRY_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.7.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.HEADLAMP_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.8.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.HEADLAMP_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.9.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.HOMEPAGE_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.10.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.HOMEPAGE_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.11.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.ALERTMANAGER_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.12.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.ALERTMANAGER_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.13.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.GRAFANA_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.14.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.GRAFANA_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.15.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.PROMETHEUS_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.16.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.PROMETHEUS_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.17.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.HEADLAMP_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: headlamp-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.HEADLAMP_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: headlamp-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.HOMEPAGE_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: homepage-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.HOMEPAGE_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: homepage-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.REGISTRY_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: registry-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.REGISTRY_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: registry-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]

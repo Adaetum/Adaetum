@@ -1,0 +1,114 @@
+BOOTSTRAP_RUNTIME_ENV_URL="${BOOTSTRAP_RUNTIME_ENV_URL:-__BOOTSTRAP_RUNTIME_ENV_URL__}"
+BOOTSTRAP_SHARED_TOKEN="${BOOTSTRAP_SHARED_TOKEN:-__BOOTSTRAP_SHARED_TOKEN__}"
+BOOTSTRAP_RUNTIME_ENV_FILE="${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"
+
+bootstrap_runtime_trim() {
+  printf '%s' "${1:-}" | tr -d '\r\n'
+}
+
+bootstrap_runtime_strip_placeholder() {
+  case "${1:-}" in
+    __*__) printf '%s' "" ;;
+    *) printf '%s' "${1:-}" ;;
+  esac
+}
+
+BOOTSTRAP_RUNTIME_ENV_URL="$(bootstrap_runtime_trim "${BOOTSTRAP_RUNTIME_ENV_URL}")"
+BOOTSTRAP_SHARED_TOKEN="$(bootstrap_runtime_trim "${BOOTSTRAP_SHARED_TOKEN}")"
+BOOTSTRAP_RUNTIME_ENV_FILE="$(bootstrap_runtime_trim "${BOOTSTRAP_RUNTIME_ENV_FILE}")"
+BOOTSTRAP_RUNTIME_ENV_URL="$(bootstrap_runtime_strip_placeholder "${BOOTSTRAP_RUNTIME_ENV_URL}")"
+BOOTSTRAP_SHARED_TOKEN="$(bootstrap_runtime_strip_placeholder "${BOOTSTRAP_SHARED_TOKEN}")"
+
+bootstrap_url_with_shared_token() {
+  local base_url="${1:-}"
+  if [ -z "${base_url}" ]; then
+    return 1
+  fi
+  if [ -z "${BOOTSTRAP_SHARED_TOKEN:-}" ] || printf '%s' "${base_url}" | grep -qE '(^|[?&])token='; then
+    printf '%s' "${base_url}"
+    return 0
+  fi
+  if printf '%s' "${base_url}" | grep -q '?'; then
+    printf '%s&token=%s' "${base_url}" "${BOOTSTRAP_SHARED_TOKEN}"
+  else
+    printf '%s?token=%s' "${base_url}" "${BOOTSTRAP_SHARED_TOKEN}"
+  fi
+}
+
+bootstrap_runtime_redact_url() {
+  printf '%s' "${1:-}" | sed -E 's/([?&]token=)[^&]+/\1REDACTED/g'
+}
+
+bootstrap_runtime_validate_file() {
+  local path="${1:?path}"
+  if [ ! -s "${path}" ]; then
+    echo "[BOOTSTRAP] runtime env missing or empty: ${path}" >&2
+    return 1
+  fi
+  if rg -n '^[[:space:]]*[^#[:space:]][^=]*$|^[[:space:]]*export[[:space:]]+' "${path}" >/dev/null 2>&1; then
+    echo "[BOOTSTRAP] runtime env contains invalid lines: ${path}" >&2
+    rg -n '^[[:space:]]*[^#[:space:]][^=]*$|^[[:space:]]*export[[:space:]]+' "${path}" >&2 || true
+    return 1
+  fi
+  if rg -n '^[[:space:]]*[^#[:space:]]' "${path}" >/dev/null 2>&1; then
+    if ! rg -n '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=.*|#.*)?[[:space:]]*$' "${path}" >/dev/null 2>&1; then
+      echo "[BOOTSTRAP] runtime env contains unsupported shell content: ${path}" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+bootstrap_runtime_source_file() {
+  local path="${1:?path}"
+  bootstrap_runtime_validate_file "${path}" || return 1
+  set -a
+  # shellcheck disable=SC1090
+  . "${path}"
+  set +a
+}
+
+ensure_bootstrap_runtime_env() {
+  local target="${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"
+  local fetch_url=""
+  local tmp_file=""
+
+  if [ -f "${target}" ]; then
+    bootstrap_runtime_source_file "${target}" || return 1
+    return 0
+  fi
+
+  if [ -z "${BOOTSTRAP_RUNTIME_ENV_URL:-}" ]; then
+    echo "[BOOTSTRAP] BOOTSTRAP_RUNTIME_ENV_URL is required" >&2
+    return 1
+  fi
+  if [ -z "${BOOTSTRAP_SHARED_TOKEN:-}" ]; then
+    echo "[BOOTSTRAP] BOOTSTRAP_SHARED_TOKEN is required" >&2
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "[BOOTSTRAP] curl is required to fetch bootstrap runtime env" >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "${target}")"
+  tmp_file="$(mktemp "${target}.XXXXXX")"
+  chmod 0600 "${tmp_file}" 2>/dev/null || true
+  fetch_url="$(bootstrap_url_with_shared_token "${BOOTSTRAP_RUNTIME_ENV_URL}")"
+  echo "[BOOTSTRAP] Fetching runtime bootstrap env from $(bootstrap_runtime_redact_url "${fetch_url}")"
+  if ! curl -4 --http1.1 -fsSL --connect-timeout 5 --max-time 60 --retry 3 --retry-delay 2 \
+    -o "${tmp_file}" \
+    "${fetch_url}"; then
+    rm -f "${tmp_file}" 2>/dev/null || true
+    echo "[BOOTSTRAP] failed fetching runtime bootstrap env" >&2
+    return 1
+  fi
+
+  bootstrap_runtime_validate_file "${tmp_file}" || {
+    rm -f "${tmp_file}" 2>/dev/null || true
+    return 1
+  }
+  mv -f "${tmp_file}" "${target}"
+  chmod 0600 "${target}" 2>/dev/null || true
+  bootstrap_runtime_source_file "${target}" || return 1
+}

@@ -1,0 +1,3 @@
+---
+# Role variables for healthcheck
+healthcheck_df_cmd: "df -Pk /"

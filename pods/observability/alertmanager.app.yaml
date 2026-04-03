@@ -1,0 +1,24 @@
+name: alertmanager
+project: default
+source_type: helm
+source_repo_url: https://prometheus-community.github.io/helm-charts
+source_chart: alertmanager
+source_target_revision: ">=0.0.0"
+source_helm_values: |
+  persistence:
+    enabled: true
+    storageClass: longhorn
+    size: 5Gi
+  config:
+    global: {}
+    route:
+      group_wait: "30s"
+      group_interval: "5m"
+      repeat_interval: "4h"
+      receiver: "apprise"
+    receivers:
+      - name: "apprise"
+        webhook_configs:
+          - url: "http://apprise.observability.svc.cluster.local:8000/notify"
+      - name: "null-receiver"
+destination_namespace: observability

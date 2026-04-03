@@ -1,0 +1,850 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+env_file="/etc/ansible-bundle-bootstrap.env"
+if [ -f "${env_file}" ]; then
+  set -a
+  . "${env_file}"
+  set +a
+fi
+homebrew_shellenv="/etc/profile.d/homebrew.sh"
+if [ -f "${homebrew_shellenv}" ]; then
+  # shellcheck disable=SC1090
+  . "${homebrew_shellenv}"
+fi
+hash -r 2>/dev/null || true
+
+BOOTSTRAP_PLAYBOOK="${BOOTSTRAP_PLAYBOOK:-/opt/ansible-runner/ansible/playbooks/bootstrap.yml}"
+BOOTSTRAP_BREAKGLASS="${BOOTSTRAP_BREAKGLASS:-1}"
+BOOTSTRAP_RUN_PHASE40="${BOOTSTRAP_RUN_PHASE40:-}"
+BOOTSTRAP_RUN_PHASE50="${BOOTSTRAP_RUN_PHASE50:-}"
+BOOTSTRAP_RUN_PHASE60="${BOOTSTRAP_RUN_PHASE60:-}"
+BOOTSTRAP_RUN_PHASE70="${BOOTSTRAP_RUN_PHASE70:-}"
+BOOTSTRAP_RUN_PHASE90="${BOOTSTRAP_RUN_PHASE90:-}"
+BOOTSTRAP_RUN_PHASE99="${BOOTSTRAP_RUN_PHASE99:-}"
+BOOTSTRAP_BREAKGLASS_STRICT="${BOOTSTRAP_BREAKGLASS_STRICT:-1}"
+export BOOTSTRAP_BREAKGLASS_STRICT
+
+bootstrap_mode_raw="$(printf '%s' "${BOOTSTRAP_BREAKGLASS}" | tr '[:upper:]' '[:lower:]')"
+bootstrap_mode_is_breakglass=0
+if [ "${bootstrap_mode_raw}" = "1" ] || [ "${bootstrap_mode_raw}" = "true" ] || [ "${bootstrap_mode_raw}" = "yes" ] || [ "${bootstrap_mode_raw}" = "on" ]; then
+  bootstrap_mode_is_breakglass=1
+fi
+
+# Phase defaults depend on mode:
+# - break-glass bootstrap node: run full phase chain by default.
+# - join node: only run bootstrap playbook by default; skip phase40/50/60/70 unless explicitly enabled.
+if [ -z "${BOOTSTRAP_RUN_PHASE40}" ]; then
+  if [ "${bootstrap_mode_is_breakglass}" -eq 1 ]; then BOOTSTRAP_RUN_PHASE40=1; else BOOTSTRAP_RUN_PHASE40=0; fi
+fi
+if [ -z "${BOOTSTRAP_RUN_PHASE50}" ]; then
+  if [ "${bootstrap_mode_is_breakglass}" -eq 1 ]; then BOOTSTRAP_RUN_PHASE50=1; else BOOTSTRAP_RUN_PHASE50=0; fi
+fi
+if [ -z "${BOOTSTRAP_RUN_PHASE60}" ]; then
+  if [ "${bootstrap_mode_is_breakglass}" -eq 1 ]; then BOOTSTRAP_RUN_PHASE60=1; else BOOTSTRAP_RUN_PHASE60=0; fi
+fi
+if [ -z "${BOOTSTRAP_RUN_PHASE70}" ]; then
+  if [ "${bootstrap_mode_is_breakglass}" -eq 1 ]; then BOOTSTRAP_RUN_PHASE70=1; else BOOTSTRAP_RUN_PHASE70=0; fi
+fi
+if [ -z "${BOOTSTRAP_RUN_PHASE90}" ]; then
+  if [ "${bootstrap_mode_is_breakglass}" -eq 1 ]; then BOOTSTRAP_RUN_PHASE90=1; else BOOTSTRAP_RUN_PHASE90=0; fi
+fi
+if [ -z "${BOOTSTRAP_RUN_PHASE99}" ]; then
+  if [ "${bootstrap_mode_is_breakglass}" -eq 1 ]; then BOOTSTRAP_RUN_PHASE99=1; else BOOTSTRAP_RUN_PHASE99=0; fi
+fi
+
+# Join mode must not execute bootstrap-node phases. These phases are for the
+# cluster primary (OpenBao/Routing/Burn/health validation on primary), not joiners.
+if [ "${bootstrap_mode_is_breakglass}" -eq 0 ]; then
+  BOOTSTRAP_RUN_PHASE40=0
+  BOOTSTRAP_RUN_PHASE50=0
+  BOOTSTRAP_RUN_PHASE60=0
+  BOOTSTRAP_RUN_PHASE70=0
+  BOOTSTRAP_RUN_PHASE90=0
+  BOOTSTRAP_RUN_PHASE99=0
+fi
+
+log_file="${BUNDLE_BOOTSTRAP_LOG_FILE:-/var/log/ansible-bundle-bootstrap.log}"
+export BUNDLE_BOOTSTRAP_LOG_FILE="${log_file}"
+phase_log_dir="${BOOTSTRAP_PHASE_LOG_DIR:-$(dirname "${log_file}")/bootstrap-phases}"
+mkdir -p "${phase_log_dir}"
+export BOOTSTRAP_PHASE_LOG_DIR="${phase_log_dir}"
+BOOTSTRAP_PHASE_STATUS_FILE="${BOOTSTRAP_PHASE_STATUS_FILE:-/run/bootstrap-phase-status.env}"
+export BOOTSTRAP_PHASE_STATUS_FILE
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/bootstrap" && pwd -P)"
+# shellcheck disable=SC1091
+. "${script_dir}/diagnostics.sh"
+bootstrap_diag_init
+echo "[BOOTSTRAP] diagnostics jsonl -> ${BOOTSTRAP_DIAGNOSTICS_JSONL}"
+echo "[BOOTSTRAP] diagnostics artifacts -> ${BOOTSTRAP_DIAGNOSTICS_RUN_DIR}"
+if [ "${BUNDLE_BOOTSTRAP_LOG_INIT:-1}" != "0" ]; then
+  mkdir -p "$(dirname "${log_file}")"
+  : > "${log_file}"
+  if command -v stdbuf >/dev/null 2>&1; then
+    # Keep the logging pipe open even if tee fails (e.g. disk full) to avoid SIGPIPE exits.
+    exec > >(stdbuf -oL tee "${log_file}" || cat >/dev/null) 2>&1
+  else
+    exec > >(tee "${log_file}" || cat >/dev/null) 2>&1
+  fi
+fi
+
+phase_log_path() {
+  local key="${1:?key}"
+  printf '%s/%s.log\n' "${phase_log_dir}" "${key}"
+}
+
+phase_position_for_id() {
+  case "${1:-}" in
+    10) printf '1' ;;
+    20) printf '2' ;;
+    30) printf '3' ;;
+    40) printf '4' ;;
+    50) printf '5' ;;
+    60) printf '6' ;;
+    70) printf '7' ;;
+    90) printf '8' ;;
+    99) printf '9' ;;
+    100) printf '10' ;;
+    *) printf '0' ;;
+  esac
+}
+
+phase_label_for_id() {
+  case "${1:-}" in
+    10) printf 'fast-fail validation gate' ;;
+    20) printf 'bootstrap-local secret authority' ;;
+    30) printf 'platform bootstrap' ;;
+    40) printf 'OpenBao authority transition' ;;
+    50) printf 'minimal Argo CD + Gitea install' ;;
+    60) printf 'repo seed + GitOps handoff' ;;
+    70) printf 'GitOps realization gate' ;;
+    90) printf 'late live-state reconciliation' ;;
+    99) printf 'recovery export + destroy bootstrap authority' ;;
+    100) printf 'final result' ;;
+    *) printf 'pre-bootstrap' ;;
+  esac
+}
+
+bootstrap_phase_status_write() {
+  local phase_id="${1:-0}"
+  local phase_key="${2:-pre-bootstrap}"
+  local phase_state="${3:-STARTING}"
+  local phase_label="${4:-}"
+  local phase_total="10"
+  local phase_position=""
+  local status_dir=""
+  local tmp_file=""
+
+  phase_position="$(phase_position_for_id "${phase_id}")"
+  if [ -z "${phase_label}" ]; then
+    phase_label="$(phase_label_for_id "${phase_id}")"
+  fi
+  status_dir="$(dirname "${BOOTSTRAP_PHASE_STATUS_FILE}")"
+  mkdir -p "${status_dir}"
+  tmp_file="$(mktemp "${BOOTSTRAP_PHASE_STATUS_FILE}.tmp.XXXXXX")"
+  {
+    printf 'BOOTSTRAP_PROGRESS_PHASE_ID=%q\n' "${phase_id}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_KEY=%q\n' "${phase_key}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_POSITION=%q\n' "${phase_position}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_TOTAL=%q\n' "${phase_total}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_STATE=%q\n' "${phase_state}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_LABEL=%q\n' "${phase_label}"
+  } > "${tmp_file}"
+  mv -f "${tmp_file}" "${BOOTSTRAP_PHASE_STATUS_FILE}"
+}
+
+bootstrap_phase_status_reset() {
+  bootstrap_phase_status_write "0" "pre-bootstrap" "STARTING" "pre-bootstrap"
+}
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# shellcheck disable=SC1091
+. "${script_dir}/phase-state.sh"
+
+BOOTSTRAP_SKIP_DONE="${BOOTSTRAP_SKIP_DONE:-1}"
+BOOTSTRAP_FORCE="${BOOTSTRAP_FORCE:-0}"
+BOOTSTRAP_RESET_STATE="${BOOTSTRAP_RESET_STATE:-0}"
+if is_true "${BOOTSTRAP_BREAKGLASS_STRICT}"; then
+  # Break-glass first boot should always run phases instead of trusting stale done markers.
+  BOOTSTRAP_SKIP_DONE=0
+fi
+
+should_skip() {
+  local key="${1:?key}"
+  if is_true "${BOOTSTRAP_FORCE}"; then
+    return 1
+  fi
+  if ! is_true "${BOOTSTRAP_SKIP_DONE}"; then
+    return 1
+  fi
+  bootstrap_state_has "${key}"
+}
+
+mark_done() {
+  local key="${1:?key}"
+  bootstrap_state_mark "${key}"
+}
+
+run_step() {
+  local key="${1:?key}"
+  shift
+  local label="${1:?label}"
+  shift
+
+  if should_skip "${key}"; then
+    echo "[BOOTSTRAP] ${label}: skip (done marker present)"
+    return 0
+  fi
+
+  echo "[BOOTSTRAP] ${label}: start"
+  local step_log
+  step_log="$(phase_log_path "${key}")"
+  : > "${step_log}"
+  echo "[BOOTSTRAP] ${label}: phase log -> ${step_log}"
+  local start_ts
+  start_ts="$(date +%s)"
+  bootstrap_diag_record \
+    "phase=${key}" \
+    "step=${key}" \
+    "component=bundle-bootstrap" \
+    "operation=step-start" \
+    "severity=info" \
+    "summary=${label}: start" \
+    "log_path=${step_log}"
+  if command -v stdbuf >/dev/null 2>&1; then
+    "$@" > >(stdbuf -oL tee -a "${step_log}") 2> >(stdbuf -oL tee -a "${step_log}" >&2)
+  else
+    "$@" > >(tee -a "${step_log}") 2> >(tee -a "${step_log}" >&2)
+  fi
+  local rc=$?
+  local end_ts
+  end_ts="$(date +%s)"
+  local dur
+  dur="$((end_ts - start_ts))"
+  if [ "${rc}" -eq 0 ]; then
+    mark_done "${key}"
+    echo "[BOOTSTRAP] ${label}: ok (${dur}s)"
+    bootstrap_diag_record \
+      "phase=${key}" \
+      "step=${key}" \
+      "component=bundle-bootstrap" \
+      "operation=step-complete" \
+      "severity=info" \
+      "exit_code=0" \
+      "duration_seconds=${dur}" \
+      "summary=${label}: ok" \
+      "log_path=${step_log}"
+  else
+    local tail_excerpt=""
+    if [ -f "${step_log}" ]; then
+      echo "[BOOTSTRAP] ${label}: phase log tail (last 80 lines)"
+      tail_excerpt="$(tail -n 80 "${step_log}" 2>/dev/null || true)"
+      printf '%s\n' "${tail_excerpt}"
+    fi
+    echo "[BOOTSTRAP] ${label}: failed rc=${rc} (${dur}s)" >&2
+    bootstrap_diag_record \
+      "phase=${key}" \
+      "step=${key}" \
+      "component=bundle-bootstrap" \
+      "operation=step-failed" \
+      "severity=error" \
+      "exit_code=${rc}" \
+      "duration_seconds=${dur}" \
+      "failure_kind=$(bootstrap_diag_classify_failure_kind "${tail_excerpt}")" \
+      "summary=${label}: failed rc=${rc}" \
+      "stderr_excerpt=${tail_excerpt}" \
+      "log_path=${step_log}"
+  fi
+  return "${rc}"
+}
+
+run_bootstrap_phase() {
+  local phase_id="${1:?phase_id}"
+  local key="${2:?key}"
+  shift 2
+  local label="${1:?label}"
+  shift
+  bootstrap_phase_status_write "${phase_id}" "${key}" "RUNNING" "$(phase_label_for_id "${phase_id}")"
+  if run_step "${key}" "${label}" "$@"; then
+    bootstrap_phase_status_write "${phase_id}" "${key}" "SUCCESS" "$(phase_label_for_id "${phase_id}")"
+    return 0
+  fi
+  local rc=$?
+  bootstrap_phase_status_write "${phase_id}" "${key}" "FAILED" "$(phase_label_for_id "${phase_id}")"
+  return "${rc}"
+}
+
+run_bootstrap_playbook_phases() {
+  local key="bundle-playbook"
+  local label="run bootstrap playbook"
+  local step_log=""
+  local start_ts=""
+  local end_ts=""
+  local dur=""
+  local rc=0
+  local phase20_log=""
+  local phase30_log=""
+  local phase30_seen_file=""
+  local phase30_marker_1="TASK [Ensure base packages are installed on RedHat family]"
+  local phase30_marker_2="TASK [Ensure base packages are installed on non-RedHat families]"
+
+  if should_skip "${key}"; then
+    echo "[BOOTSTRAP] ${label}: skip (done marker present)"
+    bootstrap_phase_status_write "30" "phase30" "SUCCESS" "$(phase_label_for_id "30")"
+    return 0
+  fi
+
+  echo "[BOOTSTRAP] ${label}: start"
+  step_log="$(phase_log_path "${key}")"
+  : > "${step_log}"
+  echo "[BOOTSTRAP] ${label}: phase log -> ${step_log}"
+  start_ts="$(date +%s)"
+  bootstrap_phase_status_write "20" "phase20" "RUNNING" "$(phase_label_for_id "20")"
+  bootstrap_diag_record \
+    "phase=${key}" \
+    "step=${key}" \
+    "component=bundle-bootstrap" \
+    "operation=step-start" \
+    "severity=info" \
+    "summary=${label}: start" \
+    "log_path=${step_log}"
+
+  phase30_seen_file="$(mktemp)"
+  (
+    while true; do
+      if [ -f "${step_log}" ] && { grep -Fq "${phase30_marker_1}" "${step_log}" || grep -Fq "${phase30_marker_2}" "${step_log}"; }; then
+        printf '1\n' > "${phase30_seen_file}"
+        bootstrap_phase_status_write "30" "phase30" "RUNNING" "$(phase_label_for_id "30")"
+        break
+      fi
+      if [ -n "${BUNDLE_PLAYBOOK_PID:-}" ] && ! kill -0 "${BUNDLE_PLAYBOOK_PID}" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+  ) &
+  local phase30_monitor_pid=$!
+
+  set +e
+  if command -v stdbuf >/dev/null 2>&1; then
+    bash -lc '
+      echo "[BOOTSTRAP] Running Ansible bootstrap playbook"
+      cd /opt/ansible-runner/ansible
+      export ANSIBLE_CONFIG="/opt/ansible-runner/ansible/ansible.cfg"
+      export ANSIBLE_ROLES_PATH="/opt/ansible-runner/ansible/automation-roles:/opt/ansible-runner/ansible/playbooks/roles:/etc/ansible/roles:/usr/share/ansible/roles"
+      mode_raw="$(printf "%s" "${BOOTSTRAP_BREAKGLASS:-1}" | tr "[:upper:]" "[:lower:]")"
+      if [ -z "${BOOTSTRAP_JOIN_REQUIRED+x}" ] || [ -z "${BOOTSTRAP_JOIN_REQUIRED}" ]; then
+        join_required_raw="1"
+      else
+        join_required_raw="$(printf "%s" "${BOOTSTRAP_JOIN_REQUIRED}" | tr "[:upper:]" "[:lower:]")"
+      fi
+      if [ "${mode_raw}" = "1" ] || [ "${mode_raw}" = "true" ] || [ "${mode_raw}" = "yes" ] || [ "${mode_raw}" = "on" ]; then
+        echo "[BOOTSTRAP] mode=break-glass (local bootstrap node is cluster primary)"
+        ansible-playbook -i /opt/ansible-runner/ansible/node-inventory.yml "${BOOTSTRAP_PLAYBOOK}" -e break_glass=true
+      else
+        echo "[BOOTSTRAP] mode=join (local bootstrap node joins existing cluster based on Tailscale inventory/tags)"
+        echo "[BOOTSTRAP] strict join required: ${join_required_raw}"
+        ansible-playbook -i /opt/ansible-runner/ansible/node-inventory.yml "${BOOTSTRAP_PLAYBOOK}" -e break_glass=true -e break_glass_cluster_join=true -e break_glass_join_required="${join_required_raw}"
+      fi
+    ' > >(stdbuf -oL tee -a "${step_log}") 2> >(stdbuf -oL tee -a "${step_log}" >&2) &
+  else
+    bash -lc '
+      echo "[BOOTSTRAP] Running Ansible bootstrap playbook"
+      cd /opt/ansible-runner/ansible
+      export ANSIBLE_CONFIG="/opt/ansible-runner/ansible/ansible.cfg"
+      export ANSIBLE_ROLES_PATH="/opt/ansible-runner/ansible/automation-roles:/opt/ansible-runner/ansible/playbooks/roles:/etc/ansible/roles:/usr/share/ansible/roles"
+      mode_raw="$(printf "%s" "${BOOTSTRAP_BREAKGLASS:-1}" | tr "[:upper:]" "[:lower:]")"
+      if [ -z "${BOOTSTRAP_JOIN_REQUIRED+x}" ] || [ -z "${BOOTSTRAP_JOIN_REQUIRED}" ]; then
+        join_required_raw="1"
+      else
+        join_required_raw="$(printf "%s" "${BOOTSTRAP_JOIN_REQUIRED}" | tr "[:upper:]" "[:lower:]")"
+      fi
+      if [ "${mode_raw}" = "1" ] || [ "${mode_raw}" = "true" ] || [ "${mode_raw}" = "yes" ] || [ "${mode_raw}" = "on" ]; then
+        echo "[BOOTSTRAP] mode=break-glass (local bootstrap node is cluster primary)"
+        ansible-playbook -i /opt/ansible-runner/ansible/node-inventory.yml "${BOOTSTRAP_PLAYBOOK}" -e break_glass=true
+      else
+        echo "[BOOTSTRAP] mode=join (local bootstrap node joins existing cluster based on Tailscale inventory/tags)"
+        echo "[BOOTSTRAP] strict join required: ${join_required_raw}"
+        ansible-playbook -i /opt/ansible-runner/ansible/node-inventory.yml "${BOOTSTRAP_PLAYBOOK}" -e break_glass=true -e break_glass_cluster_join=true -e break_glass_join_required="${join_required_raw}"
+      fi
+    ' > >(tee -a "${step_log}") 2> >(tee -a "${step_log}" >&2) &
+  fi
+  BUNDLE_PLAYBOOK_PID=$!
+  wait "${BUNDLE_PLAYBOOK_PID}"
+  rc=$?
+  unset BUNDLE_PLAYBOOK_PID
+  set -e
+
+  wait "${phase30_monitor_pid}" 2>/dev/null || true
+  split_bundle_playbook_phase_logs
+
+  if [ "${rc}" -eq 0 ]; then
+    mark_done "${key}"
+    if [ -s "${phase30_seen_file}" ]; then
+      bootstrap_phase_status_write "30" "phase30" "SUCCESS" "$(phase_label_for_id "30")"
+    else
+      bootstrap_phase_status_write "20" "phase20" "SUCCESS" "$(phase_label_for_id "20")"
+      bootstrap_phase_status_write "30" "phase30" "SUCCESS" "$(phase_label_for_id "30")"
+    fi
+    end_ts="$(date +%s)"
+    dur="$((end_ts - start_ts))"
+    echo "[BOOTSTRAP] ${label}: ok (${dur}s)"
+    bootstrap_diag_record \
+      "phase=${key}" \
+      "step=${key}" \
+      "component=bundle-bootstrap" \
+      "operation=step-complete" \
+      "severity=info" \
+      "exit_code=0" \
+      "duration_seconds=${dur}" \
+      "summary=${label}: ok" \
+      "log_path=${step_log}"
+    rm -f "${phase30_seen_file}" 2>/dev/null || true
+    return 0
+  fi
+
+  end_ts="$(date +%s)"
+  dur="$((end_ts - start_ts))"
+  local tail_excerpt=""
+  if [ -f "${step_log}" ]; then
+    echo "[BOOTSTRAP] ${label}: phase log tail (last 80 lines)"
+    tail_excerpt="$(tail -n 80 "${step_log}" 2>/dev/null || true)"
+    printf '%s\n' "${tail_excerpt}"
+  fi
+  if [ -s "${phase30_seen_file}" ]; then
+    bootstrap_phase_status_write "30" "phase30" "FAILED" "$(phase_label_for_id "30")"
+  else
+    bootstrap_phase_status_write "20" "phase20" "FAILED" "$(phase_label_for_id "20")"
+  fi
+  echo "[BOOTSTRAP] ${label}: failed rc=${rc} (${dur}s)" >&2
+  bootstrap_diag_record \
+    "phase=${key}" \
+    "step=${key}" \
+    "component=bundle-bootstrap" \
+    "operation=step-failed" \
+    "severity=error" \
+    "exit_code=${rc}" \
+    "duration_seconds=${dur}" \
+    "failure_kind=$(bootstrap_diag_classify_failure_kind "${tail_excerpt}")" \
+    "summary=${label}: failed rc=${rc}" \
+    "stderr_excerpt=${tail_excerpt}" \
+    "log_path=${step_log}"
+  rm -f "${phase30_seen_file}" 2>/dev/null || true
+  return "${rc}"
+}
+
+split_bundle_playbook_phase_logs() {
+  local source_log
+  source_log="$(phase_log_path "bundle-playbook")"
+  local phase20_log
+  phase20_log="$(phase_log_path "phase20")"
+  local phase30_log
+  phase30_log="$(phase_log_path "phase30")"
+
+  if [ ! -f "${source_log}" ]; then
+    return 0
+  fi
+
+  python3 - "${source_log}" "${phase20_log}" "${phase30_log}" <<'PY'
+import sys
+from pathlib import Path
+
+source_path = Path(sys.argv[1])
+phase20_path = Path(sys.argv[2])
+phase30_path = Path(sys.argv[3])
+lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+play_header_idx = None
+phase20_start_idx = None
+phase30_start_idx = None
+
+phase20_markers = [
+    "TASK [Ensure bootstrap secrets directory exists]",
+]
+phase30_markers = [
+    "TASK [Ensure base packages are installed on RedHat family]",
+    "TASK [Ensure base packages are installed on non-RedHat families]",
+]
+
+for idx, line in enumerate(lines):
+    if play_header_idx is None and "PLAY [Platform bootstrap (Phase 30)]" in line:
+        play_header_idx = idx
+    if phase20_start_idx is None and any(marker in line for marker in phase20_markers):
+        phase20_start_idx = idx
+    if phase30_start_idx is None and any(marker in line for marker in phase30_markers):
+        phase30_start_idx = idx
+
+if play_header_idx is None:
+    play_header_idx = 0
+
+if phase20_start_idx is None:
+    phase20_start_idx = play_header_idx
+
+phase20_lines = []
+phase30_lines = []
+
+if phase20_start_idx is not None:
+    phase20_lines.extend(lines[play_header_idx:phase20_start_idx])
+    if phase30_start_idx is not None and phase30_start_idx > phase20_start_idx:
+        phase20_lines.extend(lines[phase20_start_idx:phase30_start_idx])
+    else:
+        phase20_lines.extend(lines[phase20_start_idx:])
+
+if phase30_start_idx is not None:
+    phase30_lines.extend(lines[play_header_idx:play_header_idx + 2])
+    phase30_lines.extend(lines[phase30_start_idx:])
+
+if not phase20_lines:
+    phase20_lines = [
+        "[BOOTSTRAP] phase20 log extraction did not find a distinct secret-authority block in bundle-playbook.log",
+        f"[BOOTSTRAP] source log: {source_path}",
+    ]
+
+if not phase30_lines:
+    phase30_lines = [
+        "[BOOTSTRAP] phase30 log extraction did not find a distinct platform-bootstrap block in bundle-playbook.log",
+        f"[BOOTSTRAP] source log: {source_path}",
+    ]
+
+phase20_path.write_text("\n".join(phase20_lines) + "\n", encoding="utf-8")
+phase30_path.write_text("\n".join(phase30_lines) + "\n", encoding="utf-8")
+PY
+}
+
+if is_true "${BOOTSTRAP_RESET_STATE}"; then
+  echo "[BOOTSTRAP] reset state dir: $(bootstrap_state_dir)"
+  bootstrap_state_reset
+fi
+
+patch_phase40_script() {
+  local phase40="/opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh"
+  if [ ! -f "${phase40}" ]; then
+    return 0
+  fi
+  if grep -q "set +o pipefail" "${phase40}"; then
+    return 0
+  fi
+  echo "[BOOTSTRAP] Patching run-phase40.sh to avoid SIGPIPE during Longhorn checks"
+  python3 - <<'PY' "${phase40}"
+import sys, re
+
+path = sys.argv[1]
+text = open(path, "r", encoding="utf-8", errors="replace").read()
+
+def replace_block(text, fn_name, new_body):
+    pattern = rf"{fn_name}\\(\\) \\{{.*?^\\}}"
+    m = re.search(pattern, text, flags=re.S | re.M)
+    if not m:
+        raise SystemExit(f"{fn_name} not found")
+    return re.sub(pattern, new_body, text, count=1, flags=re.S | re.M)
+
+new_find = r"""find_longhorn_unschedulable_disk() {
+  local node_name="$1"
+  local out=""
+  set +o pipefail
+  out="$("${kubectl_bin}" -n "${LONGHORN_NAMESPACE}" get nodes.longhorn.io "${node_name}" -o json 2>/dev/null | python3 - <<'PYLH'
+import json,sys
+try:
+  data=json.load(sys.stdin)
+except Exception:
+  print("")
+  raise SystemExit(0)
+
+disk_status = data.get("status", {}).get("diskStatus", {}) or {}
+for name, disk in disk_status.items():
+  for condition in disk.get("conditions", []):
+    if condition.get("type") == "Schedulable" and condition.get("status") == "False":
+      print(name)
+      raise SystemExit(0)
+print("")
+PYLH
+)" || true
+  set -o pipefail
+  printf '%s\\n' "${out}"
+}"""
+
+new_state = r"""get_longhorn_disk_state() {
+  local node_name="$1"
+  local out=""
+  set +o pipefail
+  out="$("${kubectl_bin}" -n "${LONGHORN_NAMESPACE}" get nodes.longhorn.io "${node_name}" -o json 2>/dev/null | python3 - <<'PYLH'
+import json,sys
+try:
+  data=json.load(sys.stdin)
+except Exception:
+  print("unknown")
+  raise SystemExit(0)
+
+spec_disks = data.get("spec", {}).get("disks", {}) or {}
+status_disks = data.get("status", {}).get("diskStatus", {}) or {}
+if not spec_disks:
+  print("unknown")
+  raise SystemExit(0)
+if not status_disks:
+  print("mismatch")
+  raise SystemExit(0)
+if set(spec_disks.keys()) != set(status_disks.keys()):
+  print("mismatch")
+  raise SystemExit(0)
+
+for name, disk in status_disks.items():
+  for condition in disk.get("conditions", []):
+    if condition.get("type") == "Schedulable" and condition.get("status") == "False":
+      print(f"unschedulable:{name}")
+      raise SystemExit(0)
+
+print("ready")
+PYLH
+)" || true
+  set -o pipefail
+  printf '%s\\n' "${out}"
+}"""
+
+text = replace_block(text, "find_longhorn_unschedulable_disk", new_find)
+text = replace_block(text, "get_longhorn_disk_state", new_state)
+open(path, "w", encoding="utf-8").write(text)
+PY
+}
+
+echo "[BOOTSTRAP] bundle-bootstrap starting"
+bootstrap_phase_status_reset
+bootstrap_diag_record \
+  "phase=bundle-bootstrap" \
+  "step=bundle-bootstrap" \
+  "component=bundle-bootstrap" \
+  "operation=run-start" \
+  "severity=info" \
+  "summary=bundle-bootstrap starting" \
+  "log_path=${log_file}"
+
+detect_dnf_releasever_major() {
+  # Mirrorlist repos on Rocky/RHEL-family typically expect the major version (e.g. 10),
+  # but /etc/os-release VERSION_ID can include a minor (e.g. 10.1). If dnf uses 10.1
+  # as $releasever, some mirrorlists return empty and installs fail with:
+  #   "No URLs in mirrorlist"
+  major=""
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release || true
+    if [ -n "${VERSION_ID:-}" ]; then
+      major="${VERSION_ID%%.*}"
+    fi
+  fi
+  if printf '%s' "${major}" | grep -Eq '^[0-9]+$'; then
+    printf '%s' "${major}"
+    return 0
+  fi
+  return 1
+}
+
+ensure_dnf_releasever_major() {
+  major="$(detect_dnf_releasever_major || true)"
+  if [ -z "${major}" ]; then
+    return 0
+  fi
+  mkdir -p /etc/dnf/vars
+  current="$(cat /etc/dnf/vars/releasever 2>/dev/null || true)"
+  if [ "${current}" = "${major}" ]; then
+    return 0
+  fi
+  echo "[BOOTSTRAP] Writing /etc/dnf/vars/releasever=${major} (was: ${current:-<unset>})"
+  printf '%s\n' "${major}" >/etc/dnf/vars/releasever
+}
+
+ensure_dnf_releasever_major
+DNF_RELEASEVER_MAJOR="$(detect_dnf_releasever_major || true)"
+export DNF_RELEASEVER_MAJOR
+
+run_step "bundle-ansible-core" "install ansible-core (if needed)" bash -lc '
+  if command -v ansible-playbook >/dev/null 2>&1; then
+    exit 0
+  fi
+  echo "[BOOTSTRAP] ansible-playbook missing; installing ansible-core"
+  # Use a one-shot releasever override too, so the install works even if dnf is
+  # not honoring /etc/dnf/vars/releasever yet.
+  if [ -n "${DNF_RELEASEVER_MAJOR:-}" ]; then
+    dnf -y --releasever="${DNF_RELEASEVER_MAJOR}" install ansible-core
+  else
+    dnf -y install ansible-core
+  fi
+'
+
+inventory_path="/opt/ansible-runner/ansible/node-inventory.yml"
+build_inventory_cmd=(/opt/ansible-runner/ansible/ansible-scripts/build-inventory /opt/ansible-runner/ansible)
+# If the inventory step is marked done but the file is missing/empty/obviously invalid,
+# re-run it. This prevents break-glass from failing later with "No inventory was parsed".
+if should_skip "bundle-inventory"; then
+  if [ ! -s "${inventory_path}" ] || ! head -n 5 "${inventory_path}" | grep -q '^all:'; then
+    echo "[BOOTSTRAP] build inventory: done marker present but inventory file missing/invalid; re-running"
+    rm -f "$(bootstrap_state_path "bundle-inventory")" 2>/dev/null || true
+  fi
+fi
+if [ "${bootstrap_mode_is_breakglass}" -eq 0 ]; then
+  export TAILSCALE_REQUIRE_REMOTE_SERVER="${TAILSCALE_REQUIRE_REMOTE_SERVER:-1}"
+  export TAILSCALE_DISCOVERY_TIMEOUT_SECONDS="${TAILSCALE_DISCOVERY_TIMEOUT_SECONDS:-180}"
+  export TAILSCALE_DISCOVERY_RETRY_INTERVAL_SECONDS="${TAILSCALE_DISCOVERY_RETRY_INTERVAL_SECONDS:-5}"
+  echo "[BOOTSTRAP] join inventory wait: require_remote_server=${TAILSCALE_REQUIRE_REMOTE_SERVER}, timeout=${TAILSCALE_DISCOVERY_TIMEOUT_SECONDS}s, interval=${TAILSCALE_DISCOVERY_RETRY_INTERVAL_SECONDS}s"
+fi
+run_step "bundle-inventory" "build inventory" \
+  "${build_inventory_cmd[@]}"
+
+run_step "bundle-phase10-tooling" "install Phase 10 tooling (task + kubectl) via Homebrew if needed" bash -lc '
+  homebrew_shellenv="/etc/profile.d/homebrew.sh"
+  if [ -f "${homebrew_shellenv}" ]; then
+    # shellcheck disable=SC1090
+    . "${homebrew_shellenv}"
+  fi
+  hash -r 2>/dev/null || true
+
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "[BOOTSTRAP] Homebrew is required before Phase 10 but brew is not on PATH." >&2
+    exit 1
+  fi
+
+  brew_user="${BOOTSTRAP_HOMEBREW_USER:-linuxbrew}"
+  if ! id -u "${brew_user}" >/dev/null 2>&1; then
+    echo "[BOOTSTRAP] Homebrew owner user is missing: ${brew_user}" >&2
+    exit 1
+  fi
+
+  install_formula() {
+    local binary_name="$1"
+    local formula_name="$2"
+    if command -v "${binary_name}" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[BOOTSTRAP] ${binary_name} missing; installing ${formula_name} via Homebrew"
+    if ! su - "${brew_user}" -c ". \"${homebrew_shellenv}\" >/dev/null 2>&1 || true; HOMEBREW_NO_AUTO_UPDATE=1 brew install ${formula_name}"; then
+      echo "[BOOTSTRAP] Failed to install ${formula_name} via Homebrew" >&2
+      exit 1
+    fi
+    if [ -f "${homebrew_shellenv}" ]; then
+      # shellcheck disable=SC1090
+      . "${homebrew_shellenv}"
+    fi
+    hash -r 2>/dev/null || true
+    if ! command -v "${binary_name}" >/dev/null 2>&1; then
+      echo "[BOOTSTRAP] ${binary_name} is still unavailable after Homebrew install" >&2
+      exit 1
+    fi
+  }
+
+  install_formula task go-task/tap/go-task
+  install_formula kubectl kubernetes-cli
+'
+
+run_bootstrap_phase "10" "phase10" "run Phase 10 (fast-fail validation gate)" \
+  /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-10/run-phase10.sh
+
+run_bootstrap_playbook_phases || exit $?
+
+patch_phase40_script
+
+if is_true "${BOOTSTRAP_RUN_PHASE40}"; then
+  bootstrap_phase_status_write "40" "phase40" "RUNNING" "$(phase_label_for_id "40")"
+  echo "[BOOTSTRAP] Running Phase 40 (OpenBao)"
+  echo "[BOOTSTRAP] Phase 40 log -> $(phase_log_path "phase40")"
+  phase40_secret_dir="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
+  phase40_init_file="${phase40_secret_dir}/openbao-init.json"
+  set +e
+  if should_skip "phase40"; then
+    if [ -s "${phase40_init_file}" ]; then
+      echo "[BOOTSTRAP] Phase 40: skip (done marker present)"
+      phase40_rc=0
+    else
+      echo "[BOOTSTRAP] Phase 40: done marker present but ${phase40_init_file} is missing; re-running"
+      rm -f "$(bootstrap_state_path "phase40")" 2>/dev/null || true
+      PHASE40_LOG_FILE="${PHASE40_LOG_FILE:-$(phase_log_path "phase40")}" \
+        BOOTSTRAP_PHASE40_MODE="${BOOTSTRAP_PHASE40_MODE:-all}" \
+        BOOTSTRAP_INTRODUCE_OPENBAO="${BOOTSTRAP_INTRODUCE_OPENBAO:-1}" \
+        BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET="${BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET:-1}" \
+        BOOTSTRAP_DISABLE_PRE_OPENBAO="${BOOTSTRAP_DISABLE_PRE_OPENBAO:-1}" \
+        BOOTSTRAP_OPENBAO_AUTO_UNSEAL="${BOOTSTRAP_OPENBAO_AUTO_UNSEAL:-1}" \
+        /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh
+      phase40_rc=$?
+      if [ "${phase40_rc}" -eq 0 ]; then
+        mark_done "phase40"
+      fi
+    fi
+  else
+    PHASE40_LOG_FILE="${PHASE40_LOG_FILE:-$(phase_log_path "phase40")}" \
+      BOOTSTRAP_PHASE40_MODE="${BOOTSTRAP_PHASE40_MODE:-all}" \
+      BOOTSTRAP_INTRODUCE_OPENBAO="${BOOTSTRAP_INTRODUCE_OPENBAO:-1}" \
+      BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET="${BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET:-1}" \
+      BOOTSTRAP_DISABLE_PRE_OPENBAO="${BOOTSTRAP_DISABLE_PRE_OPENBAO:-1}" \
+      BOOTSTRAP_OPENBAO_AUTO_UNSEAL="${BOOTSTRAP_OPENBAO_AUTO_UNSEAL:-1}" \
+      /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh
+    phase40_rc=$?
+    if [ "${phase40_rc}" -eq 0 ]; then
+      mark_done "phase40"
+    fi
+  fi
+  set -e
+
+  if [ "${phase40_rc}" -eq 3 ]; then
+    bootstrap_phase_status_write "40" "phase40" "FAILED" "$(phase_label_for_id "40")"
+    echo "[BOOTSTRAP] Phase 40 stopped: OpenBao sealed; unseal and rerun Phase 40."
+    exit 3
+  fi
+  if [ "${phase40_rc}" -ne 0 ]; then
+    bootstrap_phase_status_write "40" "phase40" "FAILED" "$(phase_label_for_id "40")"
+    phase40_log_path="${PHASE40_LOG_FILE:-$(phase_log_path "phase40")}"
+    if [ -f "${phase40_log_path}" ]; then
+      echo "[BOOTSTRAP] Phase 40 log tail (last 120 lines):"
+      tail -n 120 "${phase40_log_path}" || true
+    else
+      echo "[BOOTSTRAP] Phase 40 log file not found at ${phase40_log_path}"
+    fi
+    echo "[BOOTSTRAP] Phase 40 failed with exit code ${phase40_rc}"
+    exit "${phase40_rc}"
+  fi
+  if is_true "${BOOTSTRAP_BREAKGLASS_STRICT}" && [ ! -s "${phase40_init_file}" ]; then
+    bootstrap_phase_status_write "40" "phase40" "FAILED" "$(phase_label_for_id "40")"
+    echo "[BOOTSTRAP] Phase 40 completed but did not produce ${phase40_init_file}; refusing to continue in strict mode."
+    exit 1
+  fi
+  bootstrap_phase_status_write "40" "phase40" "SUCCESS" "$(phase_label_for_id "40")"
+fi
+
+if is_true "${BOOTSTRAP_RUN_PHASE50}"; then
+  run_bootstrap_phase "50" "phase50" "run Phase 50 (install minimal Argo CD + Gitea control pair)" \
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh
+fi
+
+if is_true "${BOOTSTRAP_RUN_PHASE60}"; then
+  run_bootstrap_phase "60" "phase60" "run Phase 60 (repo seed + GitOps handoff)" \
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh
+fi
+
+if is_true "${BOOTSTRAP_RUN_PHASE70}"; then
+  run_bootstrap_phase "70" "phase70" "run Phase 70 (GitOps realization gate)" \
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh
+fi
+
+if is_true "${BOOTSTRAP_RUN_PHASE90}"; then
+  run_bootstrap_phase "90" "phase90" "run Phase 90 (late live-state reconciliation)" \
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh
+fi
+
+if is_true "${BOOTSTRAP_RUN_PHASE99}"; then
+  run_bootstrap_phase "99" "phase99" "run Phase 99 (destroy bootstrap authority + export recovery kit)" \
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-90/run-phase99.sh
+fi
+
+bootstrap_phase_status_write "100" "phase100" "SUCCESS" "$(phase_label_for_id "100")"
+echo "[BOOTSTRAP] bundle-bootstrap complete (validation, bootstrap, GitOps install, handoff, realization, reconciliation, and finalization complete)"
+bootstrap_diag_record \
+  "phase=bundle-bootstrap" \
+  "step=bundle-bootstrap" \
+  "component=bundle-bootstrap" \
+  "operation=run-complete" \
+  "severity=info" \
+  "exit_code=0" \
+  "summary=bundle-bootstrap complete (validation, bootstrap, GitOps install, handoff, realization, reconciliation, and finalization complete)" \
+  "log_path=${log_file}"

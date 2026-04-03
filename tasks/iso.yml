@@ -1,0 +1,878 @@
+version: "3"
+
+tasks:
+  build:external:
+    desc: External wrapper for ISO build (used by workflows and scripts)
+    deps: [':hooks:ensure']
+    cmds:
+      - task: build
+
+  validate:external:
+    desc: External wrapper for ISO validation (used by workflows and scripts)
+    deps: [':hooks:ensure']
+    cmds:
+      - task: validate
+
+  inject-ks:
+    internal: true
+    desc: Inject inst.ks URL into the Rocky ISO boot args (Docker/Podman tooling)
+    deps: [':hooks:ensure', ':ks:render']
+    cmds:
+      - |
+        set -e
+        ks_env="${KS_ENV:-.env}"
+        if [ -f "${ks_env}" ]; then
+          set -a
+          . "${ks_env}"
+          set +a
+        fi
+        ensure_container_runtime() {
+          require_runtime="${1:-0}" # 1 => best-effort install/start
+          if [ "${require_runtime}" != "1" ]; then
+            require_runtime="0"
+          fi
+
+          start_docker_desktop() {
+            # macOS Docker Desktop fallback when `docker` exists but daemon is down.
+            if [ "${require_runtime}" != "1" ]; then
+              return 1
+            fi
+            if ! command -v open >/dev/null 2>&1; then
+              return 1
+            fi
+            open -a Docker >/dev/null 2>&1 || return 1
+            i=1
+            while [ "${i}" -le 30 ]; do
+              if docker info >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 2
+              i=$((i + 1))
+            done
+            return 1
+          }
+
+          ensure_colima_docker() {
+            if ! command -v brew >/dev/null 2>&1; then
+              return 1
+            fi
+            if ! command -v colima >/dev/null 2>&1; then
+              brew install colima >/dev/null 2>&1 || return 1
+            fi
+            if ! command -v docker >/dev/null 2>&1; then
+              brew install docker >/dev/null 2>&1 || return 1
+            fi
+            return 0
+          }
+
+          ensure_podman() {
+            if ! command -v brew >/dev/null 2>&1; then
+              return 1
+            fi
+            if ! command -v podman >/dev/null 2>&1; then
+              brew install podman >/dev/null 2>&1 || return 1
+            fi
+            return 0
+          }
+
+          if command -v docker >/dev/null 2>&1; then
+            if docker info >/dev/null 2>&1; then
+              echo "docker"
+              return 0
+            fi
+            start_docker_desktop || true
+            if docker info >/dev/null 2>&1; then
+              echo "docker"
+              return 0
+            fi
+            if [ "${require_runtime}" = "1" ]; then
+              ensure_colima_docker || true
+            fi
+            if command -v colima >/dev/null 2>&1; then
+              colima start >/dev/null 2>&1 || true
+              if docker info >/dev/null 2>&1; then
+                echo "docker"
+                return 0
+              fi
+            fi
+          elif [ "${require_runtime}" = "1" ]; then
+            ensure_colima_docker || true
+            if command -v colima >/dev/null 2>&1; then
+              colima start >/dev/null 2>&1 || true
+              if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                echo "docker"
+                return 0
+              fi
+            fi
+          fi
+
+          if command -v podman >/dev/null 2>&1; then
+            if podman info >/dev/null 2>&1; then
+              echo "podman"
+              return 0
+            fi
+            if command -v podman >/dev/null 2>&1 && podman machine list >/dev/null 2>&1; then
+              podman machine start >/dev/null 2>&1 || true
+              if podman info >/dev/null 2>&1; then
+                echo "podman"
+                return 0
+              fi
+            fi
+          elif [ "${require_runtime}" = "1" ]; then
+            ensure_podman || true
+            if command -v podman >/dev/null 2>&1 && podman machine list >/dev/null 2>&1; then
+              podman machine start >/dev/null 2>&1 || true
+              if podman info >/dev/null 2>&1; then
+                echo "podman"
+                return 0
+              fi
+            fi
+          fi
+          return 1
+        }
+        ensure_package_cmd() {
+          cmd_name="$1"
+          pkg_name="$2"
+          is_windows_shell() {
+            case "$(uname -s 2>/dev/null || true)" in
+              MINGW*|MSYS*|CYGWIN*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          windows_localappdata_posix() {
+            lap="${LOCALAPPDATA:-}"
+            if [ -z "${lap}" ]; then
+              return 1
+            fi
+            # Convert C:\Users\name\AppData\Local -> /c/Users/name/AppData/Local
+            lap="$(printf '%s' "${lap}" | sed -E 's#\\#/#g')"
+            lap="$(printf '%s' "${lap}" | sed -E 's#^([A-Za-z]):#/\L\1#')"
+            printf '%s' "${lap}"
+            return 0
+          }
+          refresh_windows_paths() {
+            local_appdata_posix="$(windows_localappdata_posix || true)"
+            for p in \
+              "/c/ProgramData/chocolatey/bin" \
+              "/c/msys64/usr/bin" \
+              "/c/msys64/ucrt64/bin" \
+              "/c/tools/msys64/usr/bin" \
+              "/c/tools/msys64/ucrt64/bin" \
+              "${local_appdata_posix}/Programs/MSYS2/usr/bin" \
+              "${local_appdata_posix}/Programs/MSYS2/ucrt64/bin" \
+              "${local_appdata_posix}/Microsoft/WinGet/Links"
+            do
+              if [ -d "${p}" ]; then
+                PATH="${p}:${PATH}"
+              fi
+            done
+            export PATH
+            hash -r 2>/dev/null || true
+          }
+          if command -v "${cmd_name}" >/dev/null 2>&1; then
+            return 0
+          fi
+
+          echo "${cmd_name} not found; attempting auto-install for package '${pkg_name}'..."
+
+          if is_windows_shell; then
+            refresh_windows_paths
+            local_appdata_posix="$(windows_localappdata_posix || true)"
+
+            if command -v choco >/dev/null 2>&1; then
+              choco install -y "${pkg_name}" >/dev/null 2>&1 || true
+            fi
+            if command -v scoop >/dev/null 2>&1; then
+              scoop install "${pkg_name}" >/dev/null 2>&1 || true
+            fi
+
+            # If native package managers do not provide the tool, bootstrap MSYS2
+            # and install the package there so Git-Bash tasks can execute it.
+            if [ ! -x "/c/msys64/usr/bin/bash.exe" ]; then
+              if command -v winget >/dev/null 2>&1; then
+                winget install --id MSYS2.MSYS2 --accept-source-agreements --accept-package-agreements --silent >/dev/null 2>&1 || true
+              elif command -v powershell.exe >/dev/null 2>&1; then
+                powershell.exe -NoProfile -NonInteractive -Command "winget install --id MSYS2.MSYS2 --accept-source-agreements --accept-package-agreements --silent" >/dev/null 2>&1 || true
+              fi
+            fi
+            if [ -x "/c/msys64/usr/bin/bash.exe" ]; then
+              /c/msys64/usr/bin/bash.exe -lc "pacman -Sy --noconfirm ${pkg_name}" >/dev/null 2>&1 || true
+            elif [ -x "/c/tools/msys64/usr/bin/bash.exe" ]; then
+              /c/tools/msys64/usr/bin/bash.exe -lc "pacman -Sy --noconfirm ${pkg_name}" >/dev/null 2>&1 || true
+            elif [ -n "${local_appdata_posix}" ] && [ -x "${local_appdata_posix}/Programs/MSYS2/usr/bin/bash.exe" ]; then
+              "${local_appdata_posix}/Programs/MSYS2/usr/bin/bash.exe" -lc "pacman -Sy --noconfirm ${pkg_name}" >/dev/null 2>&1 || true
+            fi
+
+            refresh_windows_paths
+          elif command -v brew >/dev/null 2>&1; then
+            brew install "${pkg_name}" >/dev/null 2>&1 || true
+          elif command -v apt-get >/dev/null 2>&1; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo apt-get update -y >/dev/null 2>&1 || true
+              sudo apt-get install -y "${pkg_name}" >/dev/null 2>&1 || true
+            else
+              apt-get update -y >/dev/null 2>&1 || true
+              apt-get install -y "${pkg_name}" >/dev/null 2>&1 || true
+            fi
+          elif command -v dnf >/dev/null 2>&1; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo dnf install -y "${pkg_name}" >/dev/null 2>&1 || true
+            else
+              dnf install -y "${pkg_name}" >/dev/null 2>&1 || true
+            fi
+          elif command -v yum >/dev/null 2>&1; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo yum install -y "${pkg_name}" >/dev/null 2>&1 || true
+            else
+              yum install -y "${pkg_name}" >/dev/null 2>&1 || true
+            fi
+          elif command -v pacman >/dev/null 2>&1; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo pacman -Sy --noconfirm "${pkg_name}" >/dev/null 2>&1 || true
+            else
+              pacman -Sy --noconfirm "${pkg_name}" >/dev/null 2>&1 || true
+            fi
+          elif command -v zypper >/dev/null 2>&1; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo zypper --non-interactive install "${pkg_name}" >/dev/null 2>&1 || true
+            else
+              zypper --non-interactive install "${pkg_name}" >/dev/null 2>&1 || true
+            fi
+          elif command -v apk >/dev/null 2>&1; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo apk add --no-cache "${pkg_name}" >/dev/null 2>&1 || true
+            else
+              apk add --no-cache "${pkg_name}" >/dev/null 2>&1 || true
+            fi
+          fi
+
+          if command -v "${cmd_name}" >/dev/null 2>&1; then
+            echo "Auto-install succeeded: ${cmd_name}"
+            return 0
+          fi
+
+          echo "${cmd_name} is required but auto-install failed."
+          echo "Install '${pkg_name}' manually, then re-run."
+          return 1
+        }
+        is_windows_shell() {
+          case "$(uname -s 2>/dev/null || true)" in
+            MINGW*|MSYS*|CYGWIN*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        run_container_runtime() {
+          if is_windows_shell; then
+            MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "${container_runtime}" "$@"
+          else
+            "${container_runtime}" "$@"
+          fi
+        }
+        container_runtime="$(ensure_container_runtime "1" || true)"
+        if [ -z "${container_runtime}" ]; then
+          echo "Docker/Podman runtime is required for ISO build tooling."
+          echo "Start Docker Desktop (or Podman machine) and re-run."
+          exit 2
+        fi
+        iso_tool_image="${ISO_TOOL_IMAGE:-cluster-iso-tools:stream9}"
+        ensure_iso_tool_image() {
+          if run_container_runtime image inspect "${iso_tool_image}" >/dev/null 2>&1; then
+            return 0
+          fi
+          echo "[iso] Building tool image: ${iso_tool_image}"
+          printf '%s\n' \
+            'FROM quay.io/centos/centos:stream9' \
+            'RUN dnf -y install xorriso isomd5sum rsync && dnf clean all && rm -rf /var/cache/dnf' \
+            | run_container_runtime build -t "${iso_tool_image}" -
+        }
+        ensure_iso_tool_image
+        run_iso_tool() {
+          iso_verbose="$(printf '%s' "${ISO_VERBOSE:-0}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${iso_verbose}" = "1" ] || [ "${iso_verbose}" = "true" ]; then
+            run_container_runtime run --rm -v "$(pwd):/work" -w /work \
+              "${iso_tool_image}" \
+              "$@"
+            return $?
+          fi
+          mkdir -p dist
+          run_log="dist/.iso-tool.log"
+          rm -f "${run_log}"
+          if ! run_container_runtime run --rm -v "$(pwd):/work" -w /work \
+            "${iso_tool_image}" \
+            "$@" >"${run_log}" 2>&1; then
+            echo "ISO tooling failed. Set ISO_VERBOSE=1 for full logs."
+            tail -n 60 "${run_log}" || true
+            rm -f "${run_log}"
+            return 1
+          fi
+          rm -f "${run_log}"
+        }
+        iso_out="{{.ISO_OUT}}"
+        restamp_mode="${ISO_RESTAMP_CHECKSUM:-auto}" # auto|1|0
+        if [ "${restamp_mode}" = "auto" ] && [ "${ISO_BUILD_VALIDATE:-}" = "1" ]; then
+          restamp_mode="1"
+        fi
+        restamp_checksum="1"
+        if [ "${restamp_mode}" = "0" ]; then
+          restamp_checksum="0"
+        elif [ "${restamp_mode}" = "1" ]; then
+          restamp_checksum="1"
+        else
+          restamp_checksum="1"
+        fi
+        iso_path="{{.ISO_PATH}}"
+        if [ -z "${iso_path}" ]; then
+          echo "Set ISO_PATH or LOCAL_ISO_PATH to the golden ISO file."
+          exit 1
+        fi
+        if [ ! -f "${iso_path}" ]; then
+          echo "Missing ISO: ${iso_path}"
+          exit 1
+        fi
+        if [ -z "${iso_out}" ]; then
+          iso_base="$(basename "${iso_path}")"
+          iso_out="dist/${iso_base%.iso}-ks.iso"
+        fi
+        ks_name="{{.KS_TEMPLATE_FILE_NAME}}"
+        if [ -z "${ks_name}" ]; then
+          echo "Set KS_TEMPLATE_FILE_NAME to select the kickstart template."
+          exit 1
+        fi
+        ks_url="{{.KS_FILE_URL}}"
+        ks_role="${KS_ROLE:-}"
+        embed_ks="${KS_EMBED_KS:-1}"
+        if [ "${embed_ks}" != "1" ] && [ -z "${ks_url}" ]; then
+          ip=""
+          if [ -z "${ip}" ] && command -v ipconfig >/dev/null 2>&1; then
+            ip="$(ipconfig getifaddr en0 || true)"
+            if [ -z "${ip}" ]; then
+              ip="$(ipconfig getifaddr en1 || true)"
+            fi
+          fi
+          if [ -z "${ip}" ] && command -v hostname >/dev/null 2>&1; then
+            ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+          fi
+          if [ -z "${ip}" ] && command -v ip >/dev/null 2>&1; then
+            ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+          fi
+          if [ -z "${ip}" ]; then
+            echo "Unable to detect local IP (tried en0/en1)"
+            exit 1
+          fi
+          ks_url="http://${ip}:8000/${ks_name}"
+        fi
+        work_dir="dist/iso-work"
+        rm -rf "${work_dir}"
+        mkdir -p "${work_dir}"
+        echo "[iso] Extracting base ISO..."
+        run_iso_tool xorriso -osirrox on -indev "${iso_path}" -extract / "${work_dir}"
+        # Ensure extracted files are writable before host-side in-place edits.
+        # Container extraction can leave root-owned files on Linux runners.
+        run_iso_tool chmod -R a+rwX "${work_dir}" >/dev/null 2>&1 || true
+        if [ "${embed_ks}" = "1" ]; then
+          ks_rendered="{{.KS_OUT_DIR}}/${ks_name}"
+          if [ ! -f "${ks_rendered}" ]; then
+            ks_rendered="{{.KS_SRC_DIR}}/${ks_name}"
+          fi
+          if [ ! -f "${ks_rendered}" ]; then
+            echo "Missing rendered kickstart file: ${ks_rendered}"
+            exit 1
+          fi
+          mkdir -p "${work_dir}/ks"
+          cp -f "${ks_rendered}" "${work_dir}/ks/${ks_name}"
+          ks_url="cdrom:/ks/${ks_name}"
+        fi
+        ks_args="inst.ks=${ks_url}"
+
+        # Bare metal often has firmware RAID / multipath / dmraid hints that can
+        # make Anaconda "detecting storage devices" painfully slow or hang.
+        # Default to disabling those scanners for break-glass installs (single-node, local disks),
+        # but allow an override for environments that actually need them.
+        is_true() {
+          case "${1:-}" in
+            1|true|TRUE|yes|YES|on|ON) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        sanitize_installer_args() {
+          # Rocky 10+ removed these old installer args; silently strip if provided
+          # by legacy env defaults so boot cmdline stays clean.
+          printf '%s\n' "${1:-}" | sed -E \
+            -e 's/(^|[[:space:]])inst\.nompath($|[[:space:]])/ /g' \
+            -e 's/(^|[[:space:]])inst\.nodmraid($|[[:space:]])/ /g' \
+            -e 's/(^|[[:space:]])inst\.nomdadm($|[[:space:]])/ /g' \
+            -e 's/[[:space:]]+/ /g' \
+            -e 's/^ //; s/ $//'
+        }
+        storage_args="${ISO_STORAGE_ARGS:-}"
+        if [ -z "${storage_args}" ] && is_true "${KS_BREAKGLASS:-0}"; then
+          # Include vmd pre-load: some OEM BIOS defaults (incl. HP) hide NVMe behind Intel VMD.
+          # Keep installer storage probes minimal to avoid long hangs on stale metadata.
+          # Rocky 10 removed some old inst.* flags; use only current rd.* controls.
+          storage_args="rd.multipath=0 rd.md=0 rd.driver.pre=vmd"
+        fi
+        storage_args="$(sanitize_installer_args "${storage_args}")"
+        if [ -n "${storage_args}" ]; then
+          ks_args="${ks_args} ${storage_args}"
+        fi
+        watchdog_args="${ISO_WATCHDOG_ARGS:-}"
+        if [ -z "${watchdog_args}" ] && is_true "${KS_BREAKGLASS:-0}"; then
+          # Avoid indefinite "pending" installer hangs on problematic bare-metal
+          # storage probes. Keep timeouts conservative to reduce false positives.
+          watchdog_args="ks_watchdog_enabled=1 ks_watchdog_stall_minutes=4 ks_watchdog_late_stall_minutes=12 ks_watchdog_max_minutes=30 ks_watchdog_grace_minutes=2 ks_watchdog_action=terminate"
+        fi
+        if [ -n "${watchdog_args}" ]; then
+          ks_args="${ks_args} ${watchdog_args}"
+        fi
+        install_validate="${ISO_INSTALL_VALIDATE:-}"
+        if [ -z "${install_validate}" ]; then
+          if [ "${ISO_INSTALL_SKIP_CHECK:-}" = "1" ]; then
+            install_validate="0"
+          else
+            install_validate="1"
+          fi
+        fi
+        if [ "${install_validate}" != "1" ]; then
+          ks_args="${ks_args} inst.nosum rd.live.check=0"
+        fi
+        if [ -n "${ks_role}" ]; then
+          ks_args="${ks_args} ks_role=${ks_role}"
+        fi
+
+        set_inst_ks_arg() {
+          # Replace (or append) inst.ks=... while preserving all other args.
+          args_line="$1"
+          new_url="$2"
+          printf '%s\n' "${args_line}" | awk -v url="${new_url}" '
+            BEGIN { OFS=" " }
+            {
+              found=0
+              out=""
+              for (i=1; i<=NF; i++) {
+                tok=$i
+                if (tok ~ /^inst\.ks=/) {
+                  tok="inst.ks=" url
+                  found=1
+                }
+                if (out == "") {
+                  out=tok
+                } else {
+                  out=out OFS tok
+                }
+              }
+              if (!found) {
+                if (out == "") {
+                  out="inst.ks=" url
+                } else {
+                  out=out OFS "inst.ks=" url
+                }
+              }
+              print out
+            }
+          '
+        }
+
+        # Default to a role selector at boot:
+        # - server (default after timeout)
+        # - agent (manual selection)
+        # - breakglass/server (manual selection)
+        role_selector="${ISO_ROLE_SELECTOR:-1}"
+        role_selector="$(printf '%s' "${role_selector}" | tr '[:upper:]' '[:lower:]')"
+        selector_enabled="0"
+        if [ "${role_selector}" = "1" ] || [ "${role_selector}" = "true" ]; then
+          selector_enabled="1"
+        fi
+        selector_default_role="${ISO_SELECTOR_DEFAULT_ROLE:-}"
+        selector_default_role="$(printf '%s' "${selector_default_role}" | tr '[:upper:]' '[:lower:]')"
+        selector_server_ks_url="${ISO_SELECTOR_SERVER_KS_URL:-${KS_SERVER_KS_URL:-}}"
+        selector_agent_ks_url="${ISO_SELECTOR_AGENT_KS_URL:-${KS_AGENT_KS_URL:-}}"
+        selector_breakglass_ks_url="${ISO_SELECTOR_BREAKGLASS_KS_URL:-${KS_BREAKGLASS_KS_URL:-}}"
+        selector_url_mode="0"
+        if [ -n "${selector_server_ks_url}" ] || [ -n "${selector_agent_ks_url}" ] || [ -n "${selector_breakglass_ks_url}" ]; then
+          selector_url_mode="1"
+          if [ -z "${selector_server_ks_url}" ]; then selector_server_ks_url="${ks_url}"; fi
+          if [ -z "${selector_agent_ks_url}" ]; then selector_agent_ks_url="${ks_url}"; fi
+          if [ -z "${selector_breakglass_ks_url}" ]; then selector_breakglass_ks_url="${ks_url}"; fi
+        fi
+
+        server_ks_args="${ks_args}"
+        agent_ks_args="${ks_args}"
+        breakglass_ks_args="${ks_args}"
+        if [ "${selector_url_mode}" = "1" ]; then
+          server_ks_args="$(set_inst_ks_arg "${ks_args}" "${selector_server_ks_url}")"
+          agent_ks_args="$(set_inst_ks_arg "${ks_args}" "${selector_agent_ks_url}")"
+          breakglass_ks_args="$(set_inst_ks_arg "${ks_args}" "${selector_breakglass_ks_url}")"
+        fi
+        # Always append explicit role flags after any URL rewrites. This keeps
+        # GRUB role selection deterministic when selector URL mode is enabled.
+        server_ks_args="${server_ks_args} ks_role=server ks_breakglass=0"
+        agent_ks_args="${agent_ks_args} ks_role=agent ks_breakglass=0"
+        breakglass_ks_args="${breakglass_ks_args} ks_role=server ks_breakglass=1"
+        selector_default_index="0"
+        case "${selector_default_role}" in
+          server) selector_default_index="0" ;;
+          agent) selector_default_index="1" ;;
+          breakglass) selector_default_index="2" ;;
+          *)
+            if is_true "${KS_BREAKGLASS:-0}"; then
+              selector_default_index="2"
+            else
+              selector_default_index="0"
+            fi
+            ;;
+        esac
+
+        default_ks_args="${ks_args}"
+        if [ "${selector_enabled}" = "1" ]; then
+          default_ks_args="${server_ks_args}"
+        fi
+
+        inject_grub_role_selector() {
+          cfg_path="$1"
+          if [ ! -f "${cfg_path}" ]; then
+            return 0
+          fi
+
+          if [ "${selector_enabled}" != "1" ]; then
+            awk -v ks_args="${default_ks_args}" '
+              {
+                line = $0
+                sub(/^[[:space:]]+/, "", line)
+                split(line, parts, /[[:space:]]+/)
+                if (parts[1] == "linux" || parts[1] == "linuxefi") {
+                  $0 = $0 " " ks_args
+                }
+              }
+              { print }
+            ' "${cfg_path}" >"${cfg_path}.tmp"
+            mv "${cfg_path}.tmp" "${cfg_path}"
+          else
+            echo "[iso] injecting role selector menu into ${cfg_path}"
+            linux_line="$(grep -m1 -E '^[[:space:]]*linux(efi)?[[:space:]]+' "${cfg_path}" || true)"
+            initrd_line="$(grep -m1 -E '^[[:space:]]*initrd(efi)?[[:space:]]+' "${cfg_path}" || true)"
+            if [ -n "${linux_line}" ] && [ -n "${initrd_line}" ]; then
+              server_linux="${linux_line} ${server_ks_args}"
+              agent_linux="${linux_line} ${agent_ks_args}"
+              breakglass_linux="${linux_line} ${breakglass_ks_args}"
+              selector_tmp_dir="${work_dir}/.tmp"
+              mkdir -p "${selector_tmp_dir}"
+              selector_file="$(mktemp -p "${selector_tmp_dir}" selector.XXXXXX 2>/dev/null || true)"
+              if [ -z "${selector_file}" ]; then
+                selector_file="${selector_tmp_dir}/selector.$$.$RANDOM"
+                : > "${selector_file}"
+              fi
+              {
+                echo 'menuentry "Install Rocky Linux (Server default)" {'
+                printf '%s\n' "${server_linux}"
+                printf '%s\n' "${initrd_line}"
+                echo '}'
+                echo 'menuentry "Install Rocky Linux (Agent join)" {'
+                printf '%s\n' "${agent_linux}"
+                printf '%s\n' "${initrd_line}"
+                echo '}'
+                echo 'menuentry "Install Rocky Linux (Breakglass bootstrap)" {'
+                printf '%s\n' "${breakglass_linux}"
+                printf '%s\n' "${initrd_line}"
+                echo '}'
+              } > "${selector_file}"
+              # Insert selector entries before the first existing menuentry so
+              # selector_default_index points at the expected role entry.
+              first_menu_line="$(grep -n -m1 -E '^[[:space:]]*menuentry[[:space:]]+' "${cfg_path}" | cut -d: -f1 || true)"
+              if [ -n "${first_menu_line}" ]; then
+                pre_end=$((first_menu_line - 1))
+                {
+                  if [ "${pre_end}" -gt 0 ]; then
+                    sed -n "1,${pre_end}p" "${cfg_path}"
+                  fi
+                  cat "${selector_file}"
+                  sed -n "${first_menu_line},\$p" "${cfg_path}"
+                } > "${cfg_path}.tmp"
+              else
+                {
+                  cat "${selector_file}"
+                  cat "${cfg_path}"
+                } > "${cfg_path}.tmp"
+              fi
+              rm -f "${selector_file}"
+              mv "${cfg_path}.tmp" "${cfg_path}"
+            else
+              echo "ERROR: could not find linux/initrd lines in ${cfg_path}; cannot build role selector."
+              return 1
+            fi
+          fi
+
+          if grep -qE '^[[:space:]]*set[[:space:]]+timeout=' "${cfg_path}"; then
+            sed -E -i.bak "s/^[[:space:]]*set[[:space:]]+timeout=.*/set timeout=10/" "${cfg_path}"
+            rm -f "${cfg_path}.bak"
+          else
+            printf '\nset timeout=10\n' >>"${cfg_path}"
+          fi
+
+          if grep -qE '^[[:space:]]*set[[:space:]]+default=' "${cfg_path}"; then
+            sed -E -i.bak "s/^[[:space:]]*set[[:space:]]+default=.*/set default=\"${selector_default_index}\"/" "${cfg_path}"
+            rm -f "${cfg_path}.bak"
+          else
+            printf '\nset default=\"%s\"\n' "${selector_default_index}" >>"${cfg_path}"
+          fi
+
+          # Enforce KS args on all linux/linuxefi lines so grub injection is
+          # always present, even if selector block insertion misses due
+          # platform/newline quirks.
+          awk -v ks_args="${default_ks_args}" '
+            {
+              line = $0
+              sub(/^[[:space:]]+/, "", line)
+              split(line, parts, /[[:space:]]+/)
+              if (parts[1] == "linux" || parts[1] == "linuxefi") {
+                if ($0 !~ /(^|[[:space:]])inst\.ks=/) {
+                  $0 = $0 " " ks_args
+                }
+              }
+            }
+            { print }
+          ' "${cfg_path}" >"${cfg_path}.tmp"
+          mv "${cfg_path}.tmp" "${cfg_path}"
+
+          if [ "${selector_enabled}" = "1" ]; then
+            if ! grep -q 'Install Rocky Linux (Server default)' "${cfg_path}" \
+              || ! grep -q 'Install Rocky Linux (Agent join)' "${cfg_path}" \
+              || ! grep -q 'Install Rocky Linux (Breakglass bootstrap)' "${cfg_path}"; then
+              echo "ERROR: selector menu validation failed for ${cfg_path}"
+              return 1
+            fi
+          fi
+        }
+
+        if [ -f "${work_dir}/isolinux/isolinux.cfg" ]; then
+          sed -E -i.bak "s/^(\\s*append.*)$/\\1 ${default_ks_args}/" "${work_dir}/isolinux/isolinux.cfg"
+          rm -f "${work_dir}/isolinux/isolinux.cfg.bak"
+          if grep -qE '^[[:space:]]*timeout[[:space:]]+' "${work_dir}/isolinux/isolinux.cfg"; then
+            sed -E -i.bak "s/^[[:space:]]*timeout[[:space:]]+.*/timeout 10/" "${work_dir}/isolinux/isolinux.cfg"
+            rm -f "${work_dir}/isolinux/isolinux.cfg.bak"
+          else
+            printf '\n%timeout 10\n' "" >>"${work_dir}/isolinux/isolinux.cfg"
+          fi
+        fi
+        if [ -f "${work_dir}/EFI/BOOT/grub.cfg" ]; then
+          inject_grub_role_selector "${work_dir}/EFI/BOOT/grub.cfg"
+        fi
+        if [ -f "${work_dir}/boot/grub2/grub.cfg" ]; then
+          inject_grub_role_selector "${work_dir}/boot/grub2/grub.cfg"
+        fi
+        mkdir -p "$(dirname "${iso_out}")"
+        rm -f "${iso_out}"
+        echo "[iso] Rebuilding ISO image..."
+        run_iso_tool xorriso -indev "${iso_path}" -outdev "${iso_out}" -boot_image any replay -map "${work_dir}" /
+        if [ "${restamp_checksum}" = "1" ]; then
+          echo "[iso] Restamping ISO checksum..."
+          run_iso_tool implantisomd5 "${iso_out}"
+          echo "Wrote ${iso_out} with inst.ks=${ks_url} and refreshed ISO checksum"
+        else
+          echo "Wrote ${iso_out} with inst.ks=${ks_url} (skipped ISO checksum restamp)"
+        fi
+
+  build:
+    internal: true
+    desc: Render kickstart files and build the kickstart-enabled ISO
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -e
+        # Start from a clean slate to avoid stale ISO/KS artifacts.
+        # By default we wipe dist/ entirely. Set ISO_CLEAN_DIST=0 to preserve other dist/
+        # artifacts (e.g. bundle tarballs) and only clean ISO/KS outputs.
+        clean_dist="${ISO_CLEAN_DIST:-1}"
+        clean_dist="$(printf '%s' "${clean_dist}" | tr '[:upper:]' '[:lower:]')"
+        if [ "${clean_dist}" = "1" ] || [ "${clean_dist}" = "true" ]; then
+          rm -rf dist
+          mkdir -p dist
+        else
+          rm -rf dist/iso-work dist/ks-templates
+          mkdir -p dist
+        fi
+      - task: ':ks:render'
+      - task: inject-ks
+      - |
+        set -e
+        build_validate="${ISO_BUILD_VALIDATE:-}"
+        if [ -z "${build_validate}" ]; then
+          if [ -n "${ISO_VALIDATE:-}" ]; then
+            build_validate="${ISO_VALIDATE}"
+          else
+            build_validate="1"
+          fi
+        fi
+        if [ "${build_validate}" = "1" ]; then
+          iso_path="{{.ISO_PATH}}"
+          if [ -z "${iso_path}" ]; then
+            echo "Set ISO_PATH or LOCAL_ISO_PATH to validate the built ISO."
+            exit 1
+          fi
+          iso_out="{{.ISO_OUT}}"
+          if [ -z "${iso_out}" ]; then
+            iso_base="$(basename "${iso_path}")"
+            iso_out="dist/${iso_base%.iso}-ks.iso"
+          fi
+          ISO_VALIDATE_PATH="${iso_out}" task iso:validate:external
+        fi
+
+  validate:
+    internal: true
+    desc: Validate the ISO checksum post-build (Docker/Podman tooling)
+    deps: [':hooks:ensure']
+    cmds:
+      - |
+        set -e
+        validate_required="${ISO_VALIDATE_REQUIRED:-}"
+        ensure_container_runtime() {
+          require_runtime="${1:-0}" # 1 => best-effort install/start
+          if [ "${require_runtime}" != "1" ]; then
+            require_runtime="0"
+          fi
+
+          start_docker_desktop() {
+            # macOS Docker Desktop fallback when `docker` exists but daemon is down.
+            if [ "${require_runtime}" != "1" ]; then
+              return 1
+            fi
+            if ! command -v open >/dev/null 2>&1; then
+              return 1
+            fi
+            open -a Docker >/dev/null 2>&1 || return 1
+            i=1
+            while [ "${i}" -le 30 ]; do
+              if docker info >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 2
+              i=$((i + 1))
+            done
+            return 1
+          }
+
+          ensure_colima_docker() {
+            if ! command -v brew >/dev/null 2>&1; then
+              return 1
+            fi
+            if ! command -v colima >/dev/null 2>&1; then
+              brew install colima >/dev/null 2>&1 || return 1
+            fi
+            if ! command -v docker >/dev/null 2>&1; then
+              brew install docker >/dev/null 2>&1 || return 1
+            fi
+            return 0
+          }
+
+          ensure_podman() {
+            if ! command -v brew >/dev/null 2>&1; then
+              return 1
+            fi
+            if ! command -v podman >/dev/null 2>&1; then
+              brew install podman >/dev/null 2>&1 || return 1
+            fi
+            return 0
+          }
+
+          if command -v docker >/dev/null 2>&1; then
+            if docker info >/dev/null 2>&1; then
+              echo "docker"
+              return 0
+            fi
+            start_docker_desktop || true
+            if docker info >/dev/null 2>&1; then
+              echo "docker"
+              return 0
+            fi
+            if [ "${require_runtime}" = "1" ]; then
+              ensure_colima_docker || true
+            fi
+            if command -v colima >/dev/null 2>&1; then
+              colima start >/dev/null 2>&1 || true
+              if docker info >/dev/null 2>&1; then
+                echo "docker"
+                return 0
+              fi
+            fi
+          elif [ "${require_runtime}" = "1" ]; then
+            ensure_colima_docker || true
+            if command -v colima >/dev/null 2>&1; then
+              colima start >/dev/null 2>&1 || true
+              if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                echo "docker"
+                return 0
+              fi
+            fi
+          fi
+
+          if command -v podman >/dev/null 2>&1; then
+            if podman info >/dev/null 2>&1; then
+              echo "podman"
+              return 0
+            fi
+            if command -v podman >/dev/null 2>&1 && podman machine list >/dev/null 2>&1; then
+              podman machine start >/dev/null 2>&1 || true
+              if podman info >/dev/null 2>&1; then
+                echo "podman"
+                return 0
+              fi
+            fi
+          elif [ "${require_runtime}" = "1" ]; then
+            ensure_podman || true
+            if command -v podman >/dev/null 2>&1 && podman machine list >/dev/null 2>&1; then
+              podman machine start >/dev/null 2>&1 || true
+              if podman info >/dev/null 2>&1; then
+                echo "podman"
+                return 0
+              fi
+            fi
+          fi
+          return 1
+        }
+        iso_path="${ISO_VALIDATE_PATH:-}"
+        if [ -z "${iso_path}" ]; then
+          iso_path="{{.ISO_OUT}}"
+        fi
+        if [ -z "${iso_path}" ]; then
+          iso_path="{{.ISO_PATH}}"
+        fi
+        if [ -z "${iso_path}" ]; then
+          echo "Set ISO_VALIDATE_PATH, ISO_OUT, or ISO_PATH to validate an ISO."
+          exit 1
+        fi
+        if [ ! -f "${iso_path}" ]; then
+          echo "Missing ISO: ${iso_path}"
+          exit 1
+        fi
+        container_runtime="$(ensure_container_runtime "1" || true)"
+        if [ -z "${container_runtime}" ]; then
+          echo "Docker/Podman runtime is required for ISO validation."
+          echo "Start Docker Desktop (or Podman machine) and re-run."
+          if [ "${validate_required}" = "1" ] || [ "${validate_required}" = "true" ]; then
+            exit 1
+          fi
+          exit 1
+        fi
+        is_windows_shell() {
+          case "$(uname -s 2>/dev/null || true)" in
+            MINGW*|MSYS*|CYGWIN*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        run_container_runtime() {
+          if is_windows_shell; then
+            MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "${container_runtime}" "$@"
+          else
+            "${container_runtime}" "$@"
+          fi
+        }
+        iso_tool_image="${ISO_TOOL_IMAGE:-cluster-iso-tools:stream9}"
+        if ! run_container_runtime image inspect "${iso_tool_image}" >/dev/null 2>&1; then
+          echo "[iso] Building tool image: ${iso_tool_image}"
+          printf '%s\n' \
+            'FROM quay.io/centos/centos:stream9' \
+            'RUN dnf -y install xorriso isomd5sum rsync && dnf clean all && rm -rf /var/cache/dnf' \
+            | run_container_runtime build -t "${iso_tool_image}" -
+        fi
+        run_container_runtime run --rm -v "$(pwd):/work" -w /work -e ISO_OUT="${iso_path}" \
+          "${iso_tool_image}" \
+          checkisomd5 --verbose "${iso_path}"

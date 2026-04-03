@@ -1,0 +1,136 @@
+version: "3"
+
+tasks:
+  ensure:
+    internal: true
+    desc: Ensure pre-commit (or prek) is installed and hooks are set up
+    cmds:
+      - |
+        set -e
+        brew_install_with_retry() {
+          formula="$1"
+          tries="${2:-10}"
+          delay="${3:-3}"
+          i=1
+          while [ "${i}" -le "${tries}" ]; do
+            if brew install "${formula}"; then
+              return 0
+            fi
+            if command -v "${formula}" >/dev/null 2>&1; then
+              return 0
+            fi
+            echo "brew install ${formula} failed (attempt ${i}/${tries}); retrying in ${delay}s..." >&2
+            sleep "${delay}"
+            i=$((i + 1))
+          done
+          return 1
+        }
+
+        # Runner selection:
+        # - auto (default): use what's already installed (prefer `prek`), otherwise install `prek` via brew
+        #   when available, else fall back to installing `pre-commit`.
+        # - prek: force `prek` (Rust, typically faster)
+        # - pre-commit: force `pre-commit` (Python)
+        runner="${HOOKS_RUNNER:-${PRE_COMMIT_RUNNER:-auto}}"
+        case "${runner}" in
+          auto|prek|pre-commit) ;;
+          *)
+            echo "Invalid HOOKS_RUNNER/PRE_COMMIT_RUNNER: ${runner} (expected: auto|prek|pre-commit)" >&2
+            exit 2
+            ;;
+        esac
+
+        if [ "${runner}" = "auto" ]; then
+          if command -v prek >/dev/null 2>&1; then
+            runner="prek"
+          elif command -v pre-commit >/dev/null 2>&1; then
+            runner="pre-commit"
+          else
+            # Fresh workstation: prefer `prek` when brew is available.
+            if command -v brew >/dev/null 2>&1; then
+              runner="prek"
+            else
+              runner="pre-commit"
+            fi
+          fi
+        fi
+
+        if [ "${runner}" = "prek" ]; then
+          if ! command -v prek >/dev/null 2>&1; then
+            if command -v brew >/dev/null 2>&1; then
+              brew_install_with_retry prek 20 3
+            else
+              echo "prek is required but not installed." >&2
+              echo "Install:" >&2
+              echo "  - macOS: brew install prek" >&2
+              echo "  - or use pre-commit by setting HOOKS_RUNNER=pre-commit" >&2
+              exit 1
+            fi
+          fi
+        else
+          if ! command -v pre-commit >/dev/null 2>&1; then
+            if command -v brew >/dev/null 2>&1; then
+              brew_install_with_retry pre-commit 20 3
+            elif command -v pipx >/dev/null 2>&1; then
+              pipx install pre-commit
+            elif command -v uv >/dev/null 2>&1 || command -v uv.exe >/dev/null 2>&1; then
+              uv_cmd="$(command -v uv 2>/dev/null || command -v uv.exe 2>/dev/null || true)"
+              "${uv_cmd}" tool install pre-commit >/dev/null 2>&1 || true
+            else
+              python3 -m pip install --user pre-commit
+            fi
+          fi
+        fi
+
+        # Avoid repeated hook rewrites on Windows where aggressive re-installs can
+        # collide with file locking (WinError 32). If a managed hook is already
+        # present, keep it and continue.
+        hooks_dir="$(git rev-parse --git-path hooks 2>/dev/null || echo .git/hooks)"
+        mkdir -p "${hooks_dir}"
+        hook_file="${hooks_dir}/pre-commit"
+        legacy_hook="${hooks_dir}/pre-commit.legacy"
+        # pre-commit on Windows can fail with WinError 193 if a stale/empty
+        # legacy hook exists (it tries to execute it directly via CreateProcess).
+        if [ -f "${legacy_hook}" ] && [ ! -s "${legacy_hook}" ]; then
+          rm -f "${legacy_hook}"
+        fi
+        if [ -f "${hook_file}" ]; then
+          hook_body="$(cat "${hook_file}" 2>/dev/null || true)"
+          case "${hook_body}" in
+            *pre-commit*|*prek*)
+              if [ "${HOOKS_VERBOSE:-0}" = "1" ] || [ "${HOOKS_VERBOSE:-}" = "true" ]; then
+                echo "pre-commit hook already installed at ${hook_file}; skipping reinstall."
+              fi
+              exit 0
+              ;;
+          esac
+        fi
+        if [ "${runner}" = "prek" ]; then
+          prek install -f
+        else
+          if command -v pre-commit >/dev/null 2>&1; then
+            pre-commit install -f --hook-type pre-commit
+          elif command -v uv >/dev/null 2>&1 || command -v uv.exe >/dev/null 2>&1; then
+            uv_cmd="$(command -v uv 2>/dev/null || command -v uv.exe 2>/dev/null || true)"
+            "${uv_cmd}" tool run --from pre-commit pre-commit install -f --hook-type pre-commit
+          else
+            echo "pre-commit is required but was not found." >&2
+            exit 1
+          fi
+        fi
+
+        # Install PowerShell completion for `task` on Windows hosts so
+        # `task <tab>` works in the common VS Code PowerShell workflow.
+        case "$(uname -s 2>/dev/null || true)" in
+          MINGW*|MSYS*|CYGWIN*)
+            if command -v powershell.exe >/dev/null 2>&1; then
+              powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "./tasks/scripts/install-task-completion.ps1" >/dev/null 2>&1 || true
+            fi
+            ;;
+        esac
+
+  install:
+    internal: true
+    desc: Alias for hooks:ensure
+    cmds:
+      - task: ensure

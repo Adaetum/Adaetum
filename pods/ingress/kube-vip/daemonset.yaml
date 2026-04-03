@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-vip-ds
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: kube-vip
+  template:
+    metadata:
+      labels:
+        app: kube-vip
+    spec:
+      # This is intentionally cluster-wide. New joined servers and agents should
+      # participate in the same Service-election pool so the ingress VIP can
+      # fail over without inventing per-node VIP state.
+      hostNetwork: true
+      serviceAccountName: kube-vip
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: kube-vip
+          image: ghcr.io/kube-vip/kube-vip:v0.8.10
+          imagePullPolicy: IfNotPresent
+          args:
+            - manager
+          env:
+            - name: vip_arp
+              value: "true"
+            - name: svc_enable
+              value: "true"
+            # Service election is the failover mechanism for the authoritative
+            # ingress front door Service. Joined nodes converge on the same VIP
+            # state that Phase 50 persisted in ingress/ingress-vip-config.
+            - name: svc_election
+              value: "true"
+            - name: vip_leaderelection
+              value: "true"
+            - name: svc_leasename
+              value: "kube-vip-svc"
+            - name: svc_namespace
+              value: "kube-system"
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW

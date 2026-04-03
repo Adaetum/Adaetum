@@ -1,0 +1,46 @@
+# Used by the ISO build pipeline to select the matching golden ISO in R2.
+# GOLDEN_ISO_KEY=rocky10/Rocky-10.1-aarch64-minimal.iso
+
+#version=RHEL10
+cmdline
+reboot
+
+# --- Installation source ---
+# Some USB and direct-ISO boot paths expose the installer as a mapped block
+# device rather than a classic optical drive, so "cdrom" source autodetection can fail with
+# "Found no CD-ROM". Point directly at the mounted installer repo instead.
+url --url=file:///run/install/repo
+
+# --- Localization ---
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+
+# --- Networking (temporary hostname, replaced in %post) ---
+# Force IPv4 DHCP in installer/early boot to avoid IPv6-only routing issues.
+network --bootproto=dhcp --noipv6 --hostname=node-bootstrap --activate
+
+# --- Security ---
+selinux --enforcing
+firewall --enabled --service=ssh
+
+# --- First boot ---
+firstboot --disabled
+
+# --- Users ---
+rootpw --lock
+
+user --name=ansible --groups=wheel --shell=/bin/bash --lock
+
+
+user --name=mivadmin --groups=wheel --shell=/bin/bash --lock
+
+
+# --- Disk layout ---
+# On bare metal, Anaconda storage probing can hang (or be extremely slow) when
+# stale RAID metadata exists or when removable devices are present. Also, the
+# default `clearpart --all` is too risky when multiple disks are attached.
+#
+# For break-glass, select a single target disk in %pre, exclude installer media
+# when detectable, and generate partitioning directives.
+# Selection policy: first non-removable disk reported by lsblk.

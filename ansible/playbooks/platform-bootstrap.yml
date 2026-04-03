@@ -1,0 +1,2417 @@
+---
+- name: Platform bootstrap (Phase 30)
+  hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
+  become: true
+  vars:
+    bootstrap_secret_dir: "/var/lib/bootstrap-secrets"
+    rke2_role: "{{ hostvars[inventory_hostname].rke2_role | default('server') }}"
+    rke2_version: ""
+    rke2_channel: "stable"
+    rke2_config_path: "/etc/rancher/rke2/config.yaml"
+    rke2_server_hosts: "{{ groups['servers'] | default(groups['all'] | default([inventory_hostname])) }}"
+    rke2_server_count: "{{ rke2_server_hosts | length }}"
+    rke2_join_candidate_hosts: "{{ rke2_server_hosts | reject('equalto', inventory_hostname) | list }}"
+    break_glass_join_required: "{{ break_glass_join_required | default(false) | bool }}"
+    rke2_primary_host: >-
+      {{
+        (
+          (
+            (rke2_join_candidate_hosts | first)
+            if (rke2_join_candidate_hosts | length) > 0
+            else (rke2_server_hosts | first)
+          )
+          if (
+            (break_glass | default(false) | bool) and
+            (break_glass_cluster_join | default(false) | bool)
+          )
+          else
+          (
+            (groups['break_glass'][0] if (break_glass | default(false) | bool) else (rke2_server_hosts | first))
+          )
+        )
+      }}
+    # Primary API certs in existing clusters may only include short hostname SANs.
+    # Use short hostname for join API URL to avoid FQDN SAN mismatch.
+    rke2_primary_api_host: "{{ (rke2_primary_host | regex_replace('\\..*$', '')) if (rke2_primary_host | length > 0) else rke2_primary_host }}"
+    # Each node should default to its own hostname for apiserver cert SANs.
+    # Using primary hostname for all nodes can break joining server cert identity.
+    rke2_tls_san: "{{ hostvars[inventory_hostname].rke2_tls_san | default(inventory_hostname) }}"
+    # Prefer Tailnet IP for control-plane peer traffic so multi-site joins don't
+    # advertise unroutable LAN addresses to existing servers.
+    rke2_tailscale_ip_candidates: >-
+      {{
+        ansible_all_ipv4_addresses
+        | default([])
+        | select('match', '^100\\.')
+        | list
+      }}
+    rke2_node_ip: >-
+      {{
+        (rke2_tailscale_ip_candidates | first)
+        if (rke2_tailscale_ip_candidates | length) > 0
+        else (ansible_default_ipv4.address | default(''))
+      }}
+    kubeconfig_path: "/etc/rancher/rke2/rke2.yaml"
+    kubectl_cmd: "/var/lib/rancher/rke2/bin/kubectl"
+    helm_install_script: "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3"
+
+    # Cluster service DNS suffix (e.g., example.services or lab1.example.services).
+    # Used by hostname rewrites and Rancher hostname defaults.
+    cluster_domain: "{{ lookup('ansible.builtin.env', 'CLUSTER_DOMAIN') | default('example.services', true) }}"
+    cluster_local_domain: "{{ lookup('ansible.builtin.env', 'CLUSTER_LOCAL_DOMAIN') | default('', true) }}"
+    gitea_canonical_host_override: "{{ lookup('ansible.builtin.env', 'GITEA_CANONICAL_HOST') | default('', true) }}"
+    gitea_canonical_url_override: "{{ lookup('ansible.builtin.env', 'GITEA_CANONICAL_URL') | default('', true) }}"
+    gitea_canonical_host: >-
+      {{
+        gitea_canonical_host_override if (gitea_canonical_host_override | length > 0) else (
+          'gitea.' ~ cluster_local_domain
+        ) if (cluster_local_domain | length > 0) else (
+          'gitea.' ~ cluster_domain
+        )
+      }}
+    gitea_canonical_scheme: >-
+      {{
+        (
+          gitea_canonical_url_override
+          | regex_replace('^([a-zA-Z][a-zA-Z0-9+.-]*):.*$', '\1')
+        ) if (gitea_canonical_url_override | length > 0) else (
+          'http'
+        ) if (cluster_local_domain | length > 0) else (
+          'https'
+          if (
+            cluster_domain | length > 0 and
+            cluster_domain != 'example.services'
+          )
+          else 'http'
+        )
+      }}
+    gitea_canonical_url: >-
+      {{
+        gitea_canonical_url_override
+        if (gitea_canonical_url_override | length > 0)
+        else (gitea_canonical_scheme ~ '://' ~ gitea_canonical_host ~ '/')
+      }}
+    gitea_ingress_hosts: >-
+      {{
+        (
+          [gitea_canonical_host]
+          + (
+            ['gitea.' ~ cluster_local_domain]
+            if (cluster_local_domain | length > 0)
+            else []
+          )
+          + (
+            ['gitea.' ~ cluster_domain]
+            if (cluster_domain | length > 0)
+            else []
+          )
+        ) | unique
+      }}
+
+    # Allow explicit hostname overrides, otherwise derive from cluster_domain.
+    rancher_hostname_raw: >-
+      {{
+        (lookup('ansible.builtin.env', 'RANCHER_PUBLIC_DOMAIN') | default('', true))
+        or (lookup('ansible.builtin.env', 'RANCHER_HOSTNAME') | default('', true))
+        or ('rancher.' ~ cluster_domain)
+      }}
+    # Accept either bare hostnames or full URLs in env; Rancher chart requires a hostname only.
+    rancher_hostname: >-
+      {{
+        rancher_hostname_raw
+        | regex_replace('^[a-zA-Z][a-zA-Z0-9+.-]*://', '')
+        | regex_replace('/.*$', '')
+      }}
+    rancher_chart_repo: "https://releases.rancher.com/server-charts/latest"
+    longhorn_chart_repo: "https://charts.longhorn.io"
+    argocd_chart_repo: "https://argoproj.github.io/argo-helm"
+    argocd_enabled: "{{ (lookup('ansible.builtin.env', 'ARGOCD_ENABLED') | default('false', true)) | bool }}"
+    cloudflared_namespace: "cloudflared"
+    cloudflared_image: "cloudflare/cloudflared:latest"
+    cloudflared_tunnel_token: "{{ lookup('ansible.builtin.env', 'RANCHER_CLOUDFLARED_TUNNEL_TOKEN') | default('', true) }}"
+    cloudflared_enabled: "{{ cloudflared_tunnel_token | length > 0 }}"
+    cloudflare_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_API_TOKEN') | default('', true) }}"
+    cloudflare_zone_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_ZONE_API_TOKEN') | default('', true) }}"
+    external_dns_cloudflare_token: "{{ (cloudflare_zone_api_token if (cloudflare_zone_api_token | length > 0) else cloudflare_api_token) | trim }}"
+    gitea_chart_repo: "https://dl.gitea.io/charts/"
+    gitea_runner_image: >-
+      {{
+        lookup('ansible.builtin.env', 'GITEA_RUNNER_IMAGE')
+        | default('gitea/act_runner:latest', true)
+      }}
+    gitea_runner_dind_image: >-
+      {{
+        lookup('ansible.builtin.env', 'GITEA_RUNNER_DIND_IMAGE')
+        | default('docker:27-dind', true)
+      }}
+    gitea_runner_labels: >-
+      {{
+        lookup('ansible.builtin.env', 'GITEA_RUNNER_LABELS')
+        | default(
+            'ubuntu-latest:docker://gitea/runner-images:ubuntu-latest,'
+            ~ 'ubuntu-24.04:docker://gitea/runner-images:ubuntu-24.04,'
+            ~ 'ubuntu-22.04:docker://gitea/runner-images:ubuntu-22.04',
+            true
+          )
+      }}
+    argo_repo_url: >-
+      {{
+        lookup('ansible.builtin.env', 'GITEA_SEED_SOURCE_REPO_URL')
+        | default(
+            lookup('ansible.builtin.env', 'ARGOCD_GITHUB_REPO_URL')
+            | default(
+                lookup('ansible.builtin.env', 'ARGOCD_REPO_URL')
+                | default('', true),
+                true
+              ),
+            true
+          )
+      }}
+    argo_repo_revision: >-
+      {{
+        lookup('ansible.builtin.env', 'ARGOCD_REPO_BRANCH')
+        | default('HEAD', true)
+      }}
+    argo_repo_path: "pods/argocd/platform"
+    gitea_seed_enabled: "{{ lookup('ansible.builtin.env', 'GITEA_SEED_ENABLED') | default('1', true) }}"
+    gitea_seed_require_success: "{{ lookup('ansible.builtin.env', 'GITEA_SEED_REQUIRE_SUCCESS') | default('1', true) }}"
+    gitea_actions_secret_sync_require_success: "{{ lookup('ansible.builtin.env', 'GITEA_ACTIONS_SECRET_SYNC_REQUIRE_SUCCESS') | default('1', true) }}"
+    gitea_seed_source_repo_url: >-
+      {{
+        lookup('ansible.builtin.env', 'GITEA_SEED_SOURCE_REPO_URL')
+        | default(lookup('ansible.builtin.env', 'ARGOCD_GITHUB_REPO_URL') | default('', true), true)
+      }}
+    gitea_seed_source_repo_branch: >-
+      {{
+        lookup('ansible.builtin.env', 'GITEA_SEED_SOURCE_REPO_BRANCH')
+        | default(lookup('ansible.builtin.env', 'ARGOCD_GITHUB_REPO_BRANCH') | default('', true), true)
+      }}
+    gitea_seed_target_owner: "{{ lookup('ansible.builtin.env', 'GITEA_SEED_TARGET_OWNER') | default('gitea-admin', true) | trim }}"
+    gitea_seed_target_repo: >-
+      {{
+        lookup('ansible.builtin.env', 'GITEA_SEED_TARGET_REPO')
+        | default('cluster', true)
+        | trim
+      }}
+    gitea_registry_host: "{{ lookup('ansible.builtin.env', 'ANSIBLE_RUNNER_REGISTRY_HOST') | default(gitea_canonical_host, true) | trim }}"
+    gitea_registry_namespace: "{{ lookup('ansible.builtin.env', 'ANSIBLE_RUNNER_REGISTRY_NAMESPACE') | default(gitea_seed_target_owner, true) | trim }}"
+    gitea_registry_username: "{{ lookup('ansible.builtin.env', 'ANSIBLE_RUNNER_REGISTRY_USERNAME') | default(gitea_seed_target_owner, true) | trim }}"
+    gitea_registry_image_name: "{{ lookup('ansible.builtin.env', 'ANSIBLE_RUNNER_IMAGE_NAME') | default('ansible-runner', true) | trim }}"
+    gitea_bootstrap_via_argocd: "{{ lookup('ansible.builtin.env', 'GITEA_BOOTSTRAP_VIA_ARGOCD') | default('1', true) | bool }}"
+    platform_parallel_installs_enabled: "{{ lookup('ansible.builtin.env', 'PLATFORM_PARALLEL_INSTALLS_ENABLED') | default('true', true) | bool }}"
+    platform_parallel_install_async_seconds: "{{ lookup('ansible.builtin.env', 'PLATFORM_PARALLEL_INSTALL_ASYNC_SECONDS') | default('1800', true) | int }}"
+    platform_parallel_install_poll_retries: "{{ lookup('ansible.builtin.env', 'PLATFORM_PARALLEL_INSTALL_POLL_RETRIES') | default('120', true) | int }}"
+    platform_parallel_install_poll_delay: "{{ lookup('ansible.builtin.env', 'PLATFORM_PARALLEL_INSTALL_POLL_DELAY') | default('15', true) | int }}"
+    bootstrap_diagnostics_enabled: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_DIAGNOSTICS_ENABLED') | default('1', true) }}"
+    bootstrap_diagnostics_dir: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_DIAGNOSTICS_DIR') | default('/var/log/bootstrap/diagnostics', true) }}"
+    bootstrap_run_id: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_RUN_ID') | default(ansible_date_time.iso8601_basic_short ~ '-' ~ inventory_hostname, true) }}"
+    bootstrap_diagnostics_jsonl: "{{ bootstrap_diagnostics_dir }}/{{ bootstrap_run_id }}.jsonl"
+    bootstrap_diagnostics_helper: "{{ playbook_dir }}/../ansible-scripts/bootstrap/diagnostics.sh"
+  tasks:
+    - name: Ensure bootstrap diagnostics directory exists
+      ansible.builtin.file:
+        path: "{{ bootstrap_diagnostics_dir }}/{{ bootstrap_run_id }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure bootstrap secrets directory exists
+      ansible.builtin.file:
+        path: "{{ bootstrap_secret_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Inspect bootstrap secret files before generation
+      ansible.builtin.stat:
+        path: "{{ bootstrap_secret_dir }}/{{ item.name }}"
+      register: bootstrap_secret_generation_stats
+      loop:
+        - { name: "rke2_token", length: 48 }
+        - { name: "rancher_admin_password", length: 24 }
+        - { name: "argocd_admin_password", length: 24 }
+        - { name: "gitea_admin_password", length: 24 }
+        - { name: "gitea_runner_token", length: 32 }
+        - { name: "grafana_admin_password", length: 24 }
+        - { name: "authentik_secret_key", length: 48 }
+        - { name: "authentik_postgresql_password", length: 24 }
+        - { name: "authentik_admin_password", length: 24 }
+        - { name: "authentik_bootstrap_token", length: 32 }
+
+    - name: Generate missing or empty bootstrap secrets
+      ansible.builtin.shell: |
+        set -euo pipefail
+        secret_path="{{ bootstrap_secret_dir }}/{{ item.item.name }}"
+        tmp_path="$(mktemp "{{ bootstrap_secret_dir }}/.{{ item.item.name }}.XXXXXX")"
+        cleanup() {
+          rm -f "${tmp_path}"
+        }
+        trap cleanup EXIT
+
+        if command -v openssl >/dev/null 2>&1; then
+          openssl rand -base64 {{ item.item.length }} | tr -d '\n' > "${tmp_path}"
+        elif command -v python3 >/dev/null 2>&1; then
+          python3 -c 'import secrets,string,sys; length=int(sys.argv[1]); alphabet=string.ascii_letters + string.digits + "-_"; print("".join(secrets.choice(alphabet) for _ in range(length)), end="")' "{{ item.item.length }}" > "${tmp_path}"
+        else
+          echo "No supported random generator found (need openssl or python3)" >&2
+          exit 1
+        fi
+        if [[ ! -s "${tmp_path}" ]]; then
+          echo "Generated bootstrap secret is empty: ${secret_path}" >&2
+          exit 1
+        fi
+
+        chmod 0600 "${tmp_path}"
+        mv "${tmp_path}" "${secret_path}"
+        trap - EXIT
+      args:
+        executable: /bin/bash
+      loop: "{{ bootstrap_secret_generation_stats.results }}"
+      when:
+        - not (item.stat.exists | default(false)) or (item.stat.size | default(0)) == 0
+
+    - name: Fail if any bootstrap secret file exists but is empty
+      ansible.builtin.stat:
+        path: "{{ bootstrap_secret_dir }}/{{ item }}"
+      register: bootstrap_secret_stats
+      loop:
+        - rke2_token
+        - rancher_admin_password
+        - argocd_admin_password
+        - gitea_admin_password
+        - gitea_runner_token
+        - grafana_admin_password
+        - authentik_secret_key
+        - authentik_postgresql_password
+        - authentik_admin_password
+        - authentik_bootstrap_token
+
+    - name: Abort when bootstrap secret files are empty
+      ansible.builtin.fail:
+        msg: >-
+          Bootstrap secret file exists but is empty: {{ item.stat.path }}.
+          Fix: delete the empty file(s) under {{ bootstrap_secret_dir }} and re-run.
+          (Empty bootstrap secret files will propagate to in-cluster secrets and recovery kits.)
+      loop: "{{ bootstrap_secret_stats.results }}"
+      when:
+        - item.stat.exists | default(false)
+        - (item.stat.size | default(0)) == 0
+
+    - name: Capture bootstrap hostname when missing
+      ansible.builtin.copy:
+        content: "{{ ansible_facts['hostname'] }}"
+        dest: "{{ bootstrap_secret_dir }}/hostname"
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
+
+    - name: Capture Authentik bootstrap admin username when missing
+      ansible.builtin.copy:
+        content: "akadmin"
+        dest: "{{ bootstrap_secret_dir }}/authentik_admin_username"
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
+
+    - name: Ensure base packages are installed on RedHat family
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - git
+          - jq
+          - openssl
+          - tar
+          - httpd-tools
+        state: present
+        releasever: >-
+          {{
+            ansible_distribution_major_version
+            | default(
+                (ansible_distribution_version | default('') | regex_replace('\\..*$', '')),
+                true
+              )
+          }}
+      when: ansible_os_family == 'RedHat'
+
+    - name: Ensure base packages are installed on non-RedHat families
+      ansible.builtin.package:
+        name:
+          - curl
+          - git
+          - jq
+          - openssl
+          - tar
+          - httpd-tools
+        state: present
+      when: ansible_os_family != 'RedHat'
+
+    - name: Fail when strict join mode cannot find an existing remote server
+      ansible.builtin.fail:
+        msg: >-
+          Join mode requires at least one existing remote server host in inventory.
+          Discovered servers={{ rke2_server_hosts | join(',') }},
+          join_candidates={{ rke2_join_candidate_hosts | join(',') }},
+          selected_primary={{ rke2_primary_host }},
+          local_host={{ inventory_hostname }}.
+          Fix Tailscale tags/inventory so this node can join an existing cluster server.
+      when:
+        - break_glass | default(false) | bool
+        - break_glass_cluster_join | default(false) | bool
+        - break_glass_join_required | bool
+        - rke2_join_candidate_hosts | length == 0
+
+    - name: Warn about etcd quorum risk during first control-plane expansion
+      ansible.builtin.debug:
+        msg: >-
+          Expanding from one server to two servers temporarily increases etcd quorum risk.
+          A failed second-server join can destabilize the primary until repaired.
+          Continuing by design to allow 1->3 expansion.
+      when:
+        - break_glass | default(false) | bool
+        - break_glass_cluster_join | default(false) | bool
+        - inventory_hostname != rke2_primary_host
+        - rke2_role == "server"
+        - rke2_server_count | int <= 1
+
+    - name: Take etcd snapshot on primary before first additional server join
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if command -v rke2 >/dev/null 2>&1; then
+          rke2 etcd-snapshot save --name "pre-join-{{ inventory_hostname }}-$(date +%Y%m%d%H%M%S)"
+        else
+          echo "rke2 binary not available for etcd snapshot on primary" >&2
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ rke2_primary_host }}"
+      run_once: true
+      changed_when: true
+      when:
+        - break_glass | default(false) | bool
+        - break_glass_cluster_join | default(false) | bool
+        - inventory_hostname != rke2_primary_host
+        - rke2_role == "server"
+        - rke2_server_count | int <= 1
+
+    - name: Preflight primary control-plane health before join
+      when:
+        - break_glass | default(false) | bool
+        - break_glass_cluster_join | default(false) | bool
+        - inventory_hostname != rke2_primary_host
+      block:
+        - name: Check primary Kubernetes API readyz
+          ansible.builtin.shell: |
+            set -euo pipefail
+            {{ kubectl_cmd }} --kubeconfig {{ kubeconfig_path }} --request-timeout=8s get --raw='/readyz' >/dev/null
+          args:
+            executable: /bin/bash
+          register: rke2_primary_readyz
+          changed_when: false
+          failed_when: false
+          delegate_to: "{{ rke2_primary_host }}"
+          run_once: true
+
+        - name: Capture primary rke2 journal when readyz is unhealthy
+          ansible.builtin.shell: |
+            set -o pipefail
+            journalctl -u rke2-server -n 220 --no-pager | tail -n 180 || true
+          args:
+            executable: /bin/bash
+          register: rke2_primary_preflight_journal
+          changed_when: false
+          failed_when: false
+          delegate_to: "{{ rke2_primary_host }}"
+          run_once: true
+          when:
+            - (rke2_primary_readyz.rc | default(1) | int) != 0
+
+        - name: Detect primary etcd no-leader condition from preflight evidence
+          ansible.builtin.set_fact:
+            rke2_primary_no_leader_preflight: >-
+              {{
+                (
+                  (
+                    (rke2_primary_readyz.stderr | default('')) ~ '\n' ~
+                    (rke2_primary_preflight_journal.stdout | default(''))
+                  )
+                  | lower
+                ) is search('etcdserver: no leader')
+              }}
+          when:
+            - (rke2_primary_readyz.rc | default(1) | int) != 0
+          run_once: true
+
+        - name: Attempt primary etcd recovery from latest pre-join snapshot
+          ansible.builtin.shell: |
+            set -euo pipefail
+            snap="$(ls -1t /var/lib/rancher/rke2/server/db/snapshots/pre-join-* 2>/dev/null | head -n1 || true)"
+            if [ -z "${snap}" ]; then
+              echo "no pre-join snapshot found under /var/lib/rancher/rke2/server/db/snapshots" >&2
+              exit 2
+            fi
+            rke2_bin="$(command -v rke2 || true)"
+            if [ -z "${rke2_bin}" ]; then
+              echo "rke2 binary not found in PATH" >&2
+              exit 3
+            fi
+            echo "Recovering primary etcd from snapshot: ${snap}"
+            systemctl stop rke2-server || true
+            "${rke2_bin}" server --cluster-reset --cluster-reset-restore-path="${snap}"
+            systemctl start rke2-server
+          args:
+            executable: /bin/bash
+          register: rke2_primary_recovery_result
+          changed_when: true
+          failed_when: false
+          delegate_to: "{{ rke2_primary_host }}"
+          run_once: true
+          when:
+            - (rke2_primary_readyz.rc | default(1) | int) != 0
+            - rke2_primary_no_leader_preflight | default(false)
+
+        - name: Re-check primary Kubernetes API readyz after recovery attempt
+          ansible.builtin.shell: |
+            set -euo pipefail
+            {{ kubectl_cmd }} --kubeconfig {{ kubeconfig_path }} --request-timeout=8s get --raw='/readyz' >/dev/null
+          args:
+            executable: /bin/bash
+          register: rke2_primary_readyz_post_recovery
+          changed_when: false
+          failed_when: false
+          retries: 18
+          delay: 10
+          until: (rke2_primary_readyz_post_recovery.rc | default(1) | int) == 0
+          delegate_to: "{{ rke2_primary_host }}"
+          run_once: true
+          when:
+            - (rke2_primary_readyz.rc | default(1) | int) != 0
+            - rke2_primary_no_leader_preflight | default(false)
+            - (rke2_primary_recovery_result.rc | default(1) | int) == 0
+
+        - name: Fail join when primary control-plane is unhealthy
+          ansible.builtin.fail:
+            msg: |
+              Join aborted because primary control-plane is unhealthy.
+              primary_host={{ rke2_primary_host }}
+              readyz_rc={{ rke2_primary_readyz.rc | default('n/a') }}
+              readyz_stderr={{ (rke2_primary_readyz.stderr | default('')) | trim }}
+              no_leader_detected={{ rke2_primary_no_leader_preflight | default(false) }}
+              recovery_attempted={{ (rke2_primary_recovery_result is defined) | ternary('yes', 'no') }}
+              recovery_rc={{ rke2_primary_recovery_result.rc | default('n/a') }}
+              readyz_post_recovery_rc={{ rke2_primary_readyz_post_recovery.rc | default('n/a') }}
+
+              primary rke2-server journal:
+              {{ (rke2_primary_preflight_journal.stdout | default('')) | trim }}
+          when:
+            - (rke2_primary_readyz.rc | default(1) | int) != 0
+            - (rke2_primary_readyz_post_recovery.rc | default(1) | int) != 0
+          run_once: true
+
+    - name: Load bootstrap secrets
+      ansible.builtin.set_fact:
+        bootstrap_hostname: "{{ lookup('file', bootstrap_secret_dir + '/hostname') | trim }}"
+        rke2_token: "{{ lookup('file', bootstrap_secret_dir + '/rke2_token') | trim }}"
+        rancher_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/rancher_admin_password') | trim }}"
+        argocd_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/argocd_admin_password') | trim }}"
+        gitea_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/gitea_admin_password') | trim }}"
+        gitea_runner_token: "{{ lookup('file', bootstrap_secret_dir + '/gitea_runner_token') | trim }}"
+        grafana_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/grafana_admin_password') | trim }}"
+        authentik_admin_username: "{{ lookup('file', bootstrap_secret_dir + '/authentik_admin_username') | trim }}"
+        authentik_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/authentik_admin_password') | trim }}"
+        authentik_bootstrap_token: "{{ lookup('file', bootstrap_secret_dir + '/authentik_bootstrap_token') | trim }}"
+        authentik_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/authentik_secret_key') | trim }}"
+        authentik_postgresql_password: "{{ lookup('file', bootstrap_secret_dir + '/authentik_postgresql_password') | trim }}"
+
+    - name: Read shared rke2 token from primary host
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for token_path in \
+          "{{ bootstrap_secret_dir }}/rke2_token" \
+          "/var/lib/rancher/rke2/server/node-token" \
+          "/var/lib/rancher/rke2/server/token"
+        do
+          if [ -s "${token_path}" ]; then
+            cat "${token_path}"
+            exit 0
+          fi
+        done
+        echo "no non-empty token found in: {{ bootstrap_secret_dir }}/rke2_token, /var/lib/rancher/rke2/server/node-token, /var/lib/rancher/rke2/server/token" >&2
+        exit 2
+      args:
+        executable: /bin/bash
+      register: rke2_primary_token_result
+      changed_when: false
+      failed_when: false
+      delegate_to: "{{ rke2_primary_host }}"
+      run_once: true
+
+    - name: Fail when shared rke2 token is empty
+      ansible.builtin.fail:
+        msg: >-
+          Primary rke2 token was not readable on {{ rke2_primary_host }}.
+          Checked {{ bootstrap_secret_dir }}/rke2_token, /var/lib/rancher/rke2/server/node-token,
+          and /var/lib/rancher/rke2/server/token.
+          stderr={{ rke2_primary_token_result.stderr | default('') | trim }}
+      when:
+        - (rke2_primary_token_result.rc | default(1) | int) != 0
+          or (rke2_primary_token_result.stdout | default('') | trim | length) == 0
+      run_once: true
+
+    - name: Use primary rke2 token on every host
+      ansible.builtin.set_fact:
+        rke2_token: "{{ rke2_primary_token_result.stdout | trim }}"
+
+    - name: Detect node Tailscale IPv4 address
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if command -v tailscale >/dev/null 2>&1; then
+          tailscale ip -4 | head -n1
+        elif command -v tailscale.exe >/dev/null 2>&1; then
+          tailscale.exe ip -4 | head -n1
+        else
+          true
+        fi
+      args:
+        executable: /bin/bash
+      register: rke2_tailscale_ip_cmd
+      changed_when: false
+      failed_when: false
+
+    - name: Choose effective node IP for rke2
+      ansible.builtin.set_fact:
+        rke2_node_ip_effective: >-
+          {{
+            (rke2_tailscale_ip_cmd.stdout | default('') | trim)
+            if (rke2_tailscale_ip_cmd.stdout | default('') | trim | length) > 0
+            else rke2_node_ip
+          }}
+
+    - name: Ensure rke2 config directory exists
+      ansible.builtin.file:
+        path: "/etc/rancher/rke2"
+        state: directory
+        mode: "0755"
+
+    - name: Write rke2 config (server)
+      ansible.builtin.copy:
+        dest: "{{ rke2_config_path }}"
+        mode: "0600"
+        content: |
+          token: "{{ rke2_token }}"
+          node-ip: "{{ rke2_node_ip_effective }}"
+          advertise-address: "{{ rke2_node_ip_effective }}"
+          tls-san:
+            - "{{ rke2_tls_san }}"
+          write-kubeconfig-mode: "0644"
+          cni: "calico"
+      when:
+        - rke2_role == "server"
+        - inventory_hostname == rke2_primary_host
+
+    - name: Write rke2 config (joining server)
+      ansible.builtin.copy:
+        dest: "{{ rke2_config_path }}"
+        mode: "0600"
+        content: |
+          token: "{{ rke2_token }}"
+          server: "https://{{ rke2_primary_api_host }}:9345"
+          node-ip: "{{ rke2_node_ip_effective }}"
+          advertise-address: "{{ rke2_node_ip_effective }}"
+          tls-san:
+            - "{{ rke2_tls_san }}"
+          write-kubeconfig-mode: "0644"
+          cni: "calico"
+      when:
+        - rke2_role == "server"
+        - inventory_hostname != rke2_primary_host
+
+    - name: Write rke2 config (agent)
+      ansible.builtin.copy:
+        dest: "{{ rke2_config_path }}"
+        mode: "0600"
+        content: |
+          token: "{{ rke2_token }}"
+          server: "https://{{ rke2_primary_api_host }}:9345"
+          node-ip: "{{ rke2_node_ip_effective }}"
+      when:
+        - rke2_role == "agent"
+
+    - name: Install rke2
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        max_attempts="${RKE2_INSTALL_MAX_ATTEMPTS:-5}"
+        retry_delay="${RKE2_INSTALL_RETRY_DELAY_SECONDS:-8}"
+
+        attempt=1
+        while [ "${attempt}" -le "${max_attempts}" ]; do
+          attempt_log="$(mktemp)"
+          if curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE={{ rke2_role }} {% if rke2_version %}INSTALL_RKE2_VERSION={{ rke2_version }}{% else %}INSTALL_RKE2_CHANNEL={{ rke2_channel }}{% endif %} sh - >"${attempt_log}" 2>&1; then
+            cat "${attempt_log}"
+            rm -f "${attempt_log}"
+            exit 0
+          fi
+
+          rc=$?
+          cat "${attempt_log}" >&2
+
+          # Intermittent upstream metadata/key drift can return "Bad PGP signature"
+          # for repo metadata. Clear package caches and retry before failing bootstrap.
+          if grep -q "repomd.xml GPG signature verification error: Bad PGP signature" "${attempt_log}"; then
+            echo "[rke2-install] attempt ${attempt}/${max_attempts} hit transient repo signature metadata error; cleaning cache and retrying" >&2
+            dnf -y clean all >/dev/null 2>&1 || true
+            rm -rf /var/cache/dnf/* /var/tmp/dnf-* >/dev/null 2>&1 || true
+          fi
+
+          rm -f "${attempt_log}"
+          if [ "${attempt}" -ge "${max_attempts}" ]; then
+            echo "[rke2-install] failed after ${max_attempts} attempts" >&2
+            exit "${rc}"
+          fi
+
+          sleep "${retry_delay}"
+          attempt="$((attempt + 1))"
+        done
+      args:
+        executable: /bin/bash
+        creates: "/usr/local/bin/rke2"
+
+    - name: Enable and start rke2 service
+      block:
+        - name: Verify primary RKE2 registration endpoint is reachable from joining nodes
+          ansible.builtin.shell: |
+            set -euo pipefail
+            # Any HTTP response code confirms transport reachability.
+            # Do not require HTTP 2xx here because RKE2 can legitimately return 503 while bootstrapping.
+            curl -ksS --connect-timeout 5 --max-time 10 "https://{{ rke2_primary_api_host }}:9345" >/dev/null
+          args:
+            executable: /bin/bash
+          register: rke2_primary_endpoint_check
+          retries: 12
+          delay: 5
+          until: rke2_primary_endpoint_check.rc == 0
+          changed_when: false
+          when:
+            - inventory_hostname != rke2_primary_host
+
+        - name: Start rke2 systemd unit
+          ansible.builtin.systemd:
+            name: "rke2-{{ rke2_role }}"
+            enabled: true
+            state: started
+      rescue:
+        - name: Capture rke2 service status after failed start
+          ansible.builtin.shell: |
+            set -o pipefail
+            systemctl status "rke2-{{ rke2_role }}" --no-pager -l || true
+          args:
+            executable: /bin/bash
+          register: rke2_service_status_after_failure
+          changed_when: false
+
+        - name: Capture recent rke2 journal after failed start
+          ansible.builtin.shell: |
+            set -o pipefail
+            journalctl -u "rke2-{{ rke2_role }}" -n 200 --no-pager || true
+          args:
+            executable: /bin/bash
+          register: rke2_journal_after_failure
+          changed_when: false
+
+        - name: Capture rendered rke2 config after failed start
+          ansible.builtin.shell: |
+            set -o pipefail
+            sed -n '1,220p' /etc/rancher/rke2/config.yaml || true
+          args:
+            executable: /bin/bash
+          register: rke2_config_after_failure
+          changed_when: false
+
+        - name: Capture primary rke2 journal related to join failure
+          ansible.builtin.shell: |
+            set -o pipefail
+            journalctl -u rke2-server -n 260 --no-pager | tail -n 220 || true
+          args:
+            executable: /bin/bash
+          register: rke2_primary_journal_after_failure
+          changed_when: false
+          failed_when: false
+          delegate_to: "{{ rke2_primary_host }}"
+          when:
+            - inventory_hostname != rke2_primary_host
+
+        - name: Fail with detailed rke2 startup diagnostics
+          block:
+            - name: Emit structured rke2 startup failure diagnostic
+              ansible.builtin.shell: |
+                set -euo pipefail
+                . "{{ bootstrap_diagnostics_helper }}"
+                BOOTSTRAP_DIAGNOSTICS_ENABLED="{{ bootstrap_diagnostics_enabled }}"
+                BOOTSTRAP_DIAGNOSTICS_DIR="{{ bootstrap_diagnostics_dir }}"
+                BOOTSTRAP_RUN_ID="{{ bootstrap_run_id }}"
+                bootstrap_diag_init
+                bootstrap_diag_record \
+                  "phase=phase30" \
+                  "step=rke2-startup" \
+                  "component=rke2" \
+                  "operation=startup-failed" \
+                  "severity=error" \
+                  "exit_code={{ rke2_primary_endpoint_check.rc | default(1) }}" \
+                  "failure_kind=kubernetes-api" \
+                  "dependency_kind=kubernetes-api" \
+                  "host={{ inventory_hostname }}" \
+                  "summary=Failed to start rke2-{{ rke2_role }}" \
+                  "stderr_excerpt={{ (rke2_primary_endpoint_check.stderr | default('')) | trim }}" \
+                  "log_path={{ bootstrap_diagnostics_jsonl }}"
+              args:
+                executable: /bin/bash
+              changed_when: false
+
+            - name: Fail with detailed rke2 startup diagnostics
+              ansible.builtin.fail:
+                msg: |
+                  Failed to start rke2-{{ rke2_role }}.
+                  inventory_hostname={{ inventory_hostname }}
+                  rke2_role={{ rke2_role }}
+                  rke2_primary_host={{ rke2_primary_host }}
+                  rke2_primary_api_host={{ rke2_primary_api_host }}
+                  rke2_node_ip={{ rke2_node_ip_effective }}
+                  tailscale_ip_detected={{ (rke2_tailscale_ip_cmd.stdout | default('') | trim) }}
+                  endpoint_check_rc={{ rke2_primary_endpoint_check.rc | default('n/a') }}
+                  endpoint_check_stderr={{ (rke2_primary_endpoint_check.stderr | default('')) | trim }}
+
+                  systemctl status:
+                  {{ (rke2_service_status_after_failure.stdout | default('')) | trim }}
+
+                  recent journalctl:
+                  {{ (rke2_journal_after_failure.stdout | default('')) | trim }}
+
+                  /etc/rancher/rke2/config.yaml:
+                  {{ (rke2_config_after_failure.stdout | default('')) | trim }}
+
+                  primary rke2-server journal:
+                  {{ (rke2_primary_journal_after_failure.stdout | default('')) | trim }}
+
+    - name: Wait for kubeconfig to exist
+      ansible.builtin.wait_for:
+        path: "{{ kubeconfig_path }}"
+        timeout: 600
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Wait for kubectl binary to exist (RKE2)
+      ansible.builtin.wait_for:
+        path: "{{ kubectl_cmd }}"
+        timeout: 600
+
+    - name: Ensure kubectl is on PATH (wrapper that defaults KUBECONFIG)
+      ansible.builtin.copy:
+        dest: "/usr/local/bin/kubectl"
+        mode: "0755"
+        owner: root
+        group: root
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          kubeconfig_default="/etc/rancher/rke2/rke2.yaml"
+          if [ -z "${KUBECONFIG:-}" ] && [ -f "${kubeconfig_default}" ]; then
+            export KUBECONFIG="${kubeconfig_default}"
+          fi
+
+          exec "{{ kubectl_cmd }}" "$@"
+
+    - name: Wait for Kubernetes API to be reachable
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} --request-timeout=5s get --raw='/readyz'
+      register: kube_api_ready
+      retries: 60
+      delay: 5
+      until: kube_api_ready.rc == 0
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Install Helm
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if command -v helm >/dev/null 2>&1; then
+          exit 0
+        fi
+
+        max_attempts="${HELM_INSTALL_MAX_ATTEMPTS:-5}"
+        retry_delay="${HELM_INSTALL_RETRY_DELAY_SECONDS:-8}"
+
+        attempt=1
+        while [ "${attempt}" -le "${max_attempts}" ]; do
+          attempt_log="$(mktemp)"
+
+          # Prefer distro package when available; fall back to upstream script.
+          if dnf -y install helm >"${attempt_log}" 2>&1 || curl -fsSL "{{ helm_install_script }}" | bash >"${attempt_log}" 2>&1; then
+            if command -v helm >/dev/null 2>&1; then
+              rm -f "${attempt_log}"
+              exit 0
+            fi
+          fi
+
+          cat "${attempt_log}" >&2 || true
+          rm -f "${attempt_log}" || true
+
+          if [ "${attempt}" -ge "${max_attempts}" ]; then
+            echo "[helm-install] failed after ${max_attempts} attempts" >&2
+            exit 1
+          fi
+
+          sleep "${retry_delay}"
+          attempt="$((attempt + 1))"
+        done
+      args:
+        executable: /bin/bash
+        creates: /usr/local/bin/helm
+
+    - name: Add Helm repos
+      ansible.builtin.shell: |
+        helm repo add rancher-latest "{{ rancher_chart_repo }}"
+        helm repo add longhorn "{{ longhorn_chart_repo }}"
+        helm repo add argo "{{ argocd_chart_repo }}"
+        helm repo add gitea "{{ gitea_chart_repo }}"
+        helm repo update
+      args:
+        executable: /bin/bash
+      register: bootstrap_helm_repos
+      retries: 10
+      delay: 15
+      until: bootstrap_helm_repos.rc == 0
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Install cert-manager (required by Rancher)
+      ansible.builtin.shell: |
+        {{ kubectl_cmd }} create namespace cert-manager --dry-run=client -o yaml | {{ kubectl_cmd }} apply --validate=false -f -
+        helm repo add jetstack https://charts.jetstack.io
+        helm repo update
+        helm upgrade --install cert-manager jetstack/cert-manager \
+          --namespace cert-manager \
+          --set installCRDs=true \
+          --wait \
+          --timeout 10m
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: cert_manager_install
+      retries: 20
+      delay: 10
+      until: cert_manager_install.rc == 0
+      failed_when: false
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Warn when cert-manager install failed (break-glass best effort)
+      ansible.builtin.debug:
+        msg: "cert-manager install failed in break-glass mode; continuing. rc={{ cert_manager_install.rc }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cert_manager_install is defined
+        - cert_manager_install.rc != 0
+
+    - name: Emit structured cert-manager install failure diagnostic
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . "{{ bootstrap_diagnostics_helper }}"
+        BOOTSTRAP_DIAGNOSTICS_ENABLED="{{ bootstrap_diagnostics_enabled }}"
+        BOOTSTRAP_DIAGNOSTICS_DIR="{{ bootstrap_diagnostics_dir }}"
+        BOOTSTRAP_RUN_ID="{{ bootstrap_run_id }}"
+        bootstrap_diag_init
+        kind="$(bootstrap_diag_classify_failure_kind {{ (cert_manager_install.stderr | default(cert_manager_install.stdout | default(''))) | trim | quote }})"
+        bootstrap_diag_record \
+          "phase=phase30" \
+          "step=cert-manager-install" \
+          "component=cert-manager" \
+          "operation=helm-install" \
+          "severity=warning" \
+          "exit_code={{ cert_manager_install.rc | default(1) }}" \
+          "failure_kind=${kind}" \
+          "dependency_kind=chart" \
+          "namespace=cert-manager" \
+          "resource_ref=helm/cert-manager" \
+          "summary=cert-manager install failed in break-glass mode; continuing" \
+          "stdout_excerpt={{ (cert_manager_install.stdout | default('')) | trim }}" \
+          "stderr_excerpt={{ (cert_manager_install.stderr | default('')) | trim }}" \
+          "log_path={{ bootstrap_diagnostics_jsonl }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cert_manager_install is defined
+        - cert_manager_install.rc != 0
+
+    - name: Wait for cert-manager control plane deployments
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for deployment in cert-manager cert-manager-webhook cert-manager-cainjector; do
+          {{ kubectl_cmd }} -n cert-manager rollout status deployment/"${deployment}" --timeout=10m
+        done
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: cert_manager_rollout
+      changed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cert_manager_install is defined
+        - cert_manager_install.rc == 0
+
+    - name: Wait for cert-manager webhook endpoints
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n cert-manager get endpoints cert-manager-webhook -o jsonpath='{.subsets[0].addresses[0].ip}'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: cert_manager_webhook_endpoints
+      retries: 30
+      delay: 10
+      until: >-
+        cert_manager_webhook_endpoints.rc == 0 and
+        (cert_manager_webhook_endpoints.stdout | trim | length) > 0
+      changed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cert_manager_install is defined
+        - cert_manager_install.rc == 0
+
+    - name: Fail before Rancher when cert-manager is unavailable
+      ansible.builtin.fail:
+        msg: >-
+          cert-manager is not ready, so Rancher install is blocked.
+          install_rc={{ cert_manager_install.rc | default('n/a') }}
+          rollout_rc={{ cert_manager_rollout.rc | default('n/a') }}
+          webhook_rc={{ cert_manager_webhook_endpoints.rc | default('n/a') }}
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cert_manager_install is not defined or (cert_manager_install.rc | default(1)) != 0 or (cert_manager_rollout is defined and (cert_manager_rollout.rc | default(1)) != 0) or (cert_manager_webhook_endpoints is defined and (cert_manager_webhook_endpoints.stdout | default('') | trim | length) == 0)
+
+    - name: Relax broken ingress-nginx admission webhooks (for Rancher ingress install)
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        svc_ns="kube-system"
+        svc_name="rke2-ingress-nginx-controller-admission"
+
+        if ! {{ kubectl_cmd }} -n "${svc_ns}" get service "${svc_name}" >/dev/null 2>&1; then
+          echo "skip:service-absent"
+          exit 0
+        fi
+
+        ep_ip="$({{ kubectl_cmd }} -n "${svc_ns}" get endpoints "${svc_name}" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
+        if [ -n "${ep_ip}" ]; then
+          echo "skip:endpoints-ready:${ep_ip}"
+          exit 0
+        fi
+
+        patched=0
+        for name in rke2-ingress-nginx-admission ingress-nginx-admission; do
+          if ! {{ kubectl_cmd }} get validatingwebhookconfiguration "${name}" >/dev/null 2>&1; then
+            continue
+          fi
+          {{ kubectl_cmd }} patch validatingwebhookconfiguration "${name}" --type='json' \
+            -p='[{"op":"replace","path":"/webhooks/0/failurePolicy","value":"Ignore"},{"op":"replace","path":"/webhooks/0/timeoutSeconds","value":2}]' >/dev/null
+          patched=$((patched+1))
+        done
+
+        if [ "${patched}" -eq 0 ]; then
+          echo "skip:webhook-not-found"
+          exit 0
+        fi
+
+        echo "patched:${patched}"
+      args:
+        executable: /bin/bash
+      register: ingress_nginx_webhook_relax
+      changed_when: "'patched:' in (ingress_nginx_webhook_relax.stdout | default(''))"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Log ingress-nginx admission mitigation result
+      ansible.builtin.debug:
+        msg: >-
+          ingress-nginx admission mitigation result: {{ ingress_nginx_webhook_relax.stdout | default('n/a') | trim }}
+      when:
+        - inventory_hostname == rke2_primary_host
+        - ingress_nginx_webhook_relax is defined
+
+    - name: Wait for Rancher webhook endpoints (if present)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if ! {{ kubectl_cmd }} -n cattle-system get service rancher-webhook >/dev/null 2>&1; then
+          echo "absent"
+          exit 0
+        fi
+        {{ kubectl_cmd }} -n cattle-system get endpoints rancher-webhook -o jsonpath='{.subsets[0].addresses[0].ip}'
+      args:
+        executable: /bin/bash
+      register: rancher_webhook_endpoints
+      retries: 30
+      delay: 10
+      until: >-
+        rancher_webhook_endpoints.rc == 0 and (
+          (rancher_webhook_endpoints.stdout | trim) == 'absent' or
+          (rancher_webhook_endpoints.stdout | trim | length) > 0
+        )
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Determine ready node count for Rancher replicas
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ready_count="$({{ kubectl_cmd }} get nodes --no-headers 2>/dev/null | awk '$2 ~ /^Ready/ {c++} END{print c+0}' || true)"
+        if [ -z "${ready_count}" ] || ! printf '%s' "${ready_count}" | grep -Eq '^[0-9]+$'; then
+          ready_count="1"
+        fi
+        if [ "${ready_count}" -lt 1 ]; then
+          ready_count="1"
+        fi
+        if [ "${ready_count}" -gt 3 ]; then
+          ready_count="3"
+        fi
+        echo "${ready_count}"
+      args:
+        executable: /bin/bash
+      register: rancher_ready_node_count
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Set Rancher replica target fact
+      ansible.builtin.set_fact:
+        rancher_replica_target: "{{ rancher_ready_node_count.stdout | trim | default('1', true) }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Install Rancher
+      ansible.builtin.shell: |
+        {{ kubectl_cmd }} create namespace cattle-system --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+        helm upgrade --install rancher rancher-latest/rancher \
+          --namespace cattle-system \
+          --set replicas={{ rancher_replica_target | default('1') }} \
+          --set hostname={{ rancher_hostname }} \
+          --set bootstrapPassword={{ rancher_admin_password }} \
+          --wait \
+          --timeout 15m
+      args:
+        executable: /bin/bash
+      register: rancher_install
+      retries: 5
+      delay: 20
+      until: rancher_install.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Capture Rancher diagnostics on install failure
+      ansible.builtin.shell: |
+        set -e
+        {{ kubectl_cmd }} -n cattle-system get pods -o wide
+        {{ kubectl_cmd }} -n cattle-system get svc,ep -o wide
+        {{ kubectl_cmd }} -n cattle-system get events --sort-by=.lastTimestamp | tail -n 50
+      register: rancher_install_diag
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - rancher_install is failed
+
+    - name: Emit structured Rancher install failure diagnostic
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . "{{ bootstrap_diagnostics_helper }}"
+        BOOTSTRAP_DIAGNOSTICS_ENABLED="{{ bootstrap_diagnostics_enabled }}"
+        BOOTSTRAP_DIAGNOSTICS_DIR="{{ bootstrap_diagnostics_dir }}"
+        BOOTSTRAP_RUN_ID="{{ bootstrap_run_id }}"
+        bootstrap_diag_init
+        kind="$(bootstrap_diag_classify_failure_kind {{ (rancher_install.stderr | default(rancher_install.stdout | default(''))) | trim | quote }})"
+        bootstrap_diag_record \
+          "phase=phase30" \
+          "step=rancher-install" \
+          "component=rancher" \
+          "operation=helm-install" \
+          "severity=error" \
+          "exit_code={{ rancher_install.rc | default(1) }}" \
+          "failure_kind=${kind}" \
+          "dependency_kind=chart" \
+          "namespace=cattle-system" \
+          "resource_ref=helm/rancher" \
+          "summary=Rancher install failed" \
+          "stdout_excerpt={{ (rancher_install.stdout | default('')) | trim }}" \
+          "stderr_excerpt={{ (rancher_install.stderr | default('')) | trim }}" \
+          "evidence_paths={{ bootstrap_diagnostics_jsonl }}" \
+          "log_path={{ bootstrap_diagnostics_jsonl }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - rancher_install is failed
+
+    - name: Relax Rancher startup probe for single-node and reboot convergence
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n cattle-system patch deployment rancher --type=strategic -p '{
+          "spec": {
+            "replicas": {{ rancher_replica_target | default("1") }},
+            "progressDeadlineSeconds": 1800,
+            "template": {
+              "spec": {
+                "containers": [
+                  {
+                    "name": "rancher",
+                    "startupProbe": {
+                      "httpGet": {"path": "/healthz", "port": 80, "scheme": "HTTP"},
+                      "timeoutSeconds": 5,
+                      "periodSeconds": 5,
+                      "failureThreshold": 60,
+                      "successThreshold": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Wait for Rancher bootstrap secret to exist
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n cattle-system get secret bootstrap-secret -o jsonpath='{.data.bootstrapPassword}'
+      register: rancher_bootstrap_password_b64
+      retries: 40
+      delay: 10
+      until: rancher_bootstrap_password_b64.stdout | trim | length > 0
+      changed_when: false
+      no_log: true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Decode Rancher bootstrap password
+      ansible.builtin.set_fact:
+        rancher_bootstrap_password: "{{ rancher_bootstrap_password_b64.stdout | b64decode | trim }}"
+      no_log: true
+      when:
+        - inventory_hostname == rke2_primary_host
+        - rancher_bootstrap_password_b64 is defined
+
+    - name: Fail when Rancher bootstrap password is empty
+      ansible.builtin.fail:
+        msg: "Rancher bootstrap password secret is empty; check Rancher install and bootstrap-secret."
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (rancher_bootstrap_password | default('')) | length == 0
+
+    - name: Persist Rancher bootstrap password to bootstrap secrets
+      ansible.builtin.copy:
+        content: "{{ rancher_bootstrap_password }}\n"
+        dest: "{{ bootstrap_secret_dir }}/rancher_admin_password"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (rancher_bootstrap_password | default('')) | length > 0
+
+    - name: Refresh Rancher admin password fact from bootstrap secret
+      ansible.builtin.set_fact:
+        rancher_admin_password: "{{ rancher_bootstrap_password }}"
+      no_log: true
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (rancher_bootstrap_password | default('')) | length > 0
+
+    - name: Wait for Kubernetes API and node readiness before Longhorn install
+      ansible.builtin.shell: |
+        set -e
+        {{ kubectl_cmd }} --request-timeout=5s get --raw='/readyz'
+        {{ kubectl_cmd }} get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' | grep -q True
+      register: kube_api_stable_pre_longhorn
+      retries: 30
+      delay: 10
+      until: kube_api_stable_pre_longhorn.rc == 0
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Determine Longhorn desired replica count (capped to ready node count)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        override="{{ lookup('ansible.builtin.env', 'LONGHORN_DEFAULT_REPLICA_COUNT') | default('', true) }}"
+        max_override="{{ lookup('ansible.builtin.env', 'LONGHORN_MAX_REPLICA_COUNT') | default('', true) }}"
+        if [ -n "${override}" ]; then
+          if ! printf '%s' "${override}" | grep -Eq '^[0-9]+$'; then
+            echo "invalid_override"
+            exit 0
+          fi
+        fi
+        if [ -n "${max_override}" ]; then
+          if ! printf '%s' "${max_override}" | grep -Eq '^[0-9]+$'; then
+            echo "invalid_max_override"
+            exit 0
+          fi
+          if [ "${max_override}" -lt 1 ]; then
+            echo "invalid_max_override"
+            exit 0
+          fi
+        fi
+
+        # Count Ready nodes. Cap replicas to avoid volumes getting stuck (e.g. 5 replicas on 3 nodes).
+        # Use tabular output to avoid brittle jsonpath filters across kubectl versions.
+        ready_count="$({{ kubectl_cmd }} get nodes --no-headers 2>/dev/null | awk '$2 ~ /^Ready/ {c++} END{print c+0}' || true)"
+        if [ -z "${ready_count}" ] || ! printf '%s' "${ready_count}" | grep -Eq '^[0-9]+$'; then
+          ready_count="1"
+        fi
+        if [ "${ready_count}" -lt 1 ]; then
+          ready_count="1"
+        fi
+
+        base="1"
+        if [ "${ready_count}" -gt 1 ]; then
+          base="3"
+        fi
+        if [ -n "${override}" ]; then
+          base="${override}"
+        fi
+
+        desired="${base}"
+        # Default safety cap: 3 replicas (HA baseline). Override via LONGHORN_MAX_REPLICA_COUNT.
+        max_cap="3"
+        if [ -n "${max_override}" ]; then
+          max_cap="${max_override}"
+        fi
+        if [ "${desired}" -gt "${max_cap}" ]; then
+          desired="${max_cap}"
+        fi
+        if [ "${desired}" -gt "${ready_count}" ]; then
+          desired="${ready_count}"
+        fi
+        if [ "${desired}" -lt 1 ]; then
+          desired="1"
+        fi
+
+        echo "${desired}"
+      args:
+        executable: /bin/bash
+      register: longhorn_replica_desired
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Fail when LONGHORN_DEFAULT_REPLICA_COUNT is invalid
+      ansible.builtin.fail:
+        msg: >-
+          LONGHORN_DEFAULT_REPLICA_COUNT must be an integer >= 1.
+      when:
+        - inventory_hostname == rke2_primary_host
+        - longhorn_replica_desired.stdout | trim == "invalid_override"
+
+    - name: Fail when LONGHORN_MAX_REPLICA_COUNT is invalid
+      ansible.builtin.fail:
+        msg: >-
+          LONGHORN_MAX_REPLICA_COUNT must be an integer >= 1.
+      when:
+        - inventory_hostname == rke2_primary_host
+        - longhorn_replica_desired.stdout | trim == "invalid_max_override"
+
+    - name: Set Longhorn default replica count fact
+      ansible.builtin.set_fact:
+        longhorn_default_replica_count: "{{ (longhorn_replica_desired.stdout | trim) | int }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - longhorn_replica_desired is defined
+
+    - name: Determine whether to reduce existing Longhorn volumes (break-glass default)
+      ansible.builtin.set_fact:
+        # Prefer explicit env override; otherwise default to enabled only when break-glass
+        # is forcing single-replica volumes (i.e., desired replica count == 1).
+        #
+        # Rationale: reducing existing volumes is helpful to recover space on single-node
+        # installs, but is unnecessary (and potentially disruptive) once we are in an HA
+        # posture with >= 2 Ready nodes.
+        longhorn_reduce_existing_volume_replicas: >-
+          {{
+            (
+              (lookup('ansible.builtin.env', 'LONGHORN_REDUCE_EXISTING_VOLUME_REPLICAS') | default('', true) | string | trim) | bool
+            )
+            if ((lookup('ansible.builtin.env', 'LONGHORN_REDUCE_EXISTING_VOLUME_REPLICAS') | default('', true) | string | trim) | length > 0)
+            else ((break_glass | default(false) | bool) and (longhorn_default_replica_count | default(0) | int == 1))
+          }}
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Determine whether single-node Longhorn profile is enabled
+      ansible.builtin.set_fact:
+        # Opinionated default: enable this profile automatically for single-replica
+        # installs unless explicitly disabled via LONGHORN_SINGLE_NODE_PROFILE_ENABLED.
+        longhorn_single_node_profile_enabled: >-
+          {{
+            (
+              lookup('ansible.builtin.env', 'LONGHORN_SINGLE_NODE_PROFILE_ENABLED')
+              | default('true', true)
+              | string
+              | trim
+              | bool
+            )
+            and
+            (
+              longhorn_default_replica_count | default(0) | int == 1
+            )
+          }}
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Install Longhorn (storage)
+      ansible.builtin.shell: |
+        {{ kubectl_cmd }} create namespace longhorn-system --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+        helm upgrade --install longhorn longhorn/longhorn \
+          --namespace longhorn-system \
+          --create-namespace \
+          --set persistence.defaultClassReplicaCount={{ longhorn_default_replica_count }} \
+          --wait --timeout 10m
+      args:
+        executable: /bin/bash
+      register: longhorn_install
+      retries: 10
+      delay: 15
+      until: longhorn_install.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - not platform_parallel_installs_enabled
+
+    - name: Launch Longhorn install in background
+      ansible.builtin.shell: |
+        {{ kubectl_cmd }} create namespace longhorn-system --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+        helm upgrade --install longhorn longhorn/longhorn \
+          --namespace longhorn-system \
+          --create-namespace \
+          --set persistence.defaultClassReplicaCount={{ longhorn_default_replica_count }} \
+          --wait --timeout 10m
+      args:
+        executable: /bin/bash
+      register: longhorn_install_async
+      async: "{{ platform_parallel_install_async_seconds }}"
+      poll: 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - platform_parallel_installs_enabled
+      changed_when: false
+
+    - name: Wait for Kubernetes API and node readiness before app installs
+      ansible.builtin.shell: |
+        set -e
+        {{ kubectl_cmd }} --request-timeout=5s get --raw='/readyz'
+        {{ kubectl_cmd }} get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' | grep -q True
+      register: kube_api_stable
+      retries: 30
+      delay: 10
+      until: kube_api_stable.rc == 0
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Create Argo CD admin password hash
+      ansible.builtin.command: "htpasswd -nbBC 10 '' '{{ argocd_admin_password }}'"
+      register: argocd_htpasswd
+      changed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+
+    - name: Install Argo CD
+      ansible.builtin.shell: |
+        {{ kubectl_cmd }} create namespace argocd --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+        helm upgrade --install argocd argo/argo-cd \
+          --namespace argocd \
+          --set configs.params.server\\.insecure=true \
+          --set configs.secret.argocdServerAdminPassword="{{ argocd_htpasswd.stdout | replace(':', '') }}"
+      args:
+        executable: /bin/bash
+      register: argocd_install
+      retries: 10
+      delay: 15
+      until: argocd_install.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+        - not platform_parallel_installs_enabled
+
+    - name: Launch Argo CD install in background
+      ansible.builtin.shell: |
+        {{ kubectl_cmd }} create namespace argocd --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+        helm upgrade --install argocd argo/argo-cd \
+          --namespace argocd \
+          --set configs.params.server\\.insecure=true \
+          --set configs.secret.argocdServerAdminPassword="{{ argocd_htpasswd.stdout | replace(':', '') }}"
+      args:
+        executable: /bin/bash
+      register: argocd_install_async
+      async: "{{ platform_parallel_install_async_seconds }}"
+      poll: 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+        - platform_parallel_installs_enabled
+      changed_when: false
+
+    - name: Wait for background Longhorn install
+      ansible.builtin.async_status:
+        jid: "{{ longhorn_install_async.ansible_job_id }}"
+      register: longhorn_install
+      until: longhorn_install.finished
+      retries: "{{ platform_parallel_install_poll_retries }}"
+      delay: "{{ platform_parallel_install_poll_delay }}"
+      failed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - platform_parallel_installs_enabled
+
+    - name: Log background Longhorn install result
+      ansible.builtin.debug:
+        msg:
+          - "longhorn async job rc={{ longhorn_install.rc | default('n/a') }} finished={{ longhorn_install.finished | default('n/a') }} attempts={{ longhorn_install.attempts | default('n/a') }}"
+          - "longhorn stdout={{ (longhorn_install.stdout | default('') | trim)[:800] }}"
+          - "longhorn stderr={{ (longhorn_install.stderr | default('') | trim)[:1200] }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - platform_parallel_installs_enabled
+        - longhorn_install is defined
+        - (longhorn_install.rc | default(0) | int) != 0
+
+    - name: Emit structured Longhorn async install failure diagnostic
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . "{{ bootstrap_diagnostics_helper }}"
+        BOOTSTRAP_DIAGNOSTICS_ENABLED="{{ bootstrap_diagnostics_enabled }}"
+        BOOTSTRAP_DIAGNOSTICS_DIR="{{ bootstrap_diagnostics_dir }}"
+        BOOTSTRAP_RUN_ID="{{ bootstrap_run_id }}"
+        bootstrap_diag_init
+        kind="$(bootstrap_diag_classify_failure_kind {{ (longhorn_install.stderr | default(longhorn_install.stdout | default(''))) | trim | quote }})"
+        bootstrap_diag_record \
+          "phase=phase30" \
+          "step=longhorn-install" \
+          "component=longhorn" \
+          "operation=helm-install-async" \
+          "severity=error" \
+          "exit_code={{ longhorn_install.rc | default(1) }}" \
+          "attempt={{ longhorn_install.attempts | default('') }}" \
+          "failure_kind=${kind}" \
+          "dependency_kind=chart" \
+          "namespace=longhorn-system" \
+          "resource_ref=helm/longhorn" \
+          "summary=Longhorn background install failed after async wait" \
+          "stdout_excerpt={{ (longhorn_install.stdout | default('')) | trim }}" \
+          "stderr_excerpt={{ (longhorn_install.stderr | default('')) | trim }}" \
+          "log_path={{ bootstrap_diagnostics_jsonl }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - platform_parallel_installs_enabled
+        - longhorn_install is defined
+        - (longhorn_install.rc | default(0) | int) != 0
+
+    - name: Fail when background Longhorn install failed
+      ansible.builtin.fail:
+        msg: >-
+          Longhorn background install failed after async wait.
+          rc={{ longhorn_install.rc | default('n/a') }}
+          finished={{ longhorn_install.finished | default('n/a') }}
+          stderr={{ (longhorn_install.stderr | default('') | trim)[:1200] }}
+      when:
+        - inventory_hostname == rke2_primary_host
+        - platform_parallel_installs_enabled
+        - longhorn_install is defined
+        - (longhorn_install.rc | default(0) | int) != 0
+
+    - name: Ensure Longhorn StorageClass exists and capture its name
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if {{ kubectl_cmd }} get storageclass longhorn >/dev/null 2>&1; then
+          echo "longhorn"
+          exit 0
+        fi
+        name="$({{ kubectl_cmd }} get storageclass -o json | python3 -c 'import json,sys; data=json.load(sys.stdin); items=data.get("items",[]); scs=[sc for sc in items if sc.get("provisioner")=="driver.longhorn.io"]; names=[sc.get("metadata",{}).get("name","") for sc in scs]; name=("longhorn" if "longhorn" in names else next((n for n in names if n), "")); print(name) if name else sys.exit(1)' || true)"
+        if [ -n "${name}" ]; then
+          echo "${name}"
+          exit 0
+        fi
+        cat <<'YAML' | {{ kubectl_cmd }} apply -f -
+        apiVersion: storage.k8s.io/v1
+        kind: StorageClass
+        metadata:
+          name: longhorn
+          annotations:
+            storageclass.kubernetes.io/is-default-class: "true"
+        provisioner: driver.longhorn.io
+        allowVolumeExpansion: true
+        reclaimPolicy: Delete
+        volumeBindingMode: Immediate
+        parameters:
+          numberOfReplicas: "{{ longhorn_default_replica_count }}"
+        YAML
+        {{ kubectl_cmd }} get storageclass longhorn -o jsonpath='{.metadata.name}' --ignore-not-found
+      register: longhorn_sc_name
+      retries: 40
+      delay: 6
+      until: longhorn_sc_name.rc == 0 and longhorn_sc_name.stdout | trim | length > 0
+      changed_when: false
+      failed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Set Longhorn StorageClass name
+      ansible.builtin.set_fact:
+        longhorn_storageclass_name: "{{ longhorn_sc_name.stdout | trim }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - longhorn_sc_name is defined
+
+    - name: Capture Longhorn diagnostics when StorageClass is missing
+      ansible.builtin.shell: |
+        set -e
+        {{ kubectl_cmd }} get storageclass -o wide || true
+        {{ kubectl_cmd }} -n longhorn-system get pods -o wide || true
+        {{ kubectl_cmd }} -n longhorn-system get events --sort-by=.lastTimestamp | tail -n 50 || true
+        helm status longhorn -n longhorn-system || true
+      register: longhorn_sc_diag
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (longhorn_storageclass_name | default('')) | length == 0
+
+    - name: Emit structured Longhorn StorageClass missing diagnostic
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . "{{ bootstrap_diagnostics_helper }}"
+        BOOTSTRAP_DIAGNOSTICS_ENABLED="{{ bootstrap_diagnostics_enabled }}"
+        BOOTSTRAP_DIAGNOSTICS_DIR="{{ bootstrap_diagnostics_dir }}"
+        BOOTSTRAP_RUN_ID="{{ bootstrap_run_id }}"
+        bootstrap_diag_init
+        kind="$(bootstrap_diag_classify_failure_kind {{ (argocd_install.stderr | default(argocd_install.stdout | default(''))) | trim | quote }})"
+        bootstrap_diag_record \
+          "phase=phase30" \
+          "step=longhorn-storageclass" \
+          "component=longhorn" \
+          "operation=storageclass-check" \
+          "severity=error" \
+          "exit_code=1" \
+          "failure_kind=config" \
+          "dependency_kind=kubernetes-api" \
+          "namespace=longhorn-system" \
+          "resource_ref=storageclass/longhorn" \
+          "summary=Longhorn StorageClass was not created" \
+          "stdout_excerpt={{ (longhorn_sc_diag.stdout | default('')) | trim }}" \
+          "stderr_excerpt={{ (longhorn_sc_diag.stderr | default('')) | trim }}" \
+          "log_path={{ bootstrap_diagnostics_jsonl }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (longhorn_storageclass_name | default('')) | length == 0
+
+    - name: Fail when Longhorn StorageClass is missing
+      ansible.builtin.fail:
+        msg: >-
+          Longhorn StorageClass was not created. Check the Longhorn install and pods.
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (longhorn_storageclass_name | default('')) | length == 0
+
+    - name: Set Longhorn default replica count
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} -n longhorn-system patch settings.longhorn.io default-replica-count
+        --type=merge -p '{"value":"{{ longhorn_default_replica_count }}"}'
+      register: longhorn_replica_setting
+      retries: 10
+      delay: 6
+      until: longhorn_replica_setting.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Read Longhorn StorageClass replica count
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} get storageclass {{ longhorn_storageclass_name }} -o jsonpath='{.parameters.numberOfReplicas}' --ignore-not-found
+      register: longhorn_sc_replica_current
+      retries: 10
+      delay: 6
+      until: longhorn_sc_replica_current.stdout | trim | length > 0
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (longhorn_storageclass_name | default('')) | length > 0
+
+    - name: Check for PVCs using Longhorn StorageClass
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} get pvc -A
+        -o jsonpath='{range .items[?(@.spec.storageClassName=="{{ longhorn_storageclass_name }}")]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
+      register: longhorn_sc_pvcs
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (longhorn_storageclass_name | default('')) | length > 0
+
+    - name: Patch Longhorn StorageClass replica count (in place)
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} patch storageclass {{ longhorn_storageclass_name }}
+        --type=merge -p '{"parameters":{"numberOfReplicas":"{{ longhorn_default_replica_count }}"}}'
+      register: longhorn_sc_replica_patch
+      retries: 10
+      delay: 6
+      until: longhorn_sc_replica_patch.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (longhorn_storageclass_name | default('')) | length > 0
+        - longhorn_sc_replica_current.stdout | trim != (longhorn_default_replica_count | string)
+
+    - name: Reduce existing Longhorn volumes replica count when requested (best effort)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        desired="{{ longhorn_default_replica_count }}"
+        {{ kubectl_cmd }} -n longhorn-system get volumes.longhorn.io \
+          -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.numberOfReplicas}{"\n"}{end}' \
+          | while read -r vol reps; do
+              if [ -z "${vol}" ] || [ -z "${reps}" ]; then
+                continue
+              fi
+              case "${reps}" in
+                ''|*[!0-9]*) continue ;;
+              esac
+              if [ "${reps}" -gt "${desired}" ]; then
+                echo "patch ${vol}: ${reps} -> ${desired}"
+                {{ kubectl_cmd }} -n longhorn-system patch volumes.longhorn.io "${vol}" --type=merge -p "{\"spec\":{\"numberOfReplicas\":${desired}}}" >/dev/null || true
+              fi
+            done
+      args:
+        executable: /bin/bash
+      register: longhorn_reduce_existing
+      changed_when: false
+      failed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - longhorn_reduce_existing_volume_replicas | default(false) | bool
+
+    - name: Wait for Longhorn manager to be ready
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} -n longhorn-system rollout status daemonset/longhorn-manager --timeout=10m
+      register: longhorn_manager_rollout
+      retries: 3
+      delay: 10
+      until: longhorn_manager_rollout.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Capture Longhorn diagnostics on manager rollout failure
+      ansible.builtin.shell: |
+        set -e
+        {{ kubectl_cmd }} -n longhorn-system get pods -o wide
+        {{ kubectl_cmd }} -n longhorn-system get nodes.longhorn.io
+        {{ kubectl_cmd }} -n longhorn-system get volumes.longhorn.io
+        {{ kubectl_cmd }} -n longhorn-system get events --sort-by=.lastTimestamp | tail -n 50
+      register: longhorn_manager_diag
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - longhorn_manager_rollout is failed
+
+    - name: Wait for Longhorn driver deployer to be ready
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} -n longhorn-system rollout status deployment/longhorn-driver-deployer --timeout=10m
+      register: longhorn_driver_rollout
+      retries: 3
+      delay: 10
+      until: longhorn_driver_rollout.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Capture Longhorn diagnostics on driver deployer failure
+      ansible.builtin.shell: |
+        set -e
+        {{ kubectl_cmd }} -n longhorn-system get pods -o wide
+        {{ kubectl_cmd }} -n longhorn-system get nodes.longhorn.io
+        {{ kubectl_cmd }} -n longhorn-system get volumes.longhorn.io
+        {{ kubectl_cmd }} -n longhorn-system get events --sort-by=.lastTimestamp | tail -n 50
+      register: longhorn_driver_diag
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - longhorn_driver_rollout is failed
+
+    - name: Detect Longhorn disk pressure on break-glass node
+      ansible.builtin.shell: |
+        set -euo pipefail
+        node="{{ rke2_primary_host }}"
+        if ! LH_NODE_JSON="$({{ kubectl_cmd }} -n longhorn-system get nodes.longhorn.io "${node}" -o json)"; then
+          echo "unknown"
+          exit 0
+        fi
+        export LH_NODE_JSON
+        python3 "{{ playbook_dir }}/../ansible-scripts/longhorn_disk_status.py"
+      register: longhorn_disk_status
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - break_glass | default(false) | bool
+        - longhorn_single_node_profile_enabled | default(false) | bool
+
+    - name: Capture Longhorn unschedulable disk name
+      ansible.builtin.set_fact:
+        longhorn_unschedulable_disk: >-
+          {{
+            (longhorn_disk_status.stdout | trim).split('unschedulable:')[1]
+            if (longhorn_disk_status.stdout | trim).startswith('unschedulable:')
+            else ''
+          }}
+      when:
+        - inventory_hostname == rke2_primary_host
+        - break_glass | default(false) | bool
+        - longhorn_single_node_profile_enabled | default(false) | bool
+        - longhorn_disk_status is defined
+
+    - name: Apply opinionated Longhorn single-node storage settings
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n longhorn-system patch settings.longhorn.io storage-reserved-percentage-for-default-disk \
+          --type=merge -p '{"value":"0"}'
+        {{ kubectl_cmd }} -n longhorn-system patch settings.longhorn.io storage-minimal-available-percentage \
+          --type=merge -p '{"value":"0"}'
+        {{ kubectl_cmd }} -n longhorn-system patch settings.longhorn.io storage-over-provisioning-percentage \
+          --type=merge -p '{"value":"200"}'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - longhorn_single_node_profile_enabled | default(false) | bool
+
+    - name: Relax Longhorn disk pressure for break-glass node disk
+      ansible.builtin.shell: |
+        set -euo pipefail
+        node="{{ rke2_primary_host }}"
+        disk="{{ longhorn_unschedulable_disk }}"
+        {{ kubectl_cmd }} -n longhorn-system patch settings.longhorn.io storage-reserved-percentage-for-default-disk \
+          --type=merge -p '{"value":"0"}'
+        {{ kubectl_cmd }} -n longhorn-system patch settings.longhorn.io storage-minimal-available-percentage \
+          --type=merge -p '{"value":"0"}'
+        {{ kubectl_cmd }} -n longhorn-system patch settings.longhorn.io storage-over-provisioning-percentage \
+          --type=merge -p '{"value":"200"}'
+        {{ kubectl_cmd }} -n longhorn-system patch nodes.longhorn.io "${node}" --type=merge \
+          -p "{\"spec\":{\"disks\":{\"${disk}\":{\"storageReserved\":0,\"allowScheduling\":true}}}}"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - break_glass | default(false) | bool
+        - longhorn_single_node_profile_enabled | default(false) | bool
+        - longhorn_unschedulable_disk | length > 0
+
+    - name: Ensure Longhorn StorageClass is default
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} patch storageclass {{ longhorn_storageclass_name }} -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      register: longhorn_default_patch
+      retries: 5
+      delay: 6
+      until: longhorn_default_patch.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - (longhorn_storageclass_name | default('')) | length > 0
+
+    - name: Capture Longhorn diagnostics after storage class patch
+      ansible.builtin.shell: |
+        set -e
+        {{ kubectl_cmd }} -n longhorn-system get pods -o wide
+        {{ kubectl_cmd }} -n longhorn-system get nodes.longhorn.io
+        {{ kubectl_cmd }} -n longhorn-system get volumes.longhorn.io
+      register: longhorn_status_snapshot
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Wait for background Argo CD install
+      ansible.builtin.async_status:
+        jid: "{{ argocd_install_async.ansible_job_id }}"
+      register: argocd_install
+      until: argocd_install.finished
+      retries: "{{ platform_parallel_install_poll_retries }}"
+      delay: "{{ platform_parallel_install_poll_delay }}"
+      failed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+        - platform_parallel_installs_enabled
+
+    - name: Log background Argo CD install result
+      ansible.builtin.debug:
+        msg:
+          - "argocd async job rc={{ argocd_install.rc | default('n/a') }} finished={{ argocd_install.finished | default('n/a') }} attempts={{ argocd_install.attempts | default('n/a') }}"
+          - "argocd stdout={{ (argocd_install.stdout | default('') | trim)[:800] }}"
+          - "argocd stderr={{ (argocd_install.stderr | default('') | trim)[:1200] }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+        - platform_parallel_installs_enabled
+        - argocd_install is defined
+        - (argocd_install.rc | default(0) | int) != 0
+
+    - name: Emit structured Argo CD async install failure diagnostic
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . "{{ bootstrap_diagnostics_helper }}"
+        BOOTSTRAP_DIAGNOSTICS_ENABLED="{{ bootstrap_diagnostics_enabled }}"
+        BOOTSTRAP_DIAGNOSTICS_DIR="{{ bootstrap_diagnostics_dir }}"
+        BOOTSTRAP_RUN_ID="{{ bootstrap_run_id }}"
+        bootstrap_diag_init
+        bootstrap_diag_record \
+          "phase=phase30" \
+          "step=argocd-install" \
+          "component=argocd" \
+          "operation=helm-install-async" \
+          "severity=error" \
+          "exit_code={{ argocd_install.rc | default(1) }}" \
+          "attempt={{ argocd_install.attempts | default('') }}" \
+          "failure_kind=${kind}" \
+          "dependency_kind=chart" \
+          "namespace=argocd" \
+          "resource_ref=helm/argocd" \
+          "summary=Argo CD background install failed after async wait" \
+          "stdout_excerpt={{ (argocd_install.stdout | default('')) | trim }}" \
+          "stderr_excerpt={{ (argocd_install.stderr | default('')) | trim }}" \
+          "log_path={{ bootstrap_diagnostics_jsonl }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+        - platform_parallel_installs_enabled
+        - argocd_install is defined
+        - (argocd_install.rc | default(0) | int) != 0
+
+    - name: Fail when background Argo CD install failed
+      ansible.builtin.fail:
+        msg: >-
+          Argo CD background install failed after async wait.
+          rc={{ argocd_install.rc | default('n/a') }}
+          finished={{ argocd_install.finished | default('n/a') }}
+          stderr={{ (argocd_install.stderr | default('') | trim)[:1200] }}
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+        - platform_parallel_installs_enabled
+        - argocd_install is defined
+        - (argocd_install.rc | default(0) | int) != 0
+
+    - name: Routing ownership note for Argo CD UI
+      ansible.builtin.debug:
+        msg: >-
+          Argo CD UI routing is managed by pods/ingress/nginx-routing/ Ingress manifests.
+          Bootstrap does not create networking.k8s.io Ingress resources.
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+
+    - name: Normalize CoreDNS upstream forwarders for bootstrap stability
+      ansible.builtin.shell: |
+        set -euo pipefail
+        override_raw="{{ lookup('ansible.builtin.env', 'RKE2_COREDNS_FORWARDERS') | default(lookup('ansible.builtin.env', 'K3S_COREDNS_FORWARDERS') | default('', true), true) }}"
+
+        normalize_forwarders() {
+          printf '%s' "${1:-}" | tr ',' ' ' | awk '
+            {
+              for (i = 1; i <= NF; i++) {
+                ns = $i
+                if (!(ns in seen)) {
+                  print ns
+                  seen[ns] = 1
+                }
+              }
+            }
+          ' | xargs
+        }
+
+        is_invalid_nameserver() {
+          local ns="${1:-}"
+          case "${ns}" in
+            ""|127.*|::1|0.0.0.0|100.100.100.100|fd7a:115c:a1e0::53)
+              return 0
+              ;;
+          esac
+          return 1
+        }
+
+        detect_local_forwarders() {
+          local source_files=""
+          local ns=""
+          local out=""
+          source_files="/etc/resolv.conf /run/systemd/resolve/resolv.conf /run/systemd/resolve/stub-resolv.conf"
+
+          for f in ${source_files}; do
+            [ -r "${f}" ] || continue
+            while read -r ns; do
+              ns="$(printf '%s' "${ns}" | xargs)"
+              [ -n "${ns}" ] || continue
+              if is_invalid_nameserver "${ns}"; then
+                continue
+              fi
+              if printf '%s\n' "${out}" | grep -Fx "${ns}" >/dev/null 2>&1; then
+                continue
+              fi
+              out="${out}${ns}"$'\n'
+            done <<EOF
+        $(awk '/^\s*nameserver\s+/ {print $2}' "${f}" 2>/dev/null || true)
+        EOF
+          done
+
+          printf '%s' "${out}" | xargs
+        }
+
+        desired=""
+        source="auto"
+        override="$(normalize_forwarders "${override_raw}")"
+        if [ -n "${override}" ]; then
+          desired="${override}"
+          source="env-override"
+        else
+          desired="$(detect_local_forwarders)"
+          source="dhcp-local"
+        fi
+
+        if [ -z "${desired}" ]; then
+          desired="1.1.1.1 8.8.8.8"
+          source="public-fallback"
+        fi
+
+        cm_name=""
+        deploy_name=""
+        if {{ kubectl_cmd }} -n kube-system get configmap rke2-coredns-rke2-coredns >/dev/null 2>&1; then
+          cm_name="rke2-coredns-rke2-coredns"
+          deploy_name="rke2-coredns-rke2-coredns"
+        elif {{ kubectl_cmd }} -n kube-system get configmap coredns >/dev/null 2>&1; then
+          cm_name="coredns"
+          deploy_name="coredns"
+        else
+          echo "coredns configmap not found; skipping"
+          exit 0
+        fi
+
+        current_corefile="$({{ kubectl_cmd }} -n kube-system get configmap "${cm_name}" -o jsonpath='{.data.Corefile}' 2>/dev/null || true)"
+        if [ -z "${current_corefile}" ]; then
+          echo "coredns corefile empty; skipping"
+          exit 0
+        fi
+
+        patched_corefile="$(
+          python3 - "${current_corefile}" "${desired}" <<'PY'
+        import re
+        import sys
+
+        corefile = sys.argv[1] if len(sys.argv) > 1 else ""
+        desired = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
+
+        if not desired:
+            print(corefile, end="")
+            raise SystemExit(0)
+
+        pattern = re.compile(r"(^\s*forward\s+\.\s+)([^\n]+)$", re.MULTILINE)
+        patched = pattern.sub(lambda m: f"{m.group(1)}{desired}", corefile)
+
+        if patched == corefile:
+            lines = []
+            replaced = False
+            needle = re.compile(r"^\s*forward\s+\.\s+")
+            for line in corefile.splitlines(True):
+                if not replaced and needle.search(line):
+                    indent = re.match(r"^\s*", line).group(0)
+                    newline = "\n" if line.endswith("\n") else ""
+                    lines.append(f"{indent}forward . {desired}{newline}")
+                    replaced = True
+                else:
+                    lines.append(line)
+            patched = "".join(lines)
+
+        print(patched, end="")
+        PY
+        )"
+
+        if [ "${patched_corefile}" = "${current_corefile}" ]; then
+          echo "coredns forwarders unchanged (${desired}) source=${source}"
+          exit 0
+        fi
+
+        payload="$(python3 -c 'import json, sys; corefile = sys.argv[1] if len(sys.argv) > 1 else ""; print(json.dumps({"data": {"Corefile": corefile}}))' "${patched_corefile}")"
+
+        {{ kubectl_cmd }} -n kube-system patch configmap "${cm_name}" --type merge -p "${payload}"
+        echo "patched ${cm_name} forwarders -> ${desired} source=${source}"
+        if {{ kubectl_cmd }} -n kube-system get deployment "${deploy_name}" >/dev/null 2>&1; then
+          {{ kubectl_cmd }} -n kube-system rollout restart deployment "${deploy_name}" >/dev/null 2>&1 || true
+          {{ kubectl_cmd }} -n kube-system rollout status deployment "${deploy_name}" --timeout=180s >/dev/null 2>&1 || true
+        fi
+        post_patch_corefile="$({{ kubectl_cmd }} -n kube-system get configmap "${cm_name}" -o jsonpath='{.data.Corefile}' 2>/dev/null || true)"
+        if printf '%s\n' "${post_patch_corefile}" | grep -Eq '^[[:space:]]*forward[[:space:]]+\.[[:space:]]+/etc/resolv\.conf([[:space:]]|$)'; then
+          echo "coredns forwarders still reference /etc/resolv.conf after patch; refusing to continue"
+          exit 1
+        fi
+        echo "changed"
+      args:
+        executable: /bin/bash
+      register: coredns_forwarder_patch
+      changed_when: "'changed' in (coredns_forwarder_patch.stdout | default(''))"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Log CoreDNS forwarder normalization result
+      ansible.builtin.debug:
+        msg: "{{ (coredns_forwarder_patch.stdout | default('') | trim) if (coredns_forwarder_patch is defined) else 'coredns forwarder patch did not run' }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Detect Kubernetes service DNS domain for in-cluster FQDNs
+      ansible.builtin.shell: |
+        set -euo pipefail
+        corefile="$(
+          {{ kubectl_cmd }} -n kube-system get configmap rke2-coredns-rke2-coredns -o jsonpath='{.data.Corefile}' 2>/dev/null \
+            || {{ kubectl_cmd }} -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' 2>/dev/null \
+            || true
+        )"
+        if [ -z "${corefile}" ]; then
+          echo "cluster.local"
+          exit 0
+        fi
+        python3 -c 'import re, sys; corefile = sys.argv[1] if len(sys.argv) > 1 else ""; match = re.search(r"kubernetes\\s+([^\\s{]+)", corefile); domain = (match.group(1).strip() if match else "cluster.local"); print(domain or "cluster.local")' "${corefile}"
+      args:
+        executable: /bin/bash
+      register: gitea_kube_service_domain_cmd
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Set Kubernetes service DNS domain fact
+      ansible.builtin.set_fact:
+        gitea_kube_service_domain: "{{ gitea_kube_service_domain_cmd.stdout | default('cluster.local') | trim | default('cluster.local', true) }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Determine ready node count for Gitea DB mode
+      ansible.builtin.shell: |
+        set -euo pipefail
+        # Use tabular output to avoid stdin/heredoc parsing pitfalls.
+        ready_count="$({{ kubectl_cmd }} get nodes --no-headers 2>/dev/null | awk '$2 ~ /^Ready/ {c++} END{print c+0}' || true)"
+        if [ -z "${ready_count}" ] || ! printf '%s' "${ready_count}" | grep -Eq '^[0-9]+$'; then
+          ready_count="1"
+        fi
+        if [ "${ready_count}" -lt 1 ]; then
+          ready_count="1"
+        fi
+        echo "${ready_count}"
+      args:
+        executable: /bin/bash
+      register: gitea_ready_node_count
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Compute Gitea HA threshold and mode
+      ansible.builtin.set_fact:
+        gitea_db_ha_min_ready_nodes: >-
+          {{
+            (
+              lookup('ansible.builtin.env', 'GITEA_DB_HA_MIN_READY_NODES')
+              | default('3', true)
+              | trim
+              | int
+            )
+          }}
+        gitea_db_ha_enabled: >-
+          {{
+            (
+              lookup('ansible.builtin.env', 'GITEA_DB_HA_ENABLED')
+              | default('', true)
+              | trim
+              | bool
+            )
+            if (
+              lookup('ansible.builtin.env', 'GITEA_DB_HA_ENABLED')
+              | default('', true)
+              | trim
+              | length > 0
+            )
+            else (
+              (gitea_ready_node_count.stdout | trim | int) >=
+              (
+                lookup('ansible.builtin.env', 'GITEA_DB_HA_MIN_READY_NODES')
+                | default('3', true)
+                | trim
+                | int
+              )
+            )
+          }}
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Log Gitea DB mode decision
+      ansible.builtin.debug:
+        msg: >-
+          gitea_ready_nodes={{ gitea_ready_node_count.stdout | trim }},
+          gitea_db_ha_min_ready_nodes={{ gitea_db_ha_min_ready_nodes }},
+          gitea_db_ha_enabled={{ gitea_db_ha_enabled }}
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Ensure Gitea admin secret exists for bootstrap and GitOps
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ns="gitea"
+        {{ kubectl_cmd }} create namespace "${ns}" --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+        {{ kubectl_cmd }} -n "${ns}" create secret generic gitea-admin-secret \
+          --from-literal=username='gitea-admin' \
+          --from-literal=password='{{ gitea_admin_password }}' \
+          --from-literal=email='gitea-admin@example.com' \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n "${ns}" apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+      no_log: true
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Persist Cloudflare bootstrap token for later phases
+      ansible.builtin.copy:
+        content: "{{ external_dns_cloudflare_token }}\n"
+        dest: "{{ bootstrap_secret_dir }}/external_dns_cloudflare_token"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when:
+        - inventory_hostname == rke2_primary_host
+        - external_dns_cloudflare_token | length > 0
+
+    - name: Ensure ingress namespace exists for external-dns secret
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} create namespace ingress --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - external_dns_cloudflare_token | length > 0
+
+    - name: Create external-dns Cloudflare secret early
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} -n ingress create secret generic external-dns-cloudflare
+        --from-literal=api-token='{{ external_dns_cloudflare_token }}'
+        --dry-run=client -o yaml | {{ kubectl_cmd }} -n ingress apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      no_log: true
+      when:
+        - inventory_hostname == rke2_primary_host
+        - external_dns_cloudflare_token | length > 0
+
+    - name: Ensure authentik namespace exists for bootstrap secret
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} create namespace authentik --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Create Authentik bootstrap secret early
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n authentik create secret generic authentik-secrets \
+          --from-literal=secret_key='{{ lookup('file', bootstrap_secret_dir + '/authentik_secret_key') | trim }}' \
+          --from-literal=postgresql_password='{{ lookup('file', bootstrap_secret_dir + '/authentik_postgresql_password') | trim }}' \
+          --from-literal=password='{{ lookup('file', bootstrap_secret_dir + '/authentik_postgresql_password') | trim }}' \
+          --from-literal=postgres-password='{{ lookup('file', bootstrap_secret_dir + '/authentik_postgresql_password') | trim }}' \
+          --from-literal=bootstrap_password='{{ lookup('file', bootstrap_secret_dir + '/authentik_admin_password') | trim }}' \
+          --from-literal=bootstrap_token='{{ lookup('file', bootstrap_secret_dir + '/authentik_bootstrap_token') | trim }}' \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n authentik apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      no_log: true
+      changed_when: false
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Hand off Gitea bootstrap ownership to Phase 50 Argo flow
+      ansible.builtin.debug:
+        msg: >-
+          Skipping direct Phase 30 Gitea Helm install/seed path because
+          gitea_bootstrap_via_argocd=true. Phase 50 will let Argo deploy Gitea,
+          seed the repo, and then switch Argo bootstrap to the in-cluster Gitea repo.
+      when:
+        - inventory_hostname == rke2_primary_host
+        - gitea_bootstrap_via_argocd | bool
+
+    - name: Fail when cloudflared token is missing in break-glass mode
+      ansible.builtin.fail:
+        msg: >-
+          RANCHER_CLOUDFLARED_TUNNEL_TOKEN is required in break-glass mode.
+          Setup should auto-generate this from CLOUDFLARE_API_TOKEN.
+      when:
+        - inventory_hostname == rke2_primary_host
+        - break_glass | default(false) | bool
+        - cloudflared_tunnel_token | length == 0
+
+    - name: Ensure cloudflared namespace exists
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} create namespace {{ cloudflared_namespace }} --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cloudflared_enabled | bool
+
+    - name: Create cloudflared tunnel secret
+      ansible.builtin.shell: >
+        {{ kubectl_cmd }} -n {{ cloudflared_namespace }} create secret generic cloudflared-tunnel
+        --from-literal=token='{{ cloudflared_tunnel_token }}'
+        --dry-run=client -o yaml | {{ kubectl_cmd }} -n {{ cloudflared_namespace }} apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      no_log: true
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cloudflared_enabled | bool
+
+    - name: Deploy cloudflared tunnel
+      ansible.builtin.shell: |
+        cat <<'YAML' | {{ kubectl_cmd }} apply -f -
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: cloudflared
+          namespace: {{ cloudflared_namespace }}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: cloudflared
+          template:
+            metadata:
+              labels:
+                app: cloudflared
+            spec:
+              containers:
+                - name: cloudflared
+                  image: {{ cloudflared_image }}
+                  args:
+                    - tunnel
+                    - --no-autoupdate
+                    - run
+                  env:
+                    - name: TUNNEL_TOKEN
+                      valueFrom:
+                        secretKeyRef:
+                          name: cloudflared-tunnel
+                          key: token
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                    limits:
+                      cpu: 200m
+                      memory: 256Mi
+        YAML
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cloudflared_enabled | bool
+
+    - name: Deploy Argo CD app-of-apps (pre-OpenBao)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/argocd-apps-pre-openbao.yaml.j2"
+        dest: "/tmp/argocd-apps-pre-openbao.yaml"
+        mode: "0600"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+
+    - name: Apply Argo CD app-of-apps (pre-OpenBao)
+      ansible.builtin.shell: "{{ kubectl_cmd }} apply -f /tmp/argocd-apps-pre-openbao.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - argocd_enabled | bool
+
+    - name: Finalize Tailscale tags after successful platform install
+      ansible.builtin.include_role:
+        name: tailscale-retag
+      vars:
+        tailscale_retag_role_tag: "tag:{{ rke2_role }}"
+        tailscale_retag_platform_tag: "tag:rke2"
+        tailscale_retag_fail_on_missing_authkey: true
+        tailscale_retag_force: false
