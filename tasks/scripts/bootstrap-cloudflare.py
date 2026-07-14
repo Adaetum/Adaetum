@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Create or reuse the Cloudflare resources required by Adaetum setup.
+
+This script is deliberately idempotent: setup reruns should discover existing
+R2, token, Worker, DNS, and tunnel state instead of rotating provider resources
+without an operator decision. It must never print token values.
+"""
 import argparse
 import hashlib
 import json
@@ -14,6 +20,12 @@ API_BASE = "https://api.cloudflare.com/client/v4"
 
 
 def cf_api(method: str, path: str, token: str, payload=None):
+  """Call Cloudflare's API and return only its result field.
+
+  Errors retain method/path context but never interpolate the bearer token.
+  The Windows TLS fallback is kept narrowly scoped for Python certificate-store
+  failures and emits a visible warning because it weakens transport validation.
+  """
   url = f"{API_BASE}{path}"
   data = None
   if payload is not None:
@@ -51,6 +63,7 @@ def cf_api(method: str, path: str, token: str, payload=None):
 
 
 def get_account_id(token: str, account_id: str):
+  """Use an explicit account when supplied; otherwise select the first visible one."""
   if account_id:
     return account_id
   result = cf_api("GET", "/accounts?page=1&per_page=50", token)
@@ -77,6 +90,7 @@ def get_permission_group_id_for_path(token: str, path: str, name: str):
 
 
 def ensure_bucket(token: str, account_id: str, bucket: str):
+  """Create the R2 bucket once, accepting an already-created bucket on rerun."""
   try:
     cf_api(
       "POST",

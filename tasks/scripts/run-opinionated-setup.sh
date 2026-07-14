@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The supported fork-first setup entrypoint. It asks only for runtime secrets,
+# derives public values from platform.yaml, and commits rendered GitOps output
+# before the break-glass bundle creates a cluster from this fork.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
+# This local, ignored cache reduces repeated secret prompts. It is never a
+# source of truth for public platform configuration and must not be committed.
 cache_file="${repo_root}/.setup-opinionated.cache.env"
 supports_color=0
 if [ -t 1 ]; then
@@ -65,12 +71,13 @@ die() {
   printf '%s\n' "${c_red}${1}${c_reset}" >&2
   exit 1
 }
-
 prompt_value() {
   local label="$1"
   local default="${2:-}"
   local secret="${3:-0}"
   local value=""
+  # Non-interactive callers must supply values through the environment/cache;
+  # never try to read from a closed CI or automation stdin stream.
   if [ ! -t 0 ]; then
     if [ -n "${default}" ]; then
       printf '%s' "${default}" | tr -d '\r\n'
@@ -122,6 +129,8 @@ upsert_env_value() {
     printf '%s=%s\n' "${key}" "${value}" > "${file}"
     return 0
   fi
+  # Replace atomically so an interrupted setup run cannot leave a half-written
+  # cache or .env file containing only part of the required secret set.
   tmp="$(mktemp)"
   awk -v k="${key}" -v v="${value}" '
     BEGIN { done=0 }
@@ -360,6 +369,9 @@ assert_fresh_local_iso_output() {
   if [ -f "${repo_root}/pods/cluster-config/cluster-config.env" ] && [ "${repo_root}/pods/cluster-config/cluster-config.env" -nt "${newest_input}" ]; then
     newest_input="${repo_root}/pods/cluster-config/cluster-config.env"
   fi
+  if [ -f "${repo_root}/platform.yaml" ] && [ "${repo_root}/platform.yaml" -nt "${newest_input}" ]; then
+    newest_input="${repo_root}/platform.yaml"
+  fi
   if [ -f "${repo_root}/dist/ks-templates/rocky10.ks" ] && [ "${repo_root}/dist/ks-templates/rocky10.ks" -nt "${newest_input}" ]; then
     newest_input="${repo_root}/dist/ks-templates/rocky10.ks"
   fi
@@ -405,6 +417,31 @@ if [ -z "${default_ts_oauth_client_secret}" ]; then
   default_ts_oauth_client_secret="$(normalize_compact "$(existing_env_value .env TAILSCALE_OAUTH_CLIENT_SECRET)")"
 fi
 default_zone_input="$(normalize_compact "${default_zone_input}")"
+py_cmd="$(resolve_python_cmd || true)"
+if [ -z "${py_cmd}" ]; then
+  die "Missing required command: python3 for platform profile rendering."
+fi
+profile_env_file="$(mktemp)"
+if ! "${py_cmd}" ./tasks/scripts/validate-platform-profile.py --profile ./platform.yaml; then
+  rm -f "${profile_env_file}"
+  exit 1
+fi
+if ! "${py_cmd}" ./tasks/scripts/render-platform-profile.py --profile ./platform.yaml --output-setup-env "${profile_env_file}"; then
+  rm -f "${profile_env_file}"
+  exit 1
+fi
+profile_value() {
+  local key="$1"
+  awk -F= -v k="${key}" '$1==k {print substr($0, index($0, "=")+1); exit}' "${profile_env_file}" | tr -d '\r\n'
+}
+default_zone_input="$(profile_value CLUSTER_DOMAIN)"
+default_ts_domain="$(profile_value TAILSCALE_DOMAIN)"
+profile_cluster_tag="$(profile_value TAILSCALE_CLUSTER_TAG)"
+profile_ks_base_url="$(profile_value KS_BASE_URL)"
+profile_r2_bucket="$(profile_value R2_BUCKET)"
+rm -f "${profile_env_file}"
+unset -f profile_value
+ok "Platform profile selected: public setup values come from platform.yaml."
 # Initialize early so set -u does not fail before OAuth prompts run.
 ts_oauth_client_id="${default_ts_oauth_client_id}"
 ts_oauth_client_secret="${default_ts_oauth_client_secret}"
@@ -439,6 +476,7 @@ step_enabled() {
 gitops_rendered_subset_pathspecs() {
   cat <<'EOF'
 pods/cluster-config/cluster-config.env
+platform.yaml
 pods/argocd/bootstrap/app-of-apps.yaml
 pods/argocd/bootstrap/applicationset.yaml
 pods/argocd/platform/pre-openbao/openbao.yaml
@@ -683,6 +721,11 @@ normalize_and_compute_ks_base() {
   ts_domain="$(normalize_compact "${ts_domain}")"
   zone_input="$(normalize_compact "${zone_input}")"
 
+  if [ -n "${profile_ks_base_url:-}" ]; then
+    ks_base_url="${profile_ks_base_url}"
+    return 0
+  fi
+
   zone_input="$(printf '%s' "${zone_input}" | tr '[:upper:]' '[:lower:]' | sed -E 's#[[:space:]]+##g; s#/$##')"
   if is_valid_http_url "${zone_input}"; then
     ks_base_url="${zone_input}"
@@ -735,7 +778,7 @@ ensure_tailscale_oauth_ready() {
   fi
 
   sub_step "${substep_validate}" "Validate OAuth credentials before .env/ISO render"
-  cluster_tag="$(normalize_compact "$(existing_env_value .env TAILSCALE_CLUSTER_TAG)")"
+  cluster_tag="$(normalize_compact "${profile_cluster_tag:-}")"
   if [ -z "${cluster_tag}" ]; then
     cluster_tag="tag:cluster"
   fi
@@ -815,9 +858,11 @@ if step_enabled "1"; then
   sub_step "1.3" "Tailscale user API token"
   ts_user_token="$(prompt_value "Tailscale user token (TAILSCALE_USER_API_TOKEN)" "${default_ts_user_token}" 1)"
   sub_step "1.4" "Tailnet DNS name"
-  ts_domain="$(prompt_value "Tailnet DNS name (TAILSCALE_DOMAIN)" "${default_ts_domain}" 0)"
+  ts_domain="${default_ts_domain}"
+  echo "    using TAILSCALE_DOMAIN from platform.yaml: ${ts_domain}"
   sub_step "1.5" "Zone domain / KS base URL"
-  zone_input="$(prompt_value "Zone domain (example: example.services)" "${default_zone_input}" 0)"
+  zone_input="${default_zone_input}"
+  echo "    using cluster domain from platform.yaml: ${zone_input}"
   normalize_and_compute_ks_base
   validate_required_inputs "1"
   persist_cache
@@ -866,7 +911,7 @@ ARGOCD_GITHUB_USERNAME=${explicit_argocd_github_username}
 ARGOCD_GITHUB_TOKEN=${explicit_argocd_github_token}
 GITEA_SEED_SOURCE_USERNAME=${explicit_seed_source_username}
 GITEA_SEED_SOURCE_TOKEN=${explicit_seed_source_token}
-R2_BUCKET=iso
+R2_BUCKET=${profile_r2_bucket}
 KS_SHARED_TOKEN=${existing_ks_shared_token}
 KS_UPLOAD_TOKEN=${existing_ks_upload_token}
 BOOTSTRAP_BACKUP_PASSPHRASE=${existing_backup_passphrase}
@@ -890,7 +935,13 @@ EOF
   if [ -z "${py_cmd}" ]; then
     die "Missing required command: python3"
   fi
-  "${py_cmd}" ./tasks/scripts/render-pods-config.py --env-file .env --config-file ./pods/cluster-config/cluster-config.env --sync-from-env
+  sub_step "2.4a" "Render fork-owned platform.yaml"
+  "${py_cmd}" ./tasks/scripts/render-platform-profile.py \
+    --profile ./platform.yaml \
+    --runtime-env .env \
+    --output-env ./dist/platform.env \
+    --config-file ./pods/cluster-config/cluster-config.env \
+    --render-pods
   "${py_cmd}" ./tasks/scripts/render-pods-config.py --check
   "${py_cmd}" ./.validator/validate-pods-consistency.py
   ok "Pods cluster config rendered."

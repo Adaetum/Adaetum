@@ -1,27 +1,22 @@
 #!/usr/bin/env python3
+"""Restore tracked public outputs from the committed non-secret platform profile.
+
+This supports maintainers who need a safe baseline after local setup work. It
+does not read or preserve runtime secrets: the profile renderer is the only
+authority for every file this command writes.
+"""
 from __future__ import annotations
 
 import argparse
 import importlib.util
 import sys
-import tempfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RENDER_SCRIPT = REPO_ROOT / "tasks" / "scripts" / "render-pods-config.py"
+PROFILE_RENDER_SCRIPT = REPO_ROOT / "tasks" / "scripts" / "render-platform-profile.py"
 DEFAULT_CONFIG = REPO_ROOT / "pods" / "cluster-config" / "cluster-config.env"
-
-BASELINE_ENV = """\
-CLUSTER_DOMAIN=example.services
-CLUSTER_LOCAL_DOMAIN=example.local
-GITEA_SEED_TARGET_OWNER=gitea-admin
-GITEA_SEED_TARGET_REPO=cluster
-REGISTRY_PUBLIC_DOMAIN=registry.example.services
-RANCHER_PUBLIC_DOMAIN=rancher.example.services
-TAILSCALE_DOMAIN=example.ts.net
-TAILSCALE_CLUSTER_TAG=tag:cluster
-"""
 
 
 def load_render_module():
@@ -33,18 +28,31 @@ def load_render_module():
     return module
 
 
-def build_baseline_config(config_path: Path) -> dict[str, str]:
-    module = load_render_module()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        env_path = Path(tmpdir) / "baseline.env"
-        env_path.write_text(BASELINE_ENV, encoding="utf-8")
-        module.sync_config_from_env(env_path, config_path)
-    return module.parse_env_file(config_path)
+def load_profile_render_module():
+    spec = importlib.util.spec_from_file_location("render_platform_profile", PROFILE_RENDER_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load platform profile renderer: {PROFILE_RENDER_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def build_profile_config() -> dict[str, str]:
+    """Validate first so cleanup cannot render a malformed public baseline."""
+    profile_renderer = load_profile_render_module()
+    profile = profile_renderer.load_profile(REPO_ROOT / "platform.yaml")
+    profile_renderer.validate_profile(profile)
+    return profile_renderer.config_from_profile(profile)
 
 
 def write_baseline(config_path: Path) -> dict[str, str]:
+    """Write the generated config and all manifests coupled to its host values."""
     module = load_render_module()
-    config = build_baseline_config(config_path)
+    config = build_profile_config()
+    config_path.write_text(
+        "".join(f"{key}={config[key]}\n" for key in module.ENV_KEYS),
+        encoding="utf-8",
+    )
     failures = module.render_templates(config, check=False)
     failures.extend(module.render_app_configs(config, check=False))
     if failures:
@@ -53,16 +61,15 @@ def write_baseline(config_path: Path) -> dict[str, str]:
 
 
 def preview_baseline() -> str:
+    """Expose the exact non-secret config without changing the worktree."""
     module = load_render_module()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        config_path = Path(tmpdir) / "cluster-config.env"
-        config = build_baseline_config(config_path)
+    config = build_profile_config()
     return "\n".join(f"{key}={config[key]}" for key in module.ENV_KEYS) + "\n"
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Reset tracked public-safe pods config and rendered manifests to safe baseline placeholder values."
+        description="Render tracked public-safe pods config and manifests from platform.yaml."
     )
     parser.add_argument(
         "--config-file",
@@ -72,7 +79,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--preview",
         action="store_true",
-        help="Print the baseline cluster config without modifying the repo.",
+        help="Print the profile-derived cluster config without modifying the repo.",
     )
     args = parser.parse_args(argv[1:])
 
@@ -85,7 +92,7 @@ def main(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    print("Reset tracked public-safe pods config to baseline placeholders.", file=sys.stderr)
+    print("Rendered tracked public-safe pods config from platform.yaml.", file=sys.stderr)
     return 0
 
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Check that the bootstrap ApplicationSet can discover every declared pod app."""
 from __future__ import annotations
 
 import sys

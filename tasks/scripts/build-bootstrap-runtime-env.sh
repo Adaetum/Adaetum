@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Build the secret-bearing runtime payload embedded in the break-glass bundle.
+# It is derived from local runtime inputs, never from platform.yaml secrets
+# (which are prohibited), and is validated before the installer consumes it.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
@@ -33,6 +37,9 @@ github_token_looks_git_capable() {
   esac
 }
 
+# GITHUB_SYNC_TOKEN is the canonical opinionated credential. The aliases below
+# exist only as generated runtime fields consumed by Argo CD and Gitea during
+# the initial seed; users should not manage them independently.
 repo_auth_fallback_token=""
 if github_token_looks_git_capable "${GITHUB_SYNC_TOKEN}"; then
   repo_auth_fallback_token="${GITHUB_SYNC_TOKEN}"
@@ -171,6 +178,7 @@ emit_env_line() {
 
 {
   printf '%s\n' '# Generated bootstrap runtime env. Root-only.'
+  emit_env_line ADAETUM_CONFIG_CONTRACT "${ADAETUM_CONFIG_CONTRACT:-platform/v1alpha1}"
   emit_env_line BOOTSTRAP_BUNDLE_URL "${bootstrap_bundle_url_runtime:-}"
   emit_env_line BOOTSTRAP_BUNDLE_SHA256 "${bootstrap_bundle_sha256_runtime:-}"
   emit_env_line TAILSCALE_AUTHKEY "${TAILSCALE_AUTHKEY:-}"

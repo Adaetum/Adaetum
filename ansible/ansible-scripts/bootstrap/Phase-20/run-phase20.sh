@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 20 creates the temporary local secret authority required before OpenBao
+# is available. Existing non-empty files are intentionally preserved so reruns
+# do not desynchronize installed components from their bootstrap credentials.
+
 BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
 BOOTSTRAP_OWNER="${BOOTSTRAP_OWNER:-root:root}"
 

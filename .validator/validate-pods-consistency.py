@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Cross-check rendered pod files so related routing/config values cannot drift."""
 from __future__ import annotations
 
 import re
@@ -154,7 +155,6 @@ def main() -> int:
         "PROMETHEUS_LOCAL_HOST",
         "AUTHENTIK_PUBLIC_HOST",
         "AUTHENTIK_LOCAL_HOST",
-        "AUTHENTIK_LEGACY_LOCAL_HOST",
     ):
         if config[key] not in route_text:
             failures.append(f"pods/ingress: missing hostname from {key}")

@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 40 promotes OpenBao from an installed workload to the authority for
+# bootstrap secrets. Earlier phases may create temporary local files; later
+# phases should read durable secret material from OpenBao instead.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
 
+# Controls are grouped by responsibility: local bootstrap state, OpenBao
+# readiness, optional repair actions, then profile-derived public routing.
 BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
 OPENBAO_NAMESPACE="${OPENBAO_NAMESPACE:-openbao}"
 OPENBAO_POD="${OPENBAO_POD:-openbao-0}"
@@ -50,6 +56,8 @@ if [[ -n "${PHASE40_LOG_FILE}" ]]; then
   exec >>"${PHASE40_LOG_FILE}" 2>&1
 fi
 
+# ``--force`` and the environment switch allow an explicit recovery operator to
+# retry the OpenBao introduction path; normal reruns retain conservative mode.
 force=false
 if [[ "${1:-}" == "--force" ]]; then
   force=true

@@ -13,7 +13,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: home.example.local
+    - host: home.adaetum.local
       http:
         paths:
           - path: /

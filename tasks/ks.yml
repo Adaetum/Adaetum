@@ -962,6 +962,10 @@ tasks:
             command -v 7za
             return 0
           fi
+          if command -v 7zz >/dev/null 2>&1; then
+            command -v 7zz
+            return 0
+          fi
           if [ -x "/c/Program Files/7-Zip/7z.exe" ]; then
             printf '%s\n' "/c/Program Files/7-Zip/7z.exe"
             return 0
@@ -1054,6 +1058,10 @@ tasks:
           fi
           if command -v 7za >/dev/null 2>&1; then
             command -v 7za
+            return 0
+          fi
+          if command -v 7zz >/dev/null 2>&1; then
+            command -v 7zz
             return 0
           fi
           if [ -x "/c/Program Files/7-Zip/7z.exe" ]; then

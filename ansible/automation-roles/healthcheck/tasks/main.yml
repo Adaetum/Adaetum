@@ -1,4 +1,7 @@
 ---
+# Read-only host and cluster health evidence used by bootstrap diagnostics and
+# scheduled checks. Threshold failures are intentional signals for operators;
+# this role must not repair or mutate a node while measuring it.
 - name: Verify basic connectivity
   ansible.builtin.ping:
 

@@ -1,4 +1,7 @@
 ---
+# Optional Phase 30 installation path for Argo CD. It runs only on the elected
+# primary server so a break-glass cluster does not race itself. Day-two Argo CD
+# ownership moves to the in-cluster GitOps repository during later phases.
 - name: Skip Argo CD when disabled
   ansible.builtin.debug:
     msg: "Argo CD install is disabled."

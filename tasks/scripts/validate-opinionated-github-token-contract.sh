@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Confirm that the opinionated setup path derived all initial GitHub/Gitea
+# credentials from GITHUB_SYNC_TOKEN. It validates relationships, not secrets.
+
 env_file="${1:-.env}"
 
 normalize_value() {

@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 70 verifies that the in-cluster GitOps control pair works after the
+# Phase 50/60 transition. It is a health and handoff proof, not an installer.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
+# shellcheck disable=SC1091
+. "${script_dir}/control-pair-common.sh"
 
 ANSIBLE_INVENTORY="${ANSIBLE_INVENTORY:-ansible/node-inventory.yml}"
 ANSIBLE_PLAYBOOK="${ANSIBLE_PLAYBOOK:-ansible/playbooks/healthcheck.yml}"
@@ -26,24 +31,16 @@ if [[ -z "${BUNDLE_BOOTSTRAP_LOG_FILE:-}" ]]; then
   exec >>"${PHASE70_LOG_FILE}" 2>&1
 fi
 
+# Use the shared helper here so Phase 70 resolves the same checked-out fork and
+# kubectl binary that the control-pair phases use.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)"
-cd "${repo_root}"
-
-if [[ -z "${ANSIBLE_CONFIG:-}" && -f "${repo_root}/ansible/ansible.cfg" ]]; then
-  export ANSIBLE_CONFIG="${repo_root}/ansible/ansible.cfg"
-fi
-export ANSIBLE_ROLES_PATH="${repo_root}/ansible/automation-roles:${repo_root}/ansible/playbooks/roles:/etc/ansible/roles:/usr/share/ansible/roles"
+bootstrap_control_pair_prepare_repo "${repo_root}"
 
 if [[ -z "${KUBECONFIG:-}" && -f /etc/rancher/rke2/rke2.yaml ]]; then
   export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
 fi
 
-kubectl_bin=""
-if command -v kubectl >/dev/null 2>&1; then
-  kubectl_bin="$(command -v kubectl)"
-elif [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
-  kubectl_bin="/var/lib/rancher/rke2/bin/kubectl"
-fi
+kubectl_bin="$(bootstrap_control_pair_resolve_kubectl || true)"
 
 read_secret_file() {
   local path="${1:-}"
@@ -71,6 +68,8 @@ retry_cmd() {
   return 1
 }
 
+# Keep non-critical observations separate from failures that should make the
+# recovery proof fail. The exit trap records both in diagnostics JSON.
 phase70_failures=0
 phase70_critical_failures=0
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Run the complete local contract suite for generated pod configuration."""
 from __future__ import annotations
 
 import subprocess

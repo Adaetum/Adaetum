@@ -1,4 +1,8 @@
 ---
+# Phase 30 establishes an RKE2 platform baseline on the break-glass node. It
+# consumes temporary bootstrap secrets but does not make OpenBao authoritative;
+# Phase 40 owns that transition. Public host values come from the generated
+# runtime environment, which is derived from platform.yaml before this runs.
 - name: Platform bootstrap (Phase 30)
   hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
   become: true

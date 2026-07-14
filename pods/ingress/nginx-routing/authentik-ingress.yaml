@@ -4,13 +4,13 @@ metadata:
   name: authentik-ui
   namespace: authentik
   annotations:
-    external-dns.alpha.kubernetes.io/hostname: authentik.example.services
+    external-dns.alpha.kubernetes.io/hostname: authentik.adaetum.invalid
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 spec:
   ingressClassName: nginx
   rules:
-    - host: authentik.example.local
+    - host: authentik.adaetum.local
       http:
         paths:
           - path: /
@@ -20,17 +20,7 @@ spec:
                 name: authentik-server
                 port:
                   number: 80
-    - host: authentik.example.services
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 80
-    - host: authentik.local
+    - host: authentik.adaetum.invalid
       http:
         paths:
           - path: /

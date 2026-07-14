@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Generate the runtime .env contract for setup and bootstrap. platform.yaml
+# owns public cluster/delivery values; this script obtains or reuses only the
+# secret material needed by Cloudflare, GitHub, Tailscale, and recovery flows.
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+platform_profile="${ADAETUM_PLATFORM_PROFILE:-${repo_root}/platform.yaml}"
 out_file="${1:-.env}"
 existing_file="${2:-.env}"
 vm_out_file="${3:-}"
@@ -72,6 +78,8 @@ existing_value_primary() {
 }
 
 rand_token() {
+  # Prefer OpenSSL's CSPRNG. Python remains a fallback for supported machines
+  # where OpenSSL is unavailable; an empty value makes the caller fail closed.
   if [ "${have_openssl}" = "1" ]; then
     openssl rand -hex 32
   else
@@ -152,26 +160,6 @@ is_valid_http_url() {
     return 0
   fi
   return 1
-}
-
-derive_cluster_domain_from_ks_base_url() {
-  local ks_base_url="$1"
-  python3 - <<'PY' "${ks_base_url}"
-import sys, urllib.parse
-url = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-host = ""
-try:
-  p = urllib.parse.urlparse(url)
-  host = (p.netloc or "").split("@")[-1].split(":")[0].strip().lower()
-except Exception:
-  host = ""
-if host.startswith("bootstrap."):
-  print(host[len("bootstrap."):])
-elif host:
-  print(host)
-else:
-  print("")
-PY
 }
 
 infer_gh_repo() {
@@ -894,8 +882,6 @@ if [ "${write_vm_env}" = "1" ] && [ -n "${vm_out_file}" ] && [ "${vm_out_file}" 
   confirm_overwrite "${vm_out_file}"
 fi
 
-default_ks_base_url="$(existing_value KS_BASE_URL)"
-default_ks_base_url="${default_ks_base_url:-https://bootstrap.example.services}"
 default_ttl="$(existing_value TAILSCALE_OAUTH_TTL)"
 default_ttl="${default_ttl:-1h}"
 default_gh_branch="$(existing_value ARGOCD_GITHUB_REPO_BRANCH)"
@@ -910,11 +896,37 @@ default_gh_user="${default_gh_user:-$(infer_repo_owner_from_url "$(existing_valu
 default_gh_user="${default_gh_user:-$(infer_repo_owner_from_url "$(existing_value MONOREPO_GITHUB_REPO_URL)")}"
 default_gh_user="${default_gh_user:-$(infer_repo_owner_from_url "$(infer_github_repo_url || true)")}"
 default_gh_user="${default_gh_user:-github-user}"
-default_runner_image="$(existing_value ANSIBLE_RUNNER_IMAGE)"
 default_coredns_forwarders="$(existing_value K3S_COREDNS_FORWARDERS)"
 default_coredns_forwarders="${default_coredns_forwarders:-8.8.8.8,8.8.4.4}"
 
 printf '\nConfiguring required values for %s\n\n' "${out_file}"
+
+if [ ! -f "${platform_profile}" ]; then
+  echo "Missing platform profile: ${platform_profile}" >&2
+  exit 1
+fi
+profile_setup_env="$(mktemp)"
+cleanup_profile_setup_env() {
+  rm -f "${profile_setup_env}"
+}
+trap cleanup_profile_setup_env EXIT
+python3 "${repo_root}/tasks/scripts/validate-platform-profile.py" --profile "${platform_profile}" >/dev/null
+python3 "${repo_root}/tasks/scripts/render-platform-profile.py" --profile "${platform_profile}" --output-setup-env "${profile_setup_env}"
+profile_value() {
+  local key="$1"
+  awk -F= -v k="${key}" '$1==k {print substr($0, index($0, "=")+1); exit}' "${profile_setup_env}" | tr -d '\r\n'
+}
+PROFILE_KS_BASE_URL="$(profile_value KS_BASE_URL)"
+PROFILE_R2_BUCKET="$(profile_value R2_BUCKET)"
+PROFILE_CLUSTER_DOMAIN="$(profile_value CLUSTER_DOMAIN)"
+PROFILE_CLUSTER_LOCAL_DOMAIN="$(profile_value CLUSTER_LOCAL_DOMAIN)"
+PROFILE_TAILSCALE_DOMAIN="$(profile_value TAILSCALE_DOMAIN)"
+PROFILE_TAILSCALE_CLUSTER_TAG="$(profile_value TAILSCALE_CLUSTER_TAG)"
+PROFILE_RANCHER_PUBLIC_DOMAIN="$(profile_value RANCHER_PUBLIC_DOMAIN)"
+PROFILE_REGISTRY_PUBLIC_DOMAIN="$(profile_value REGISTRY_PUBLIC_DOMAIN)"
+PROFILE_GITEA_SEED_TARGET_OWNER="$(profile_value GITEA_SEED_TARGET_OWNER)"
+PROFILE_GITEA_SEED_TARGET_REPO="$(profile_value GITEA_SEED_TARGET_REPO)"
+PROFILE_ANSIBLE_RUNNER_IMAGE="$(profile_value ANSIBLE_RUNNER_IMAGE)"
 
 # Cloudflare + R2 + Worker
 CLOUDFLARE_API_TOKEN="$(prompt_value CLOUDFLARE_API_TOKEN 'CLOUDFLARE_API_TOKEN' "$(existing_value CLOUDFLARE_API_TOKEN)" 1)"
@@ -923,10 +935,8 @@ CLOUDFLARE_ACCOUNT_ID="$(existing_value CLOUDFLARE_ACCOUNT_ID)"
 R2_ACCESS_KEY_ID="$(existing_value R2_ACCESS_KEY_ID)"
 R2_SECRET_ACCESS_KEY="$(existing_value R2_SECRET_ACCESS_KEY)"
 R2_ENDPOINT="$(existing_value R2_ENDPOINT)"
-R2_BUCKET="$(existing_value R2_BUCKET)"
-KS_BASE_URL="$(existing_value KS_BASE_URL)"
-[ -n "${R2_BUCKET}" ] || R2_BUCKET="iso"
-[ -n "${KS_BASE_URL}" ] || KS_BASE_URL="${default_ks_base_url}"
+R2_BUCKET="${PROFILE_R2_BUCKET}"
+KS_BASE_URL="${PROFILE_KS_BASE_URL}"
 
 # Reuse existing R2 credentials without rotating tokens:
 # infer account id from endpoint and endpoint from account id when possible.
@@ -950,7 +960,7 @@ if [ -n "${CLOUDFLARE_API_TOKEN}" ]; then
       "${R2_ACCESS_KEY_ID}" \
       "${R2_SECRET_ACCESS_KEY}" \
       "${R2_ENDPOINT}" \
-      "$(existing_value RANCHER_PUBLIC_DOMAIN)" \
+      "${PROFILE_RANCHER_PUBLIC_DOMAIN}" \
       "$(existing_value RANCHER_CLOUDFLARED_ORIGIN_URL)" \
       "$(existing_value RANCHER_CLOUDFLARED_HTTP_HOST_HEADER)" \
       "$(existing_value RANCHER_CLOUDFLARED_TUNNEL_TOKEN)" \
@@ -981,27 +991,13 @@ R2_ACCESS_KEY_ID="$(prompt_value R2_ACCESS_KEY_ID 'R2_ACCESS_KEY_ID' "${R2_ACCES
 R2_SECRET_ACCESS_KEY="$(prompt_value R2_SECRET_ACCESS_KEY 'R2_SECRET_ACCESS_KEY' "${R2_SECRET_ACCESS_KEY}" 1)"
 R2_ENDPOINT="$(prompt_value R2_ENDPOINT 'R2_ENDPOINT' "${R2_ENDPOINT}")"
 R2_ENDPOINT="$(ensure_valid_http_url "${R2_ENDPOINT}" 'R2_ENDPOINT')"
-R2_BUCKET="$(prompt_value R2_BUCKET 'R2_BUCKET' "${R2_BUCKET}")"
+R2_BUCKET="${PROFILE_R2_BUCKET}"
 R2_BUCKET="$(ensure_valid_r2_bucket "${R2_BUCKET}" 'R2_BUCKET')"
-KS_BASE_URL="$(prompt_value KS_BASE_URL 'KS_BASE_URL' "${KS_BASE_URL}")"
+KS_BASE_URL="${PROFILE_KS_BASE_URL}"
 KS_BASE_URL="$(ensure_valid_http_url "${KS_BASE_URL}" 'KS_BASE_URL')"
 
-default_cluster_domain="$(existing_value_primary CLUSTER_DOMAIN)"
-if [ -z "${default_cluster_domain}" ]; then
-  default_cluster_domain="$(derive_cluster_domain_from_ks_base_url "${KS_BASE_URL}")"
-fi
-[ -n "${default_cluster_domain}" ] || default_cluster_domain="example.services"
-CLUSTER_DOMAIN="$(prompt_value CLUSTER_DOMAIN 'CLUSTER_DOMAIN' "${default_cluster_domain}")"
-
-default_cluster_local_domain="$(existing_value_primary CLUSTER_LOCAL_DOMAIN)"
-if [ -z "${default_cluster_local_domain}" ]; then
-  default_cluster_local_domain="$(printf '%s' "${CLUSTER_DOMAIN}" | awk -F. '{
-    if (NF <= 1) { print $1 ".local"; next }
-    OFS="."; $NF="local"; print
-  }')"
-fi
-[ -n "${default_cluster_local_domain}" ] || default_cluster_local_domain="${CLUSTER_DOMAIN%.*}.local"
-CLUSTER_LOCAL_DOMAIN="$(prompt_value CLUSTER_LOCAL_DOMAIN 'CLUSTER_LOCAL_DOMAIN' "${default_cluster_local_domain}")"
+CLUSTER_DOMAIN="${PROFILE_CLUSTER_DOMAIN}"
+CLUSTER_LOCAL_DOMAIN="${PROFILE_CLUSTER_LOCAL_DOMAIN}"
 
 default_shared="$(existing_value KS_SHARED_TOKEN)"
 if [ -z "${default_shared}" ]; then
@@ -1042,10 +1038,8 @@ else
   TAILSCALE_OAUTH_CLIENT_SECRET="$(prompt_value TAILSCALE_OAUTH_CLIENT_SECRET 'TAILSCALE_OAUTH_CLIENT_SECRET' "$(existing_value TAILSCALE_OAUTH_CLIENT_SECRET)" 1)"
 fi
 TAILSCALE_OAUTH_TTL="$(prompt_value TAILSCALE_OAUTH_TTL 'TAILSCALE_OAUTH_TTL' "${default_ttl}")"
-TAILSCALE_DOMAIN="$(prompt_value TAILSCALE_DOMAIN 'TAILSCALE_DOMAIN' "$(existing_value TAILSCALE_DOMAIN)")"
-default_cluster_tag="$(existing_value TAILSCALE_CLUSTER_TAG)"
-[ -n "${default_cluster_tag}" ] || default_cluster_tag="tag:cluster"
-TAILSCALE_CLUSTER_TAG="$(prompt_value TAILSCALE_CLUSTER_TAG 'TAILSCALE_CLUSTER_TAG' "${default_cluster_tag}")"
+TAILSCALE_DOMAIN="${PROFILE_TAILSCALE_DOMAIN}"
+TAILSCALE_CLUSTER_TAG="${PROFILE_TAILSCALE_CLUSTER_TAG}"
 if [ -z "${TAILSCALE_CLUSTER_TAG}" ]; then
   TAILSCALE_CLUSTER_TAG="tag:cluster"
 elif ! printf '%s' "${TAILSCALE_CLUSTER_TAG}" | grep -q '^tag:'; then
@@ -1081,30 +1075,9 @@ fi
 
 # Platform/Kubernetes render inputs
 # Opinionated defaults: do not prompt.
-ANSIBLE_RUNNER_IMAGE="${default_runner_image}"
+ANSIBLE_RUNNER_IMAGE="${PROFILE_ANSIBLE_RUNNER_IMAGE}"
 K3S_COREDNS_FORWARDERS="${default_coredns_forwarders}"
-default_rancher_public_domain="$(existing_value RANCHER_PUBLIC_DOMAIN)"
-if [ -z "${default_rancher_public_domain}" ]; then
-  ks_host="$(python3 - <<'PY' "${KS_BASE_URL}"
-import sys, urllib.parse
-url = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-host = ""
-try:
-  p = urllib.parse.urlparse(url)
-  host = (p.netloc or "").split("@")[-1].split(":")[0]
-except Exception:
-  host = ""
-if host.startswith("bootstrap."):
-  print("rancher." + host[len("bootstrap."):])
-elif host:
-  print("rancher." + host)
-else:
-  print("")
-PY
-)"
-  default_rancher_public_domain="${ks_host}"
-fi
-RANCHER_PUBLIC_DOMAIN="${default_rancher_public_domain}"
+RANCHER_PUBLIC_DOMAIN="${PROFILE_RANCHER_PUBLIC_DOMAIN}"
 default_rancher_origin_url="$(existing_value RANCHER_CLOUDFLARED_ORIGIN_URL)"
 [ -n "${default_rancher_origin_url}" ] || default_rancher_origin_url="http://rancher.cattle-system.svc.cluster.local:80"
 RANCHER_CLOUDFLARED_ORIGIN_URL="${default_rancher_origin_url}"
@@ -1114,9 +1087,7 @@ RANCHER_CLOUDFLARED_HTTP_HOST_HEADER="${default_rancher_host_header}"
 RANCHER_CLOUDFLARED_TUNNEL_TOKEN="$(existing_value RANCHER_CLOUDFLARED_TUNNEL_TOKEN)"
 RANCHER_CLOUDFLARED_TUNNEL_ID="$(existing_value RANCHER_CLOUDFLARED_TUNNEL_ID)"
 RANCHER_CLOUDFLARED_TUNNEL_NAME="$(existing_value RANCHER_CLOUDFLARED_TUNNEL_NAME)"
-default_registry_public_domain="$(existing_value REGISTRY_PUBLIC_DOMAIN)"
-[ -n "${default_registry_public_domain}" ] || default_registry_public_domain="registry.${CLUSTER_DOMAIN}"
-REGISTRY_PUBLIC_DOMAIN="${default_registry_public_domain}"
+REGISTRY_PUBLIC_DOMAIN="${PROFILE_REGISTRY_PUBLIC_DOMAIN}"
 default_ingress_public_hosts="$(existing_value_primary CLOUDFLARED_INGRESS_PUBLIC_HOSTS)"
 [ -n "${default_ingress_public_hosts}" ] || default_ingress_public_hosts="$(printf '%s' "registry.${CLUSTER_DOMAIN},gitea.${CLUSTER_DOMAIN},argocd.${CLUSTER_DOMAIN},authentik.${CLUSTER_DOMAIN},headlamp.${CLUSTER_DOMAIN},home.${CLUSTER_DOMAIN},alertmanager.${CLUSTER_DOMAIN},grafana.${CLUSTER_DOMAIN},prometheus.${CLUSTER_DOMAIN}")"
 CLOUDFLARED_INGRESS_PUBLIC_HOSTS="${default_ingress_public_hosts}"
@@ -1135,20 +1106,6 @@ if [ "${default_ingress_origin_url}" = "https://rke2-ingress-nginx-controller.ku
 fi
 INGRESS_CLOUDFLARED_ORIGIN_NO_TLS_VERIFY="${default_ingress_origin_no_tls_verify}"
 ANSIBLE_RUNNER_REGISTRY_HOST="${REGISTRY_PUBLIC_DOMAIN}"
-
-legacy_runner_image_local="gitea.${CLUSTER_LOCAL_DOMAIN}/gitea-admin/ansible-runner:latest"
-legacy_runner_image_public="gitea.${CLUSTER_DOMAIN}/gitea-admin/ansible-runner:latest"
-legacy_runner_image_registry_local="registry.${CLUSTER_LOCAL_DOMAIN}/gitea-admin/ansible-runner:latest"
-legacy_runner_image_registry_public="${ANSIBLE_RUNNER_REGISTRY_HOST}/gitea-admin/ansible-runner:latest"
-if [ -z "${default_runner_image}" ] || \
-   [ "${default_runner_image}" = "ansible-runner:local" ] || \
-   [ "${default_runner_image}" = "${legacy_runner_image_local}" ] || \
-   [ "${default_runner_image}" = "${legacy_runner_image_public}" ] || \
-   [ "${default_runner_image}" = "${legacy_runner_image_registry_local}" ] || \
-   [ "${default_runner_image}" = "${legacy_runner_image_registry_public}" ] || \
-   [ "${default_runner_image}" = "gitea-http.gitea.svc.cluster.local:3000/gitea-admin/ansible-runner:latest" ]; then
-  default_runner_image="${ANSIBLE_RUNNER_REGISTRY_HOST}/gitea-admin/ansible-runner:latest"
-fi
 
 if [ -n "${CLOUDFLARE_API_TOKEN}" ] && [ -n "${RANCHER_PUBLIC_DOMAIN}" ]; then
   if cloudflare_bootstrap_from_pat \
@@ -1203,7 +1160,6 @@ if [ -n "${RANCHER_PUBLIC_DOMAIN}" ] && [ -z "${RANCHER_CLOUDFLARED_TUNNEL_TOKEN
   fi
 fi
 
-RANCHER_PUBLIC_DOMAIN="$(prompt_value RANCHER_PUBLIC_DOMAIN 'RANCHER_PUBLIC_DOMAIN' "${RANCHER_PUBLIC_DOMAIN}")"
 RANCHER_CLOUDFLARED_TUNNEL_TOKEN="$(prompt_value RANCHER_CLOUDFLARED_TUNNEL_TOKEN 'RANCHER_CLOUDFLARED_TUNNEL_TOKEN' "${RANCHER_CLOUDFLARED_TUNNEL_TOKEN}" 1)"
 if [ -z "${RANCHER_CLOUDFLARED_TUNNEL_TOKEN}" ]; then
   echo "Missing required RANCHER_CLOUDFLARED_TUNNEL_TOKEN for break-glass bootstrap."
@@ -1242,17 +1198,9 @@ default_seed_source_username="$(existing_value GITEA_SEED_SOURCE_USERNAME)"
 [ "${default_seed_source_username}" = "oauth2" ] && default_seed_source_username="${default_gh_user}"
 GITEA_SEED_SOURCE_USERNAME="${default_seed_source_username}"
 
-default_seed_target_owner="$(existing_value GITEA_SEED_TARGET_OWNER)"
-[ -n "${default_seed_target_owner}" ] || default_seed_target_owner="gitea-admin"
-GITEA_SEED_TARGET_OWNER="$(prompt_value GITEA_SEED_TARGET_OWNER 'GITEA_SEED_TARGET_OWNER' "${default_seed_target_owner}")"
+GITEA_SEED_TARGET_OWNER="${PROFILE_GITEA_SEED_TARGET_OWNER}"
 
-default_seed_target_repo="$(existing_value GITEA_SEED_TARGET_REPO)"
-[ -n "${default_seed_target_repo}" ] || default_seed_target_repo="cluster"
-if [ -z "${default_seed_target_repo}" ] && [ -n "${GITEA_SEED_SOURCE_REPO_URL}" ]; then
-  default_seed_target_repo="$(infer_repo_name_from_url "${GITEA_SEED_SOURCE_REPO_URL}" || true)"
-fi
-[ -n "${default_seed_target_repo}" ] || default_seed_target_repo="cluster"
-GITEA_SEED_TARGET_REPO="$(prompt_value GITEA_SEED_TARGET_REPO 'GITEA_SEED_TARGET_REPO' "${default_seed_target_repo}")"
+GITEA_SEED_TARGET_REPO="${PROFILE_GITEA_SEED_TARGET_REPO}"
 
 gh_auth_mode_default="app"
 existing_github_sync_token="$(existing_value GITHUB_SYNC_TOKEN)"

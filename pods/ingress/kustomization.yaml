@@ -125,16 +125,6 @@ replacements:
   - source:
       kind: ConfigMap
       name: ingress-cluster-config
-      fieldPath: data.AUTHENTIK_LEGACY_LOCAL_HOST
-    targets:
-      - select:
-          kind: Ingress
-          name: authentik-ui
-        fieldPaths:
-          - spec.rules.2.host
-  - source:
-      kind: ConfigMap
-      name: ingress-cluster-config
       fieldPath: data.ARGOCD_LOCAL_HOST
     targets:
       - select:

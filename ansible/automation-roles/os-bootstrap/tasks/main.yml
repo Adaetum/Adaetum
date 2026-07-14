@@ -1,3 +1,6 @@
+# Establish the operating-system prerequisites used by the RKE2 bootstrap.
+# Red Hat release-version handling is explicit because installer media and a
+# freshly provisioned host can otherwise resolve different DNF repositories.
 - name: Derive DNF major releasever for RedHat family
   ansible.builtin.set_fact:
     os_bootstrap_dnf_releasever_major: >-

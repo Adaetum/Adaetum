@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""Render profile-derived public configuration into pod manifests and ConfigMaps.
+
+This is an internal renderer: `render-platform-profile.py` validates the public
+contract first, then calls this file with a flat generated configuration. The
+templates remain readable Kubernetes source while committed non-template files
+are deterministic outputs used by the bootstrap bundle.
+"""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +17,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = REPO_ROOT / "pods" / "cluster-config" / "cluster-config.env"
 
+# Source-template to generated-output pairs. Keep this inventory explicit so a
+# new public hostname cannot become an untracked hand-edited manifest.
 TEMPLATE_TARGETS = [
     ("pods/argocd/bootstrap/app-of-apps.yaml.tmpl", "pods/argocd/bootstrap/app-of-apps.yaml"),
     ("pods/argocd/bootstrap/applicationset.yaml.tmpl", "pods/argocd/bootstrap/applicationset.yaml"),
@@ -42,6 +51,8 @@ TEMPLATE_TARGETS = [
     ("pods/ingress/observability-routing/prometheus-public-ingress.yaml.tmpl", "pods/ingress/observability-routing/prometheus-public-ingress.yaml"),
 ]
 
+# ConfigMap fields that Kustomize copies into manifests after template render.
+# These are listed by consumer to make ownership visible during reviews.
 APP_CONFIG_TARGETS = [
     (
         "pods/ansible/ansible/ansible-cluster-config.yaml",
@@ -61,7 +72,6 @@ APP_CONFIG_TARGETS = [
             "OPENBAO_PUBLIC_HOST",
             "AUTHENTIK_LOCAL_HOST",
             "AUTHENTIK_PUBLIC_HOST",
-            "AUTHENTIK_LEGACY_LOCAL_HOST",
             "AUTHENTIK_FORWARD_AUTH_URL",
             "AUTHENTIK_LOCAL_AUTH_SIGNIN",
             "AUTHENTIK_PUBLIC_AUTH_SIGNIN",
@@ -145,7 +155,6 @@ ENV_KEYS = (
     "RANCHER_PUBLIC_HOST",
     "AUTHENTIK_PUBLIC_HOST",
     "AUTHENTIK_LOCAL_HOST",
-    "AUTHENTIK_LEGACY_LOCAL_HOST",
     "AUTHENTIK_FORWARD_AUTH_URL",
     "AUTHENTIK_LOCAL_AUTH_SIGNIN",
     "AUTHENTIK_PUBLIC_AUTH_SIGNIN",
@@ -161,6 +170,7 @@ ENV_KEYS = (
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
+    """Read the generated flat config without treating it as user input syntax."""
     values: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -171,127 +181,17 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def load_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    return parse_env_file(path)
-
-
-def env_or_existing(env_values: dict[str, str], key: str, fallback: str = "") -> str:
-    value = (env_values.get(key) or "").strip()
-    return value if value else fallback
-
-
-def derive_local_domain(cluster_domain: str) -> str:
-    parts = [part for part in cluster_domain.split(".") if part]
-    if len(parts) <= 1:
-        return f"{parts[0] if parts else 'example'}.local"
-    parts[-1] = "local"
-    return ".".join(parts)
-
-
-def derive_public_host(prefix: str, domain: str) -> str:
-    return f"{prefix}.{domain}".strip(".")
-
-
-def derive_repo_name(repo_url: str) -> str:
-    cleaned = repo_url.strip().rstrip("/")
-    if not cleaned:
-        return "cluster"
-    name = cleaned.split("/")[-1]
-    if name.endswith(".git"):
-        name = name[:-4]
-    return name or "cluster"
-
-
-def sync_config_from_env(env_path: Path, config_path: Path) -> None:
-    env_values = load_env_file(env_path)
-    cluster_domain = env_or_existing(env_values, "CLUSTER_DOMAIN", "example.services")
-    cluster_local_domain = env_or_existing(env_values, "CLUSTER_LOCAL_DOMAIN", derive_local_domain(cluster_domain))
-    repo_owner = env_or_existing(env_values, "GITEA_SEED_TARGET_OWNER", "gitea-admin")
-    repo_name = env_or_existing(env_values, "GITEA_SEED_TARGET_REPO", derive_repo_name(env_or_existing(env_values, "ARGOCD_GITHUB_REPO_URL", "")))
-    public_domain_filter = env_or_existing(env_values, "REGISTRY_PUBLIC_DOMAIN", f"registry.{cluster_domain}")
-    default_ansible_runner_image = f"{public_domain_filter}/{repo_owner}/ansible-runner:latest"
-    ansible_runner_image = env_or_existing(env_values, "ANSIBLE_RUNNER_IMAGE", default_ansible_runner_image)
-    legacy_runner_images = {
-        f"gitea.{cluster_local_domain}/{repo_owner}/ansible-runner:latest",
-        f"gitea.{cluster_domain}/{repo_owner}/ansible-runner:latest",
-        f"registry.{cluster_local_domain}/{repo_owner}/ansible-runner:latest",
-        f"gitea-http.gitea.svc.cluster.local:3000/{repo_owner}/ansible-runner:latest",
-    }
-    if ansible_runner_image in legacy_runner_images:
-        ansible_runner_image = default_ansible_runner_image
-    tailscale_domain = env_or_existing(env_values, "TAILSCALE_DOMAIN", "example.ts.net")
-    tailscale_cluster_tag = env_or_existing(env_values, "TAILSCALE_CLUSTER_TAG", "tag:cluster")
-    values = {
-        "CLUSTER_DOMAIN": cluster_domain,
-        "CLUSTER_LOCAL_DOMAIN": cluster_local_domain,
-        "GITEA_REPO_OWNER": repo_owner,
-        "GITEA_REPO_NAME": repo_name or "cluster",
-        "GITEA_PUBLIC_HOST": derive_public_host("gitea", cluster_domain),
-        "GITEA_LOCAL_HOST": derive_public_host("gitea", cluster_local_domain),
-        "GITEA_CANONICAL_HOST": env_or_existing(env_values, "GITEA_CANONICAL_HOST", derive_public_host("gitea", cluster_local_domain)),
-        "ARGOCD_PUBLIC_HOST": derive_public_host("argocd", cluster_domain),
-        "ARGOCD_LOCAL_HOST": derive_public_host("argocd", cluster_local_domain),
-        "OPENBAO_PUBLIC_HOST": derive_public_host("openbao", cluster_domain),
-        "OPENBAO_LOCAL_HOST": derive_public_host("openbao", cluster_local_domain),
-        "HOMEPAGE_PUBLIC_HOST": derive_public_host("home", cluster_domain),
-        "HOMEPAGE_LOCAL_HOST": derive_public_host("home", cluster_local_domain),
-        "HOMEPAGE_ALLOWED_HOSTS": ",".join(
-            [
-                derive_public_host("home", cluster_local_domain),
-                derive_public_host("home", cluster_domain),
-                "homepage.homepage.svc.cluster.local",
-                "homepage.homepage.svc",
-                "localhost",
-                "127.0.0.1",
-            ]
-        ),
-        "HEADLAMP_PUBLIC_HOST": derive_public_host("headlamp", cluster_domain),
-        "HEADLAMP_LOCAL_HOST": derive_public_host("headlamp", cluster_local_domain),
-        "ALERTMANAGER_PUBLIC_HOST": derive_public_host("alertmanager", cluster_domain),
-        "ALERTMANAGER_LOCAL_HOST": derive_public_host("alertmanager", cluster_local_domain),
-        "GRAFANA_PUBLIC_HOST": derive_public_host("grafana", cluster_domain),
-        "GRAFANA_LOCAL_HOST": derive_public_host("grafana", cluster_local_domain),
-        "PROMETHEUS_PUBLIC_HOST": derive_public_host("prometheus", cluster_domain),
-        "PROMETHEUS_LOCAL_HOST": derive_public_host("prometheus", cluster_local_domain),
-        "RANCHER_PUBLIC_HOST": env_or_existing(env_values, "RANCHER_PUBLIC_DOMAIN", derive_public_host("rancher", cluster_domain)),
-        "AUTHENTIK_PUBLIC_HOST": derive_public_host("authentik", cluster_domain),
-        "AUTHENTIK_LOCAL_HOST": derive_public_host("authentik", cluster_local_domain),
-        "AUTHENTIK_LEGACY_LOCAL_HOST": "authentik.local",
-        "AUTHENTIK_FORWARD_AUTH_URL": (
-            "http://authentik-server.authentik.svc.cluster.local:80"
-            "/outpost.goauthentik.io/auth/nginx"
-        ),
-        "AUTHENTIK_LOCAL_AUTH_SIGNIN": (
-            "https://$host/outpost.goauthentik.io/start?rd=$scheme://$http_host$escaped_request_uri"
-        ),
-        "AUTHENTIK_PUBLIC_AUTH_SIGNIN": (
-            "https://$host/outpost.goauthentik.io/start?rd=$scheme://$http_host$escaped_request_uri"
-        ),
-        "AUTHENTIK_AUTH_RESPONSE_HEADERS": (
-            "Set-Cookie,X-authentik-username,X-authentik-groups,"
-            "X-authentik-entitlements,X-authentik-email,X-authentik-name,X-authentik-uid"
-        ),
-        "AUTHENTIK_AUTH_SNIPPET": "proxy_set_header X-Forwarded-Host $http_host;",
-        "REGISTRY_LOCAL_HOST": derive_public_host("registry", cluster_local_domain),
-        "REGISTRY_PUBLIC_HOST": public_domain_filter,
-        "ANSIBLE_RUNNER_IMAGE": ansible_runner_image,
-        "TAILSCALE_DOMAIN": tailscale_domain,
-        "TAILSCALE_CLUSTER_TAG": tailscale_cluster_tag if tailscale_cluster_tag.startswith("tag:") else f"tag:{tailscale_cluster_tag}",
-        "EXTERNAL_DNS_DOMAIN_FILTER": cluster_domain,
-    }
-    content = "\n".join(f"{key}={values[key]}" for key in ENV_KEYS) + "\n"
-    config_path.write_text(content, encoding="utf-8")
-
-
 def render_templates(config: dict[str, str], check: bool) -> list[str]:
+    """Render tracked templates, or compare them without mutating the checkout."""
     derived = dict(config)
     derived["INTERNAL_GIT_REPO_URL"] = (
         f"http://gitea-http.gitea.svc.cluster.local:3000/"
         f"{config['GITEA_REPO_OWNER']}/{config['GITEA_REPO_NAME']}.git"
     )
     derived["GITEA_ROOT_URL"] = f"http://{config['GITEA_CANONICAL_HOST']}/"
+    # Older templates use readable example hostnames instead of opaque tokens.
+    # Replace longest strings first so a service hostname is not partially
+    # replaced by the later bare-domain replacement.
     literal_replacements = {
         "authentik.example.local": config["AUTHENTIK_LOCAL_HOST"],
         "authentik.example.services": config["AUTHENTIK_PUBLIC_HOST"],
@@ -374,19 +274,12 @@ def render_app_configs(config: dict[str, str], check: bool) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Sync public-safe pods config and render derived manifests.")
-    parser.add_argument("--env-file", default=".env", help="Source env file for syncing cluster config.")
+    parser = argparse.ArgumentParser(description="Render pod manifests from the generated cluster config.")
     parser.add_argument("--config-file", default=str(DEFAULT_CONFIG), help="Pods cluster config env file.")
-    parser.add_argument("--sync-from-env", action="store_true", help="Update the cluster config file from .env values.")
     parser.add_argument("--check", action="store_true", help="Validate rendered files are in sync.")
     args = parser.parse_args(argv[1:])
 
     config_path = Path(args.config_file)
-    env_path = Path(args.env_file)
-
-    if args.sync_from_env:
-        sync_config_from_env(env_path, config_path)
-
     config = parse_env_file(config_path)
     missing = [key for key in ENV_KEYS if not config.get(key)]
     if missing:

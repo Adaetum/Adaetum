@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Validate a runtime payload without installing a machine. When no payload is
+# present, generate a temporary one and remove it on exit so validation remains
+# a read-only operation from the operator's perspective.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
@@ -9,6 +13,8 @@ tmp_generated=0
 kickstart_path="dist/ks-templates/rocky10.ks"
 
 cleanup() {
+  # Never delete an operator's existing payload; only remove the one this check
+  # created as a convenience.
   if [ "${tmp_generated}" = "1" ] && [ -f "${out_file}" ]; then
     rm -f "${out_file}"
   fi
@@ -56,6 +62,11 @@ mirror_repo_url="$(read_env_value "${out_file}" GITEA_PUSH_MIRROR_REPO_URL)"
 mirror_username="$(read_env_value "${out_file}" GITEA_PUSH_MIRROR_USERNAME)"
 mirror_token="$(read_env_value "${out_file}" GITEA_PUSH_MIRROR_TOKEN)"
 bundle_url="$(read_env_value "${out_file}" BOOTSTRAP_BUNDLE_URL)"
+config_contract="$(read_env_value "${out_file}" ADAETUM_CONFIG_CONTRACT)"
+
+if [ "${config_contract}" = "platform/v1alpha1" ]; then
+  python3 ./tasks/scripts/validate-platform-profile.py --profile ./platform.yaml
+fi
 
 if [ -z "${backup_plain}" ] && [ -z "${backup_b64}" ]; then
   echo "Runtime payload is missing BOOTSTRAP_BACKUP_PASSPHRASE and BOOTSTRAP_BACKUP_PASSPHRASE_B64." >&2
@@ -73,6 +84,8 @@ if ! github_token_looks_git_capable "${seed_token}"; then
 fi
 
 if [ -f ".env" ]; then
+  # The opinionated path derives all three seed credentials from one canonical
+  # token. Enforce that relationship before secrets reach the installer.
   sync_token="$(read_env_value ".env" GITHUB_SYNC_TOKEN)"
   if github_token_looks_git_capable "${sync_token}"; then
     if [ "${argocd_token}" != "${sync_token}" ]; then

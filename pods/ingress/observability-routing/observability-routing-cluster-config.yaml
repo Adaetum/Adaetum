@@ -3,12 +3,12 @@ kind: ConfigMap
 metadata:
   name: observability-routing-cluster-config
 data:
-  ALERTMANAGER_LOCAL_HOST: 'alertmanager.example.local'
-  ALERTMANAGER_PUBLIC_HOST: 'alertmanager.example.services'
-  GRAFANA_LOCAL_HOST: 'grafana.example.local'
-  GRAFANA_PUBLIC_HOST: 'grafana.example.services'
-  PROMETHEUS_LOCAL_HOST: 'prometheus.example.local'
-  PROMETHEUS_PUBLIC_HOST: 'prometheus.example.services'
+  ALERTMANAGER_LOCAL_HOST: 'alertmanager.adaetum.local'
+  ALERTMANAGER_PUBLIC_HOST: 'alertmanager.adaetum.invalid'
+  GRAFANA_LOCAL_HOST: 'grafana.adaetum.local'
+  GRAFANA_PUBLIC_HOST: 'grafana.adaetum.invalid'
+  PROMETHEUS_LOCAL_HOST: 'prometheus.adaetum.local'
+  PROMETHEUS_PUBLIC_HOST: 'prometheus.adaetum.invalid'
   AUTHENTIK_FORWARD_AUTH_URL: 'http://authentik-server.authentik.svc.cluster.local:80/outpost.goauthentik.io/auth/nginx'
   AUTHENTIK_LOCAL_AUTH_SIGNIN: 'https://$host/outpost.goauthentik.io/start?rd=$scheme://$http_host$escaped_request_uri'
   AUTHENTIK_PUBLIC_AUTH_SIGNIN: 'https://$host/outpost.goauthentik.io/start?rd=$scheme://$http_host$escaped_request_uri'

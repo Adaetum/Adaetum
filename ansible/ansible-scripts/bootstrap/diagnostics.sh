@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Shared diagnostic capture for bootstrap phases. It records bounded, structured
+# evidence next to phase logs so recovery can classify failures without exposing
+# complete secret-bearing command output.
+
 BOOTSTRAP_DIAGNOSTICS_ENABLED="${BOOTSTRAP_DIAGNOSTICS_ENABLED:-1}"
 BOOTSTRAP_DIAGNOSTICS_JSON_ENABLED="${BOOTSTRAP_DIAGNOSTICS_JSON_ENABLED:-1}"
 BOOTSTRAP_DIAGNOSTICS_STDOUT_EXCERPT_MAX="${BOOTSTRAP_DIAGNOSTICS_STDOUT_EXCERPT_MAX:-1200}"

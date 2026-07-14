@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Normalize bounded bootstrap diagnostics into JSONL recovery evidence."""
 from __future__ import annotations
 
 import argparse

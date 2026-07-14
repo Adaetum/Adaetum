@@ -14,9 +14,35 @@ repos:
 
   - repo: local
     hooks:
+      - id: validate-platform-profile
+        name: Validate platform profile
+        entry: python3 tasks/scripts/validate-platform-profile.py
+        language: python
+        additional_dependencies: [pyyaml]
+        args: [--self-test]
+        pass_filenames: false
+        files: ^(platform\.yaml|tasks/scripts/validate-platform-profile\.py)$
+      - id: validate-setup-readiness-script
+        name: Validate setup-readiness checker syntax
+        entry: python3 -m py_compile .validator/validate-setup-readiness.py
+        language: system
+        pass_filenames: false
+        files: ^\.validator/validate-setup-readiness\.py$
+      - id: validate-control-pair-shared-helpers
+        name: Validate control-pair helper ownership
+        entry: python3 .validator/validate-control-pair-shared-helpers.py
+        language: system
+        pass_filenames: false
+        files: ^(ansible/ansible-scripts/bootstrap/(control-pair-common\.sh|Phase-(50|60)/run-phase(50|60)\.sh)|\.validator/validate-control-pair-shared-helpers\.py)$
+      - id: validate-doc-links
+        name: Validate repository Markdown links
+        entry: python3 .validator/validate-doc-links.py
+        language: system
+        pass_filenames: false
+        files: ^(.+\.md|\.validator/validate-doc-links\.py)$
       - id: validate-ansible-syntax
         name: Validate Ansible playbook syntax
-        entry: ansible/ansible-scripts/validate-ansible-syntax.py
+        entry: python3 ansible/ansible-scripts/validate-ansible-syntax.py
         language: python
         additional_dependencies:
           - ansible-core==2.19.6
@@ -24,13 +50,13 @@ repos:
         files: ^ansible/.*\.(yml|yaml)$
       - id: validate-actions
         name: Validate GitHub Actions YAML
-        entry: .validator/validate-actions.py
+        entry: python3 .validator/validate-actions.py
         language: python
         additional_dependencies: [pyyaml]
         files: ^\.github/workflows/.*\.(yml|yaml)$
       - id: validate-ks-src
         name: Validate Kickstart Source Compiler
-        entry: tasks/scripts/compile-kickstarts.py
+        entry: python3 tasks/scripts/compile-kickstarts.py
         language: python
         additional_dependencies:
           - jinja2
@@ -41,7 +67,7 @@ repos:
         files: ^(ks-src/|tasks/scripts/compile-kickstarts\.py|tasks/ks\.yml|Taskfile\.yml)
       - id: render-pods-config-check
         name: Validate rendered pods config
-        entry: tasks/scripts/render-pods-config.py
+        entry: python3 tasks/scripts/render-pods-config.py
         language: python
         args:
           - --check
@@ -49,70 +75,71 @@ repos:
         files: ^(pods/cluster-config/cluster-config\.env|pods/.+\.tmpl|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/ingress-cluster-config\.yaml|tasks/scripts/render-pods-config\.py|tasks/scripts/run-opinionated-setup\.sh)
       - id: validate-pods-public-safe
         name: Validate public-safe pods templates
-        entry: .validator/validate-pods-public-safe.py
+        entry: python3 .validator/validate-pods-public-safe.py
         language: python
         pass_filenames: false
         files: ^(pods/cluster-config/cluster-config\.env|pods/argocd/.+\.ya?ml|pods/ansible/ansible/ansible-cluster-config\.yaml|pods/gitea/gitea\.app\.yaml|pods/ingress/.+cluster-config\.yaml|pods/portal/homepage/homepage-cluster-config\.yaml|tasks/scripts/clean-public-safe-config\.py|\.validator/validate-pods-public-safe\.py)
       - id: validate-cluster-config
         name: Validate cluster config values
-        entry: .validator/validate-cluster-config.py
+        entry: python3 .validator/validate-cluster-config.py
         language: python
         pass_filenames: false
         files: ^(pods/cluster-config/cluster-config\.env|\.validator/validate-cluster-config\.py)
       - id: validate-pod-app-definitions
         name: Validate pod app definitions
-        entry: .validator/validate-pod-app-definitions.py
+        entry: python3 .validator/validate-pod-app-definitions.py
         language: python
         additional_dependencies: [pyyaml]
         pass_filenames: false
         files: ^(pods/.+\.app\.yaml|\.validator/validate-pod-app-definitions\.py)
       - id: validate-pods-kustomize
         name: Validate pods kustomize builds
-        entry: .validator/validate-pods-kustomize.py
+        entry: python3 .validator/validate-pods-kustomize.py
         language: python
         pass_filenames: false
         files: ^(pods/.+/kustomization\.yaml|pods/cluster-config/cluster-config\.env|pods/.+\.ya?ml|\.validator/validate-pods-kustomize\.py)
       - id: validate-pods-template-inventory
         name: Validate pods template inventory
-        entry: .validator/validate-pods-template-inventory.py
+        entry: python3 .validator/validate-pods-template-inventory.py
         language: python
         pass_filenames: false
         files: ^(pods/.+\.tmpl|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/ingress-cluster-config\.yaml|tasks/scripts/render-pods-config\.py|\.validator/validate-pods-template-inventory\.py)
       - id: validate-setup-pods-roundtrip
         name: Validate setup pods roundtrip
-        entry: .validator/validate-setup-pods-roundtrip.py
+        entry: python3 .validator/validate-setup-pods-roundtrip.py
         language: python
+        additional_dependencies: [pyyaml]
         pass_filenames: false
-        files: ^(tasks/scripts/render-pods-config\.py|tasks/scripts/run-opinionated-setup\.sh|pods/cluster-config/cluster-config\.env|\.validator/validate-setup-pods-roundtrip\.py)
+        files: ^(platform\.yaml|tasks/scripts/render-platform-profile\.py|tasks/scripts/render-pods-config\.py|tasks/scripts/run-opinionated-setup\.sh|pods/cluster-config/cluster-config\.env|\.validator/validate-setup-pods-roundtrip\.py)
       - id: validate-applicationset-smoke
         name: Validate ApplicationSet smoke
-        entry: .validator/validate-applicationset-smoke.py
+        entry: python3 .validator/validate-applicationset-smoke.py
         language: python
         additional_dependencies: [pyyaml]
         pass_filenames: false
         files: ^(pods/argocd/bootstrap/applicationset\.yaml|pods/.+\.app\.yaml|\.validator/validate-applicationset-smoke\.py)
       - id: validate-pods-docs
         name: Validate pods docs contract
-        entry: .validator/validate-pods-docs.py
+        entry: python3 .validator/validate-pods-docs.py
         language: python
         pass_filenames: false
         files: ^(setup\.md|pods/ingress/platform-routing/README\.md|\.validator/validate-pods-docs\.py)
       - id: validate-pods-secrets
         name: Validate pods secret patterns
-        entry: .validator/validate-pods-secrets.py
+        entry: python3 .validator/validate-pods-secrets.py
         language: python
         pass_filenames: false
         files: ^(pods/.*|setup\.md|\.validator/validate-pods-secrets\.py)
       - id: validate-pods-consistency
         name: Validate pods consistency
-        entry: .validator/validate-pods-consistency.py
+        entry: python3 .validator/validate-pods-consistency.py
         language: python
         additional_dependencies: [pyyaml]
         pass_filenames: false
         files: ^(pods/cluster-config/cluster-config\.env|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/kustomization\.yaml|pods/ingress/ingress-cluster-config\.yaml|pods/ansible/ansible/ansible-runner-deployment\.yaml|pods/ingress/external-dns/deployment\.yaml|\.validator/validate-pods-consistency\.py)
       - id: validate-no-example-placeholders
         name: Validate generated config has no example placeholders
-        entry: .validator/validate-no-example-placeholders.py
+        entry: python3 .validator/validate-no-example-placeholders.py
         language: python
         pass_filenames: false
         files: ^(pods/cluster-config/cluster-config\.env|pods/ingress/kustomization\.yaml|pods/ingress/observability-routing/kustomization\.yaml|pods/portal/homepage/kustomization\.yaml|pods/ansible/ansible/kustomization\.yaml|dist/bootstrap-runtime\.env|dist/ks-templates/.+\.ks|tasks/scripts/run-opinionated-setup\.sh|\.validator/validate-no-example-placeholders\.py)

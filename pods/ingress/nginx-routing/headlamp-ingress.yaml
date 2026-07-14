@@ -13,7 +13,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: headlamp.example.local
+    - host: headlamp.adaetum.local
       http:
         paths:
           - path: /

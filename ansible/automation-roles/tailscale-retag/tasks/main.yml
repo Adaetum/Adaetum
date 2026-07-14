@@ -1,4 +1,7 @@
 ---
+# Reconcile the node's Tailscale identity after first boot. The first-boot file
+# is a local secret-bearing handoff, so parsing and derived facts remain
+# no_log; the profile-derived cluster tag determines the target classification.
 - name: Check for tailscale-firstboot env
   ansible.builtin.stat:
     path: /etc/tailscale-firstboot.env

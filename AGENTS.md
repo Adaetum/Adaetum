@@ -22,7 +22,8 @@ Ansible layout below.
 The repository uses a new opinionated setup process:
 
 1. **Initial Setup**: Run `task initialize` for end-to-end automation
-   - Prompts for Cloudflare token, GitHub token, and KS base URL
+   - Prompts for required runtime credentials; public cluster and delivery
+     settings come from `platform.yaml`
    - Automatically generates `.env`
    - Validates Tailscale OAuth credentials
    - Uploads golden ISOs to R2
@@ -40,6 +41,40 @@ New nodes join the cluster through a phase-based break-glass process:
 - **Phase 60**: Security hardening ("burn the ladder")
 
 ## Conventions
+- **Scope guard (agent mandate):** Act as a skeptical Adaetum maintainer before
+  adding repository content, automation, abstractions, dependencies, or process.
+  Do not equate more files, checks, or features with progress. Ask whether the
+  proposed change has a concrete operator or contributor benefit now, fits the
+  fork-first architecture, has a clear owner and source of truth, and can be
+  validated at the appropriate boundary. If any answer is unclear, explain the
+  concern and propose the smallest viable alternative (including no change)
+  before editing. Reject speculative frameworks, duplicate contracts, generic
+  policy, compatibility scaffolding, and documentation that merely restates
+  code. Do not add a validator or CI job unless it protects a real contract and
+  has a clear failure owner. Keep pull requests focused; separate unrelated
+  cleanup from behavior changes.
+- Before implementing a non-trivial change, state the problem, the affected
+  source of truth, the smallest acceptable scope, and how it will be verified.
+  Treat the checks in `CONTRIBUTING.md` and the pull-request template as release
+  criteria, not paperwork.
+- `pods/` is the source of truth for Adaetum's in-cluster product stack. Do
+  not add a parallel module, provider-selection, plugin, or capability layer
+  around applications already defined in `pods/` unless the user explicitly
+  asks for a real, tested interchangeable implementation.
+- `platform.yaml` is the single public, non-secret fork configuration contract.
+  It describes cluster identity and delivery settings; `.env`,
+  `pods/cluster-config/cluster-config.env`, and rendered manifests are outputs.
+  External integrations such as Cloudflare, GitHub, and Tailscale belong in
+  their existing setup/bootstrap tooling, not in a generic module framework.
+  Do not add a path that derives public manifest values from `.env`; only the
+  profile renderer may derive public configuration.
+- `.validator/` is the repository's home for executable validation and
+  regression checks. Extend its command-line validators and their pre-commit/
+  CI hooks instead of adding a separate top-level `tests/` layout, unless the
+  repository deliberately adopts a new test convention.
+- Discovery and preflight commands must be read-only. In particular, `task
+  list` must never install tools, modify the worktree, or contact external
+  services; keep installation and setup mutations behind explicit commands.
 - Prefer running playbooks from `ansible/` so `ansible.cfg` is picked up.
 - Keep sensitive hosts and secrets out of git; update `.gitignore` if new
   inventory files are introduced.
@@ -51,7 +86,10 @@ New nodes join the cluster through a phase-based break-glass process:
   `%post`.
 - Install media is handled directly as ISO files; do not add alternate USB media
   packaging workflows or related documentation back into the repo.
-- **New**: Use `task initialize` for opinionated end-to-end setup; avoid manual .env editing when possible
+- Use `task initialize` for the opinionated end-to-end setup path. Edit
+  `platform.yaml` for public platform changes; provide `.env` values only when
+  setup requests runtime secrets. Never treat `.env` as a second public
+  configuration contract.
 - When adding new playbooks or roles, place them under `ansible/playbooks/` and `ansible/automation-roles/`
   and keep names descriptive and stable for automation.
 - Role README structure: follow the `healthcheck` style and keep sections filled out
@@ -59,6 +97,11 @@ New nodes join the cluster through a phase-based break-glass process:
   practices and industry standards when they conflict with local preferences.
 - Favor human readability in both README files and Ansible code. Prefer clarity over brevity, even if it
   makes the code more verbose or marginally less quick.
+- Add inline comments and docstrings at ownership boundaries, safety-sensitive
+  operations, non-obvious defaults, external side effects, and transformations.
+  Explain *why* the code exists and what must remain true; do not add comments
+  that merely restate the next line of syntax. Update nearby comments whenever
+  a contract or phase boundary changes.
 - When using heredocs inside YAML literal blocks (e.g., Ansible `shell` tasks), double-check indentation
   so the heredoc stays inside the block and the YAML remains valid.
 - Optional envs: `ansible/.env` can be used for local env overrides. Keep `ansible/.env.template` in git.

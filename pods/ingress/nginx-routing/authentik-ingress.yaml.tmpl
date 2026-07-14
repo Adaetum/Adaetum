@@ -30,13 +30,3 @@ spec:
                 name: authentik-server
                 port:
                   number: 80
-    - host: authentik.local
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 80

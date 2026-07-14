@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Encrypt and synchronize runtime secrets to the selected GitHub environment.
+
+Calls are retried only for transient provider failures; token values are used
+for authorization but never included in diagnostics or request errors.
+"""
 import argparse
 import base64
 import json

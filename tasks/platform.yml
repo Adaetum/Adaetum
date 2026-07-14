@@ -1,0 +1,25 @@
+version: "3"
+
+tasks:
+  validate:
+    desc: Validate the fork-owned platform profile
+    cmds:
+      - python3 ./tasks/scripts/validate-platform-profile.py --profile ./platform.yaml
+
+  render:
+    desc: Render platform.yaml into generated public config and pod manifests
+    deps: [validate]
+    cmds:
+      - python3 ./tasks/scripts/render-platform-profile.py --profile ./platform.yaml --output-env ./dist/platform.env --config-file ./pods/cluster-config/cluster-config.env --render-pods
+
+  check:
+    desc: Check that platform.yaml rendering matches generated pod manifests
+    deps: [validate]
+    cmds:
+      - python3 ./tasks/scripts/render-platform-profile.py --profile ./platform.yaml --render-pods --check
+
+  setup:
+    desc: Run the fork setup flow using platform.yaml as public configuration
+    deps: [validate]
+    cmds:
+      - bash ./tasks/scripts/run-opinionated-setup.sh

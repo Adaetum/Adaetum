@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Validate the small, declarative schema Adaetum uses for Argo pod apps."""
 from __future__ import annotations
 
 import sys

@@ -31,7 +31,7 @@ The design rule for Phase 40 is:
 
 ## Current State
 
-Today, [`run-phase40.sh`](/c:/Users/James/Documents/GO/Cluster/ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh)
+Today, [`run-phase40.sh`](run-phase40.sh)
 already matches this role closely.
 
 It currently:
@@ -160,4 +160,3 @@ This Phase 40 design is successful when:
   OpenBao after this phase
 - the scope stays tight and does not turn Phase 40 into a later reconciliation
   phase
-

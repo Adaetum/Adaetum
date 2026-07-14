@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Create or validate the Tailscale tags, ACL ownership, and auth inputs for setup.
+
+The profile supplies the public tailnet/tag shape; this script performs the
+provider-side mutations needed to make a new break-glass node eligible to join.
+"""
 import argparse
 import base64
 import json

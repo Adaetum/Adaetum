@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Validate the generated public cluster-config.env contract and placeholder rules."""
 from __future__ import annotations
 
 import os
@@ -39,7 +40,6 @@ REQUIRED_KEYS = (
     "RANCHER_PUBLIC_HOST",
     "AUTHENTIK_PUBLIC_HOST",
     "AUTHENTIK_LOCAL_HOST",
-    "AUTHENTIK_LEGACY_LOCAL_HOST",
     "AUTHENTIK_FORWARD_AUTH_URL",
     "AUTHENTIK_LOCAL_AUTH_SIGNIN",
     "AUTHENTIK_PUBLIC_AUTH_SIGNIN",
@@ -74,7 +74,6 @@ HOST_KEYS = {
     "RANCHER_PUBLIC_HOST",
     "AUTHENTIK_PUBLIC_HOST",
     "AUTHENTIK_LOCAL_HOST",
-    "AUTHENTIK_LEGACY_LOCAL_HOST",
     "REGISTRY_LOCAL_HOST",
     "REGISTRY_PUBLIC_HOST",
 }

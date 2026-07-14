@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 30 installs the RKE2 platform baseline using Phase 20's temporary
+# secrets. It prepares the Ansible environment explicitly so a break-glass
+# invocation behaves the same regardless of its caller's working directory.
+
 BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
 ANSIBLE_INVENTORY="${ANSIBLE_INVENTORY:-ansible/node-inventory.yml}"
 ANSIBLE_PLAYBOOK="${ANSIBLE_PLAYBOOK:-ansible/playbooks/platform-bootstrap.yml}"

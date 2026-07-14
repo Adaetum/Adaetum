@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Remove rebuildable installer outputs while preserving fork and secret inputs."""
 from __future__ import annotations
 
 import argparse

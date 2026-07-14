@@ -49,8 +49,8 @@ gitea:
     queue:
       TYPE: level
     server:
-      DOMAIN: gitea.example.local
-      ROOT_URL: http://gitea.example.local/
+      DOMAIN: gitea.adaetum.local
+      ROOT_URL: http://gitea.adaetum.local/
   admin:
     existingSecret: gitea-admin-secret
     passwordMode: initialOnlyRequireReset

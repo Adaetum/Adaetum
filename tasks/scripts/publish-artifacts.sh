@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Trigger the GitHub workflows that publish installer artifacts from this fork.
+# It resolves credentials locally, then reports remote workflow results rather
+# than attempting to hide provider-side failures.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 

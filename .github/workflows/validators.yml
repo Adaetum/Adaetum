@@ -29,7 +29,13 @@ jobs:
       - name: Install checks
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pre-commit jinja2
+          python3 -m pip install pre-commit jinja2 pyyaml
+
+      - name: Validate platform profile
+        run: python3 ./tasks/scripts/validate-platform-profile.py --profile ./platform.yaml --self-test
+
+      - name: Validate repository Markdown links
+        run: python3 ./.validator/validate-doc-links.py
 
       - name: Validate Kickstart Source Compiler
         run: |

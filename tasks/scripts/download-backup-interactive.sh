@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Interactively fetch and decrypt a recovery backup. This is intentionally a
+# recovery utility: it reads local credentials but never changes cluster state.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
@@ -110,6 +113,10 @@ find_7z_bin() {
   fi
   if command -v 7za >/dev/null 2>&1; then
     command -v 7za
+    return 0
+  fi
+  if command -v 7zz >/dev/null 2>&1; then
+    command -v 7zz
     return 0
   fi
   # Common native Windows install path (when running from Git Bash).

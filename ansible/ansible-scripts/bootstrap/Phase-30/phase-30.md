@@ -27,14 +27,14 @@ The design rule for Phase 30 is:
 
 ## Current State
 
-Today, [`run-phase30.sh`](/c:/Users/James/Documents/GO/Cluster/ansible/ansible-scripts/bootstrap/Phase-30/run-phase30.sh)
+Today, [`run-phase30.sh`](run-phase30.sh)
 already matches that role closely.
 
 It currently:
 
 - requires the local bootstrap secret directory to exist
 - uses the repo-local Ansible configuration
-- runs [`platform-bootstrap.yml`](/c:/Users/James/Documents/GO/Cluster/ansible/playbooks/platform-bootstrap.yml)
+- runs [`platform-bootstrap.yml`](../../../playbooks/platform-bootstrap.yml)
   with `bootstrap_secret_dir` and `platform_distribution`
 
 That means Phase 30 is already behaving primarily as the platform-establishment
@@ -119,4 +119,3 @@ This Phase 30 design is successful when:
 - the doc makes clear that OpenBao authority does not begin here
 - the doc keeps the scope tight and does not overload the phase with later
   convergence work
-

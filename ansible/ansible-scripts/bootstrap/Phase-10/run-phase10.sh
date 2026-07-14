@@ -31,6 +31,10 @@ if ! command -v task >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ "${ADAETUM_CONFIG_CONTRACT:-platform/v1alpha1}" == "platform/v1alpha1" ]]; then
+  run_phase10_check "validating fork platform profile" task platform:validate
+fi
+
 run_phase10_check "running task bootstrap:phase10:check-ks" task bootstrap:phase10:check-ks
 run_phase10_check "running task bootstrap:phase10:compile-ks" task bootstrap:phase10:compile-ks
 run_phase10_check "running task bootstrap:phase10:validate-runtime" task bootstrap:phase10:validate-runtime

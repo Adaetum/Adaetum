@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Detect probable secret values accidentally committed in pods source or setup docs."""
 from __future__ import annotations
 
 import re

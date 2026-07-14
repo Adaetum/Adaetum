@@ -15,7 +15,7 @@ LoadBalancer IP/hostname.
 This repo uses that for the nginx ingress controller Service:
 
 - `kube-system/rke2-ingress-nginx-controller` (annotation is patched by
-  `ansible/ansible-scripts/bootstrap/run-phase50.sh`)
+  [`Phase-50/run-phase50.sh`](../../../ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh))
 
 ## Secret (not in git)
 
@@ -32,8 +32,10 @@ will stay in `CreateContainerConfigError` until the Secret is present.
 
 ## Domain filter
 
-`deployment.yaml` currently uses:
+The rendered `deployment.yaml` receives its domain filter from
+[`platform.yaml`](../../../platform.yaml):
 
-- `--domain-filter=example.services`
+- `spec.cluster.domain` becomes `--domain-filter=<your-domain>`
 
-Change that if your cluster domain differs.
+Do not edit the rendered deployment for a domain change. Update the profile and
+run `task platform:render` instead.

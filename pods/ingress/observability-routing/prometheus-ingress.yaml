@@ -11,7 +11,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: prometheus.example.local
+    - host: prometheus.adaetum.local
       http:
         paths:
           - path: /

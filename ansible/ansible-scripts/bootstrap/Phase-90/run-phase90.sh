@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 90 reconciles live cluster state after GitOps owns normal operations.
+# It gathers and repairs bounded drift; it is not permitted to recreate the
+# temporary bootstrap authority removed during the handoff.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
@@ -26,6 +30,9 @@ if [[ -z "${BUNDLE_BOOTSTRAP_LOG_FILE:-}" ]]; then
   exec >>"${PHASE90_LOG_FILE}" 2>&1
 fi
 
+# Phase 90 intentionally prepares the Ansible environment inline because it
+# can run during recovery even when the Phase 50/60 control-pair path was not
+# the entrypoint for this node.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)"
 cd "${repo_root}"
 
@@ -71,6 +78,8 @@ retry_cmd() {
   return 1
 }
 
+# Preserve a distinction between observations and critical recovery failures so
+# exported diagnostics tell an operator whether intervention is actually needed.
 phase90_failures=0
 phase90_critical_failures=0
 

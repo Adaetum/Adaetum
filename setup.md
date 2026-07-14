@@ -18,8 +18,7 @@ artifacts and configuration needed for a new cluster install.
 
 At a high level, `task initialize` does four things:
 
-1. Verifies that your local prerequisites are in place and collects the setup
-   values it needs.
+1. Verifies local prerequisites and collects the runtime credentials it needs.
 2. Validates Tailscale OAuth credentials, generates a fresh `.env`, and writes
    the committed `pods/cluster-config/cluster-config.env` manifest config plus the
    rendered Argo/bootstrap files derived from it.
@@ -43,10 +42,15 @@ git clone <your-fork-or-repo-url>
 cd Cluster
 ```
 
+Your fork is the out-of-band configuration and recovery copy. `task initialize`
+builds the break-glass materials from it; bootstrap then seeds the newly created
+cluster's Gitea repository. After that handoff, make routine day-2 changes in
+the in-cluster Gitea repository and let Argo CD reconcile them.
+
 | Requirement | What to use |
 | --- | --- |
 | Task runner | Install `task`: <https://taskfile.dev/docs/installation> |
-| Python runtime | Install Python 3: <https://www.python.org/downloads/> |
+| Python runtime | Install Python 3 and PyYAML: `python3 -m pip install pyyaml` |
 | Docker (optional) | Install Docker if you want to build the install ISO locally instead of downloading or reusing the copy from R2 |
 | Installer media | Download Rocky Linux 10 `Minimal`: <https://rockylinux.org/download> and place the ISO in repo root |
 | Repo access | GitHub admin access to your fork or target repo |
@@ -54,8 +58,16 @@ cd Cluster
 | Tailnet access | Tailscale access to the target tailnet |
 
 The setup workflow also checks for or installs supporting tools such as `uv`,
-`rclone`, and `7z`. Docker is optional and is only needed for the local
+`rclone`, and a 7-Zip command (`7z`, `7za`, or macOS Homebrew's `7zz`). Docker is optional and is only needed for the local
 `task build-iso` path.
+
+Run the read-only preflight before adding credentials. It validates the public
+profile, local tools, and installer ISO, but intentionally does not inspect or
+require any secrets:
+
+```bash
+task setup:preflight
+```
 
 ## Have these values ready
 
@@ -111,8 +123,9 @@ Setup will prompt you for these values during the run.
   Used for the long-term Tailscale OAuth credential.
 - `TAILSCALE_OAUTH_CLIENT_SECRET`
   Used for the long-term Tailscale OAuth credential.
-- `TAILSCALE_DOMAIN`
-  The target tailnet domain, for example `example.ts.net`.
+
+The target tailnet domain is configured in `platform.yaml`; setup does not
+prompt for it.
 
 <details>
 <summary>Tailscale token guidance</summary>
@@ -127,11 +140,17 @@ Setup will prompt you for these values during the run.
 
 </details>
 
-### Bootstrap URL
+### Fork profile
 
-- Public Domain input
-  Provide the public base domain used for bootstrap delivery, for example
-  `<public-domain>`.
+Before running setup, replace the deliberately safe defaults in
+[`platform.yaml`](platform.yaml). This file owns the public cluster shape and
+delivery settings; setup prompts only for runtime credentials.
+
+- `spec.cluster.domain`: public base domain used for routed services.
+- `spec.cluster.localDomain`: local split-DNS suffix.
+- `spec.cluster.overlayDomain` and `overlayClusterTag`: Tailscale identity.
+- `spec.cluster.repository`: initial in-cluster Gitea repository identity.
+- `spec.delivery.bootstrapBaseUrl` and `r2Bucket`: bootstrap artifact delivery.
 
 Terminology used below:
 
@@ -145,7 +164,7 @@ Terminology used below:
   `argocd.<public-domain>.local`.
 
 Setup derives the public FQDNs used for bootstrap delivery and Cloudflare
-tunnel routing:
+tunnel routing from the profile:
 
 ```text
 KS_BASE_URL=https://bootstrap.<public-domain>
@@ -266,11 +285,11 @@ Optional knobs:
 
 </details>
 
-`task initialize` writes the committed cluster manifest config in
-`pods/cluster-config/cluster-config.env` and re-renders the Argo/bootstrap files that
-depend on it. If you need to adjust domains or repo ownership later, update
-that one file and rerun the pods render check instead of hand-editing scattered
-manifest files.
+`task initialize` renders the committed cluster manifest config in
+`pods/cluster-config/cluster-config.env` and re-renders the Argo/bootstrap files
+that depend on it. If you need to adjust domains or repo ownership later, update
+[`platform.yaml`](platform.yaml) and rerun `task platform:render`; do not
+hand-edit generated manifest files.
 
 ## Run setup
 
@@ -486,4 +505,5 @@ After the first node is up:
   high-traffic bottlenecks in internal server communication.
 
 For broader platform behavior and recovery/runbook details, see
-[README.md](README.md) and the docs under [`wiki/`](wiki/).
+[README.md](README.md), the [architecture audit](docs/audit.md), and the
+[platform profile](platform.yaml).

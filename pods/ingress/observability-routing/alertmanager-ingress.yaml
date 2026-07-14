@@ -11,7 +11,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: alertmanager.example.local
+    - host: alertmanager.adaetum.local
       http:
         paths:
           - path: /

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 99 exports recovery material and, for a break-glass primary, removes
+# temporary local bootstrap authority. It deliberately skips that destructive
+# action on joining nodes: their local files are not the cluster's authority.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
@@ -61,6 +65,8 @@ bootstrap_diag_record \
   "summary=phase99 starting" \
   "log_path=${BOOTSTRAP_DIAG_LOG_PATH}"
 
+# Backup settings describe the recovery artifact, not normal runtime state.
+# The encrypted export is created before any eligible local-secret cleanup.
 BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
 BOOTSTRAP_BURN_LADDER="${BOOTSTRAP_BURN_LADDER:-}"
 BOOTSTRAP_BACKUP_TO_R2="${BOOTSTRAP_BACKUP_TO_R2:-}"

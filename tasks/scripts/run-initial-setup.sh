@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Execute the stateful half of `task initialize` after public profile rendering
+# and secret collection. This script may mutate GitHub, Cloudflare, R2, and the
+# fork's rendered GitOps files; keep discovery and profile validation outside it.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 github_env="${GITHUB_ENVIRONMENT:-cluster}"
@@ -8,6 +12,8 @@ initial_setup_auto_yes="$(printf '%s' "${INITIAL_SETUP_AUTO_YES:-0}" | tr '[:upp
 initial_setup_skip_env="$(printf '%s' "${INITIAL_SETUP_SKIP_ENV_SETUP:-0}" | tr '[:upper:]' '[:lower:]')"
 initial_setup_embedded="$(printf '%s' "${INITIAL_SETUP_EMBEDDED:-0}" | tr '[:upper:]' '[:lower:]')"
 initial_setup_embedded_prefix="${INITIAL_SETUP_EMBEDDED_PREFIX:-3}"
+# Track remote workflow outcomes separately from local preparation so the final
+# report can tell an operator exactly which provider-side action needs attention.
 workflow_errors=0
 triggered_workflow_run_ids=()
 triggered_workflow_files=()
@@ -117,6 +123,8 @@ gh_api_runner=()
 gh_api_ready=0
 
 ensure_github_api_runner() {
+  # The helper needs PyNaCl to encrypt GitHub environment secrets. Prefer uv so
+  # no project-wide Python environment is modified; fall back only when needed.
   if [ "${gh_api_ready}" = "1" ]; then
     return 0
   fi

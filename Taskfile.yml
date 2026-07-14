@@ -5,16 +5,14 @@ dotenv:
   - .env
 
 vars:
-  IMAGE: '{{default "registry.example.services/platform/ansible-runner:latest" .IMAGE}}'
   KS_SRC_DIR: '{{default "dist/ks-templates" .KS_SRC_DIR}}'
   KS_TEMPLATE_FILE_NAME: '{{default .LOCAL_KS_TEMPLATE_FILE_NAME .KS_TEMPLATE_FILE_NAME}}'
   KS_OUT_DIR: '{{default "dist/ks-templates" .KS_OUT_DIR}}'
-  ANSIBLE_ENV: .env
   ISO_PATH: '{{default "" .ISO_PATH | default .LOCAL_ISO_PATH}}'
   ISO_OUT: '{{default "" .ISO_OUT | default .LOCAL_ISO_OUT}}'
   KS_FILE_URL: '{{default "" .KS_FILE_URL}}'
   BUNDLE_OUT: dist/ansible-runner-bundle.tar.gz
-  BUNDLE_INCLUDE: 'Taskfile.yml setup.md ansible/Dockerfile ansible/ansible.cfg ansible/ansible-scripts ansible/playbooks ansible/automation-roles ansible/templates ansible/ansible-host-config-sync.yaml pods ks-src tasks .validator'
+  BUNDLE_INCLUDE: 'Taskfile.yml setup.md platform.yaml docs ansible/Dockerfile ansible/ansible.cfg ansible/ansible-scripts ansible/playbooks ansible/automation-roles ansible/templates ansible/ansible-host-config-sync.yaml pods ks-src tasks .validator'
   BUNDLE_URL: '{{default "" .BUNDLE_URL}}'
 
 includes:
@@ -36,10 +34,12 @@ includes:
   env:
     taskfile: ./tasks/env.yml
     dir: .
+  platform:
+    taskfile: ./tasks/platform.yml
+    dir: .
 tasks:
   list:
     desc: Show the supported task list
-    deps: ['hooks:ensure', 'env:install:prerequisites']
     cmds:
       - |
         set -eu
@@ -66,6 +66,10 @@ tasks:
         printf '  %stask fetch-backup%s  Download and extract a recovery backup\n' "${c_task}" "${c_reset}"
         printf '  %stask validate-runtime%s Validate the local bootstrap runtime payload without reinstalling\n' "${c_task}" "${c_reset}"
         printf '  %stask validate-pods-contract%s Run the full pods contract validator suite\n' "${c_task}" "${c_reset}"
+        printf '  %stask platform:validate%s Validate platform.yaml\n' "${c_task}" "${c_reset}"
+        printf '  %stask platform:render%s   Render platform.yaml into generated manifests\n' "${c_task}" "${c_reset}"
+        printf '  %stask platform:setup%s    Run setup from the fork-owned platform profile\n' "${c_task}" "${c_reset}"
+        printf '  %stask setup:preflight%s  Check non-secret setup readiness without changing anything\n' "${c_task}" "${c_reset}"
         printf '  %stask list%s          Show this command list\n' "${c_task}" "${c_reset}"
 
   initialize:
@@ -167,6 +171,14 @@ tasks:
       - cmd: python3 ./.validator/run-pods-contract.py
         platforms: [linux, darwin]
       - cmd: python ./.validator/run-pods-contract.py
+        platforms: [windows]
+
+  setup:preflight:
+    desc: Check non-secret setup readiness without changing local or external state
+    cmds:
+      - cmd: python3 ./.validator/validate-setup-readiness.py
+        platforms: [linux, darwin]
+      - cmd: python ./.validator/validate-setup-readiness.py
         platforms: [windows]
 
   bootstrap:phase10:check-ks:

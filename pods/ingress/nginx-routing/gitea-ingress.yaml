@@ -13,7 +13,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: gitea.example.local
+    - host: gitea.adaetum.local
       http:
         paths:
           - path: /
