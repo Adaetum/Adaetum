@@ -131,6 +131,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE, help="Path to platform.yaml")
     parser.add_argument("--self-test", action="store_true", help="Run non-mutating contract rejection checks")
+    parser.add_argument("--quiet", action="store_true", help="Print only validation errors")
     args = parser.parse_args()
     try:
         errors = validate_profile(load_yaml(args.profile))
@@ -147,7 +148,8 @@ def main() -> int:
             print("platform profile self-test failed:", file=sys.stderr)
             print("\n".join(f"- {failure}" for failure in failures), file=sys.stderr)
             return 1
-    print(f"platform profile valid: {args.profile}")
+    if not args.quiet:
+        print(f"platform profile valid: {args.profile}")
     return 0
 
 

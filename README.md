@@ -38,14 +38,39 @@ implementation outputs; do not hand-edit them.
 
 ## Quick start
 
-Fork the repository, then replace the deliberately safe defaults in
-[`platform.yaml`](platform.yaml) with your domain, tailnet, repository, and
-bootstrap-delivery settings. For the supported first-node flow, read
-[setup.md](setup.md) and run:
+From a fresh checkout, run the guided first-run command:
 
 ```bash
-task initialize
+task init
 ```
+
+`task init` creates or reuses your fork, collects and reviews the public
+platform profile, finds or downloads the verified Rocky installer ISO, guides
+provider authorization, selects the cluster domain from Cloudflare zones visible
+to the authorized token, and then starts setup. The console carries one
+five-section journey throughout: Fork, Providers, Profile, Installer, and
+Bootstrap. At completion it prints the exact generated ISO path and tells you
+how to attach it to the first physical host or VM for the unattended install.
+Use `task initialize` only to rerun the setup workflow after the first run.
+
+If the checkout still points at Adaetum upstream, `task init` installs GitHub
+CLI, authenticates in the browser, creates or reuses your personal fork, and
+updates `origin` after you confirm the action.
+
+To rehearse that experience without installing tools, changing Git, collecting
+secrets, or contacting providers, run:
+
+```bash
+task init:dryrun
+```
+
+It remains interactive and follows the same decision order as `task init`.
+It substitutes fixture credentials and no-op action adapters while preserving
+the same decision order and review screens.
+
+Gum is an optional presentation layer outside `task init`: credential prompts,
+recovery pickers, and confirmations use it when available, but retain plain
+terminal behavior. Set `ADAETUM_GUM_UI=0` to force that fallback.
 
 Validate and render the fork-owned profile after changing it:
 

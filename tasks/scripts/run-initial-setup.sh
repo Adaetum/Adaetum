@@ -7,11 +7,14 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
+# shellcheck source=tasks/scripts/gum-ui.sh
+. "${repo_root}/tasks/scripts/gum-ui.sh"
 github_env="${GITHUB_ENVIRONMENT:-cluster}"
 initial_setup_auto_yes="$(printf '%s' "${INITIAL_SETUP_AUTO_YES:-0}" | tr '[:upper:]' '[:lower:]')"
 initial_setup_skip_env="$(printf '%s' "${INITIAL_SETUP_SKIP_ENV_SETUP:-0}" | tr '[:upper:]' '[:lower:]')"
 initial_setup_embedded="$(printf '%s' "${INITIAL_SETUP_EMBEDDED:-0}" | tr '[:upper:]' '[:lower:]')"
 initial_setup_embedded_prefix="${INITIAL_SETUP_EMBEDDED_PREFIX:-3}"
+dry_run="${ADAETUM_INIT_DRY_RUN:-0}"
 # Track remote workflow outcomes separately from local preparation so the final
 # report can tell an operator exactly which provider-side action needs attention.
 workflow_errors=0
@@ -25,6 +28,10 @@ prompt_yes_no() {
   local answer=""
   if [ "${initial_setup_auto_yes}" = "1" ] || [ "${initial_setup_auto_yes}" = "true" ] || [ "${initial_setup_auto_yes}" = "yes" ]; then
     return 0
+  fi
+  if adaetum_gum_enabled; then
+    adaetum_gum_confirm "${label}" "${default}"
+    return $?
   fi
   if [ "${default}" = "y" ]; then
     read -r -p "${label} [Y/n]: " answer
@@ -1170,27 +1177,54 @@ stage() {
   local label="$2"
   if [ "${initial_setup_embedded}" = "1" ] || [ "${initial_setup_embedded}" = "true" ] || [ "${initial_setup_embedded}" = "yes" ]; then
     idx="${idx%%/*}"
-    printf '  - (%s.%s) %s\n' "${initial_setup_embedded_prefix}" "${idx}" "${label}"
+    adaetum_ui_task "${initial_setup_embedded_prefix}.${idx}" "${label}"
     return 0
   fi
-  printf '\n[%s] %s\n' "$1" "$2"
+  adaetum_ui_heading "Stage ${1}: ${2}"
 }
 
 sub_stage() {
   local idx="$1"
   local label="$2"
   if [ "${initial_setup_embedded}" = "1" ] || [ "${initial_setup_embedded}" = "true" ] || [ "${initial_setup_embedded}" = "yes" ]; then
-    printf '    - (%s.%s) %s\n' "${initial_setup_embedded_prefix}" "${idx}" "${label}"
+    adaetum_ui_subtask "${initial_setup_embedded_prefix}.${idx}" "${label}"
     return 0
   fi
-  printf '  - (%s) %s\n' "$1" "$2"
+  adaetum_ui_subtask "$1" "$2"
 }
 
 if [ "${initial_setup_embedded}" = "1" ] || [ "${initial_setup_embedded}" = "true" ] || [ "${initial_setup_embedded}" = "yes" ]; then
-  echo "  - (${initial_setup_embedded_prefix}.0) Initial setup wizard"
+  :
 else
-  echo "Initial Setup Wizard"
-  echo "Repo: ${repo_root}"
+  adaetum_ui_hero "ADAETUM  /  BOOTSTRAP" "Initial setup wizard" "Prepare, upload, sync, and publish the first install"
+  adaetum_ui_message 245 "Fork: ${repo_root}"
+fi
+
+if [ "${dry_run}" = "1" ]; then
+  # The stateful bootstrap phase is one execution boundary. Keep its normal
+  # stage/sub-stage rendering, but make every upload, secret-sync, workflow,
+  # and ISO action a successful no-op for the shared dry-run control flow.
+  stage "1/8" "Environment preparation"
+  sub_stage "1.1" "Use existing .env or run env wizard"
+  stage "2/8" "Backup passphrase"
+  sub_stage "2.1" "Ensure BOOTSTRAP_BACKUP_PASSPHRASE values exist"
+  stage "3/8" "Golden ISO upload"
+  sub_stage "3.1" "Upload local root ISOs to R2"
+  stage "4/8" "Break-glass bundle upload"
+  sub_stage "4.0" "Validate Phase 50 source repo auth"
+  sub_stage "4.0b" "Validate opinionated GitHub push mirror auth"
+  sub_stage "4.1" "Build ansible-runner bundle"
+  sub_stage "4.2" "Upload bundle to R2/Worker"
+  stage "5/8" "GitHub secret sync"
+  sub_stage "5.1" "Sync non-empty .env values to GitHub secrets"
+  stage "6/8" "Kickstart worker workflow"
+  sub_stage "6.1" "Trigger ks-worker.yml"
+  stage "7/8" "Kickstart publish workflow"
+  sub_stage "7.1" "Trigger ks-publish.yml"
+  stage "8/8" "ISO workflows and local ISO build"
+  sub_stage "8.1" "Trigger iso-build.yml"
+  sub_stage "8.2" "Build local install ISO (task build-iso)"
+  exit 0
 fi
 
 stage "1/8" "Environment preparation"
@@ -1270,7 +1304,11 @@ ensure_repo_clean_for_workflow_dispatch ".github/workflows/iso-build.yml"
 if prompt_yes_no "Trigger iso-build workflow now?" "y"; then
   ks_input="${INITIAL_SETUP_KS_TEMPLATE_FILE_NAME:-}"
   if [ "${initial_setup_auto_yes}" != "1" ] && [ "${initial_setup_auto_yes}" != "true" ] && [ "${initial_setup_auto_yes}" != "yes" ]; then
-    read -r -p "Optional ks_template_file_name (blank for all): " ks_input
+    if adaetum_gum_enabled; then
+      ks_input="$(adaetum_gum_input "Optional ks_template_file_name (blank for all)" "" 0)" || exit 1
+    else
+      read -r -p "Optional ks_template_file_name (blank for all): " ks_input
+    fi
   fi
   wf_input=""
   if [ -n "${ks_input}" ]; then

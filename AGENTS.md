@@ -21,7 +21,20 @@ Ansible layout below.
 ## Setup workflow
 The repository uses a new opinionated setup process:
 
-1. **Initial Setup**: Run `task initialize` for end-to-end automation
+1. **Initial Setup**: Run `task init` for the first guided end-to-end setup
+   - Installs Gum for the first-run presentation layer when the local package
+     manager supports it, then confirms Cloudflare, GitHub, and Tailscale
+     account readiness before secrets are requested
+   - When the checkout points at upstream, installs GitHub CLI and uses its
+     browser authentication to create or reuse the operator's Adaetum fork
+     before changing the local `origin` remote
+   - Runs read-only preflight after the fork owner updates `platform.yaml` and
+     adds the Rocky ISO
+   - `task init:dryrun` is the no-mutation rehearsal path: it validates local
+     readiness and simulates the rest of the first-run journey without
+     installing tools or contacting providers
+   - Use `task initialize` to rerun the automation without the first-run
+     account walkthrough
    - Prompts for required runtime credentials; public cluster and delivery
      settings come from `platform.yaml`
    - Automatically generates `.env`
@@ -86,10 +99,16 @@ New nodes join the cluster through a phase-based break-glass process:
   `%post`.
 - Install media is handled directly as ISO files; do not add alternate USB media
   packaging workflows or related documentation back into the repo.
-- Use `task initialize` for the opinionated end-to-end setup path. Edit
+- Use `task init` for a new fork and `task initialize` for reruns or
+  non-interactive automation. Edit
   `platform.yaml` for public platform changes; provide `.env` values only when
   setup requests runtime secrets. Never treat `.env` as a second public
   configuration contract.
+- Gum is an optional terminal presentation layer everywhere except `task init`,
+  where it owns the first-run account walkthrough. Keep the shell workflows as
+  the behavior owners, retain their plain-terminal fallbacks, and honor
+  `ADAETUM_GUM_UI=0`; do not put secrets, provider logic, or configuration
+  ownership in the presentation helper.
 - When adding new playbooks or roles, place them under `ansible/playbooks/` and `ansible/automation-roles/`
   and keep names descriptive and stable for automation.
 - Role README structure: follow the `healthcheck` style and keep sections filled out

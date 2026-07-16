@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROFILE_PATH = REPO_ROOT / "platform.yaml"
 PROFILE_VALIDATOR = REPO_ROOT / "tasks" / "scripts" / "validate-platform-profile.py"
+ROCKY_MINIMAL_ISO = re.compile(r"^Rocky-10(?:\.\d+)?-(?:x86_64|aarch64)-minimal\.iso$")
 
 
 def load_profile_validator():
@@ -73,10 +75,12 @@ def main() -> int:
         except (OSError, RuntimeError, ValueError) as exc:
             blockers.append(f"cannot validate platform.yaml: {exc}")
 
-    if not any(REPO_ROOT.glob("*.iso")):
-        blockers.append("no Rocky Linux 10 installer ISO is present in the repository root")
+    if not any(ROCKY_MINIMAL_ISO.match(path.name) for path in REPO_ROOT.glob("*.iso")):
+        blockers.append("no supported Rocky Linux 10 Minimal installer ISO is present in the repository root")
     if not has_command("uv"):
         notes.append("uv is absent; task initialize can install it automatically")
+    if not has_command("gum"):
+        notes.append("Gum is absent; task init will attempt installation, while task initialize uses plain prompts")
     if not has_command("docker"):
         notes.append("Docker is absent; use an existing ISO or install Docker for local ISO builds")
 

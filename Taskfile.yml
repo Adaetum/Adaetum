@@ -53,7 +53,10 @@ tasks:
           c_reset=""
         fi
         printf '%sSupported tasks:%s\n' "${c_title}" "${c_reset}"
-        printf '  %stask initialize%s    Run first-time opinionated setup workflow\n' "${c_task}" "${c_reset}"
+        printf '  %stask init%s          Install setup tools and launch the guided first-run walkthrough\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:dryrun%s   Walk through first-run setup without changing local or external state\n' "${c_task}" "${c_reset}"
+        printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
+        printf '  %stask initialize%s    Run or rerun the opinionated setup workflow\n' "${c_task}" "${c_reset}"
         printf '  %stask clean%s         Reset tracked public-safe config and remove derived installer artifacts\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-on%s Enable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-off%s Disable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
@@ -77,6 +80,28 @@ tasks:
     deps: ['hooks:ensure', 'env:install:prerequisites']
     cmds:
       - task: env:initialize
+
+  init:
+    desc: Install setup tools and launch the guided first-run walkthrough
+    cmds:
+      - task: hooks:ensure
+      - task: env:install:prerequisites
+      - task: env:install:gum
+      - task: env:install:github-cli
+      - task: env:init
+
+  init:dryrun:
+    desc: Rehearse first-run setup with validations and simulated provider actions only
+    cmds:
+      - task: env:init:dryrun
+
+  iso:download:
+    desc: Download and SHA-256 verify Rocky 10.2 Minimal installer media (set ROCKY_ARCH)
+    cmds:
+      - cmd: bash ./tasks/scripts/manage-rocky-installer-iso.sh download '{{default "x86_64" .ROCKY_ARCH}}'
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/manage-rocky-installer-iso.sh download '{{default "x86_64" .ROCKY_ARCH}}'
+        platforms: [windows]
 
   clean:
     desc: Reset tracked public-safe config and remove derived installer artifacts

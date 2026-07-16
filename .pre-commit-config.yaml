@@ -28,6 +28,13 @@ repos:
         language: system
         pass_filenames: false
         files: ^\.validator/validate-setup-readiness\.py$
+      - id: validate-first-run-contract
+        name: Validate first-run setup contract
+        entry: python3 .validator/validate-first-run-contract.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        files: ^(tasks/scripts/(configure-platform-profile\.py|first-run-preflight\.sh|gum-ui\.sh|list-cloudflare-zones\.py|list-tailscale-tailnets\.py|manage-rocky-installer-iso\.sh|run-first-run-wizard\.sh|run-opinionated-setup\.sh)|\.github/workflows/ks-worker\.yml|\.validator/validate-first-run-contract\.py|ks-src/fragments/installers/kickstart/rocky10/00-header\.ksfrag)$
       - id: validate-control-pair-shared-helpers
         name: Validate control-pair helper ownership
         entry: python3 .validator/validate-control-pair-shared-helpers.py

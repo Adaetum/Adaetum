@@ -6,6 +6,8 @@ set -euo pipefail
 # secret material needed by Cloudflare, GitHub, Tailscale, and recovery flows.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+# shellcheck source=tasks/scripts/gum-ui.sh
+. "${repo_root}/tasks/scripts/gum-ui.sh"
 platform_profile="${ADAETUM_PLATFORM_PROFILE:-${repo_root}/platform.yaml}"
 out_file="${1:-.env}"
 existing_file="${2:-.env}"
@@ -109,6 +111,15 @@ prompt_value() {
     return 0
   fi
 
+  if adaetum_gum_enabled; then
+    value="$(adaetum_gum_input "${label}" "${default}" "${secret}")" || return 1
+    if [ -z "${value}" ]; then
+      value="${default}"
+    fi
+    printf '%s' "${value}" | tr -d '\r\n'
+    return 0
+  fi
+
   if [ "${secret}" = "1" ]; then
     read -r -s -p "${label} [hidden]${default:+ [default set]}: " value
     printf '\n'
@@ -128,6 +139,15 @@ prompt_yes_no() {
 
   if [ "${non_interactive}" = "1" ]; then
     printf '%s' "${default}"
+    return 0
+  fi
+
+  if adaetum_gum_enabled; then
+    if adaetum_gum_confirm "${label}" "${default}"; then
+      printf 'y'
+    else
+      printf 'n'
+    fi
     return 0
   fi
 
@@ -680,6 +700,13 @@ confirm_overwrite() {
     return 0
   fi
   if [ -f "${target}" ]; then
+    if adaetum_gum_enabled; then
+      adaetum_gum_confirm "${target} exists. Overwrite it?" "n" || {
+        echo "Aborted."
+        exit 1
+      }
+      return 0
+    fi
     local ans=""
     read -r -p "${target} exists. Overwrite? [y/N]: " ans
     case "${ans}" in
@@ -1308,13 +1335,8 @@ if [ "${non_interactive}" = "1" ]; then
   exit 0
 fi
 
-sync_answer=""
-read -r -p "Sync non-empty secrets to GitHub environment ${github_env}? [Y/n]: " sync_answer
-case "${sync_answer}" in
-  ""|y|Y|yes|YES)
-    sync_github_secrets "${github_env}" || true
-    ;;
-  *)
-    echo "Skipped GitHub secret sync."
-    ;;
-esac
+if [ "$(prompt_yes_no "Sync non-empty secrets to GitHub environment ${github_env}?" "y")" = "y" ]; then
+  sync_github_secrets "${github_env}" || true
+else
+  echo "Skipped GitHub secret sync."
+fi

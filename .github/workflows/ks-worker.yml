@@ -118,7 +118,7 @@ jobs:
             '    };' \
             '' \
             '    const isoResolve = (file) => {' \
-            '      const allowed = [".ks", ".tar.gz", ".tgz", ".env"];' \
+            '      const allowed = [".iso", ".ks", ".tar.gz", ".tgz", ".env"];' \
             '      if (!allowed.some((ext) => file.endsWith(ext))) {' \
             '        return { error: "unsupported file type" };' \
             '      }' \
@@ -143,7 +143,9 @@ jobs:
             '        key = `${prefix}/${file}`;' \
             '      }' \
             '      let contentType = "application/octet-stream";' \
-            '      if (file.endsWith(".ks")) {' \
+            '      if (file.endsWith(".iso")) {' \
+            '        contentType = "application/x-iso9660-image";' \
+            '      } else if (file.endsWith(".ks")) {' \
             '        contentType = "text/plain";' \
             '      } else if (file.endsWith(".tar.gz") || file.endsWith(".tgz")) {' \
             '        contentType = "application/gzip";' \
