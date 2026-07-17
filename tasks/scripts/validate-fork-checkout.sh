@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Inspect the checkout that first-run setup will target. Git exposes a remote
 # URL but not GitHub's fork metadata; the interactive wizard uses this to guide
-# an upstream checkout through creating a fork before provider mutations begin.
+# an upstream checkout through creating a real fork before provider mutations.
 
 adaetum_origin_url() {
   if ! command -v git >/dev/null 2>&1; then

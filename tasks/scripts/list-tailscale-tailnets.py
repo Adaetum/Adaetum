@@ -27,10 +27,6 @@ def tailnets_from_api(token: str) -> list[str]:
         dns_name = str(device.get("dnsName", "")).strip().lower().rstrip(".")
         if "." in dns_name:
             tailnets.add(dns_name.split(".", 1)[1])
-    if not tailnets:
-        raise ValueError(
-            "Tailscale returned no MagicDNS names. Add or authorize one device in this tailnet, then rerun task init."
-        )
     return sorted(tailnets)
 
 
@@ -38,10 +34,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--token-stdin", action="store_true", help="Read the access token from standard input")
     parser.add_argument("--fixture", action="store_true", help="Return deterministic non-provider dry-run tailnets")
+    parser.add_argument("--fixture-empty", action="store_true", help="Simulate a valid new tailnet without devices")
     args = parser.parse_args()
     if args.fixture:
         print("tailnet-a1b2.ts.net")
         print("tailnet-c3d4.ts.net")
+        return 0
+    if args.fixture_empty:
         return 0
     if not args.token_stdin:
         parser.error("--token-stdin is required")

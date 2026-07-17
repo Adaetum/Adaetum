@@ -17,6 +17,18 @@ artifacts, and trigger the bootstrap workflows.
 > This workflow is opinionated on purpose. Follow the defaults unless you are
 > deliberately testing or recovering a specific step.
 
+## Maintainer cleanup before an upstream commit
+
+After testing with real domains, run `task clean` before proposing the setup
+changes to Adaetum upstream. It restores the committed public-safe
+`platform.yaml`, regenerates every tracked profile-owned manifest, and removes
+rebuildable installer outputs. It does not delete the gitignored `.env` or
+OS-protected resume credentials; those remain local and cannot enter the Git
+diff.
+
+Verify the handoff with `git diff --check` and the repository hooks before
+committing.
+
 ## Overview
 
 This setup flow is the supported first-time path for bringing up the bootstrap
@@ -59,6 +71,16 @@ default setup credential. It then creates the authenticated account's `Adaetum`
 fork (or reuses it), waits for GitHub to finish, and updates this checkout's
 `origin`. You confirm before that external action. Setup can then push rendered
 configuration, sync secrets, and trigger workflows against your fork.
+
+Setup reuses the current local checkout rather than cloning another directory.
+Canonical Adaetum is retained as the `upstream` remote and the selected fork
+becomes `origin`. If `owner/Adaetum` already exists but is not a GitHub fork of
+`Adaetum/Adaetum`, the walkthrough explains the name collision and suggests
+`owner/Adaetum-cluster` before creating the real fork. A valid existing GitHub
+CLI login and its token are reused instead of requesting another device login.
+If GitHub explicitly rejects the stored token, setup offers the CLI refresh
+flow. A temporary GitHub API failure is retried and reported as an availability
+problem; it never causes setup to replace a stored credential.
 
 Your fork is the out-of-band configuration and recovery copy. `task init`
 builds the break-glass materials from it; bootstrap then seeds the newly created
@@ -152,38 +174,128 @@ Setup will prompt you for these values during the run.
 - `CLOUDFLARE_API_TOKEN`
   Used for Cloudflare bootstrap, R2, and worker-related setup.
 
+Cloudflare uses **account** for the workspace that owns R2 buckets, Workers,
+and Tunnels. A **zone** is one public base domain managed in Cloudflare DNS.
+`task init` lists zones together with their owning account and carries that
+exact account ID into bootstrap; it does not default to the first account
+visible to the token.
+
 <details>
 <summary>Cloudflare token guidance</summary>
 
-- `Workers Scripts`: Edit
-- `Workers R2 Storage`: Edit
-- `Cloudflare Tunnel`: Edit
-- `Account Settings`: Read
-- `Access: Users`: Edit
-- `API Tokens`: Edit
-- `Zone`: Read
-- `DNS`: Edit
-- `Workers Routes`: Edit
+Use a Cloudflare **Account API token** so the integration is a durable service
+principal instead of being tied to one account member. New account tokens start
+with `cfat_`. Creating one requires Super Administrator access. In the target
+account, open **Manage Account → Account API Tokens**, create `Adaetum
+bootstrap`, and add:
+
+The walkthrough opens <https://dash.cloudflare.com/profile/api-tokens>, which
+provides the account-token link without hardcoding an operator's Cloudflare
+account ID. Cloudflare then routes to an account-specific address such as
+`https://dash.cloudflare.com/<account-id>/api-tokens/create`.
+
+- Account: `Account API Tokens` → `Edit`
+- Account: `Workers R2 Storage` → `Edit`
+- Account: `Workers Scripts` → `Edit`
+- Account: `Connectivity Directory` → `Admin`
+- Zone: `Zone` → `Read`
+- Zone: `DNS` → `Edit`
+- Zone: `Workers Routes` → `Edit`
+
+In Account Resources, include only the account that will own the cluster. In
+Zone Resources, include only its public domain/zone. The `Account API Tokens`
+permission at the `Edit` level allows Adaetum to derive the narrower
+bucket-scoped R2 credential. These names
+match the current dashboard; Cloudflare's API documentation and responses may
+refer to several `Edit` permissions as `Write`. User-owned tokens remain a
+compatibility path, but setup warns before accepting one.
+
+After validating the token, first-run offers to save it for interrupted setup
+resumption. The default is Yes. Adaetum uses macOS Login Keychain, Linux
+Secret Service, or a Windows current-user DPAPI-protected store when available
+and never falls back to a plaintext credential file. The saved value is keyed
+to the selected fork and is validated before every reuse; an invalid entry is
+removed automatically.
+
+The local protected copy exists only to resume an interrupted walkthrough. A
+successful real `task init` also syncs `CLOUDFLARE_API_TOKEN` and the other
+required runtime credentials to the fork's `Prod` GitHub environment. Setup
+stops if that required secret sync fails; dry-run never performs it.
 
 </details>
 
 ### Tailscale
 
 - `TAILSCALE_USER_API_TOKEN`
-  Used for bootstrap-time Tailscale API access.
+  A temporary, person-bound setup credential used to discover MagicDNS from
+  device DNS names, validate tag policy, and establish the durable enrollment identity. It is
+  discarded after bootstrap and is not stored in `.env`, `platform.yaml`, or
+  GitHub secrets. Create it with a **1-day expiration**, which covers setup and
+  a retry without leaving a durable user credential. With explicit approval,
+  Adaetum may keep it temporarily in the OS credential store so a cancelled
+  walkthrough can resume; it is removed automatically when rejected or expired.
 - `TAILSCALE_OAUTH_CLIENT_ID`
   Used for the long-term Tailscale OAuth credential.
 - `TAILSCALE_OAUTH_CLIENT_SECRET`
   Used for the long-term Tailscale OAuth credential.
 
+The OAuth client ID and secret are synchronized to the fork's `Prod` GitHub
+environment. Setup validates that identity by minting the first node's tagged,
+non-reusable auth key. That key is saved in the gitignored local `.env` for the
+installer build and synchronized as `TAILSCALE_AUTHKEY` to the same GitHub
+environment. The OAuth client can mint new enrollment credentials later,
+avoiding a dependency on one person's continuing tailnet membership.
+
+After preparing tag ownership, `task init` creates the OAuth client through
+Tailscale's keys API with the same shape shown in Trust credentials:
+
+- Description: `Adaetum node enrollment`
+- Scopes → Auth Keys: Write
+- Scopes → Policy File: Write
+- Scopes → Devices → Core: Read
+- Scopes → Devices → Posture Attributes: Read
+- Tags: `tag:rocky10`, `tag:server`, and `tag:cluster`
+
+The temporary API access token therefore also needs OAuth Keys: Write. Tailscale
+returns the OAuth client secret only in the creation response; Adaetum captures
+it immediately, validates it, and offers OS-protected resume storage. No manual
+OAuth form or browser automation is involved.
+
+The first node's auth key is not a separate operator input. Setup mints it with
+a **1-day expiration** so the local installer can be built and booted without
+rushing, while avoiding a durable enrollment secret. Tailscale invalidates the
+one-off key after its first successful use.
+
 The target tailnet domain is configured in `platform.yaml`; setup does not
 prompt for it.
+
+For a new or emptied tailnet, the API can return no device DNS names. In that
+case `task init` opens Tailscale's DNS page and asks for the displayed
+`*.ts.net` tailnet name inline. It does not require adding a throwaway device or
+leaving the setup workflow.
+
+The temporary API token also resolves the Tailscale trust bootstrap ordering:
+before an OAuth client can mint tagged node keys, the corresponding tag owners
+must exist in the tailnet policy. After the tailnet DNS name is known,
+`task init` uses the API token to merge the missing Adaetum tag ownership into
+the existing policy. The OAuth screen can then offer `tag:rocky10`,
+`tag:server`, and `tag:cluster`. Existing policy entries are preserved.
 
 <details>
 <summary>Tailscale token guidance</summary>
 
 - Bootstrap token: `TAILSCALE_USER_API_TOKEN`
+- Bootstrap token expiration: 1 day
+- First-node auth key: generated automatically, non-reusable, expires in 1 day,
+  saved to the local `.env` and GitHub `Prod` secrets
 - Long-term credentials: `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`
+- Temporary token permissions:
+  - `devices:core:read`, to discover the MagicDNS tailnet domain from devices
+  - `devices:posture_attributes:read`, required by Tailscale for policy access
+  - `policy_file` (Write), to validate and prepare tag ownership
+  - `oauth_keys` (Write), to create the durable OAuth client
+- OAuth client permissions use the same `auth_keys` and `policy_file` Write
+  access, their required read dependencies, and the Adaetum node tags.
 - OAuth scopes should include:
   - `devices:core:read`
   - `devices:posture_attributes`

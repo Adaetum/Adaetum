@@ -14,10 +14,12 @@ existing_file="${2:-.env}"
 vm_out_file="${3:-}"
 non_interactive="${NON_INTERACTIVE:-0}"
 github_sync="${GITHUB_SYNC:-0}"
+github_sync_required="${GITHUB_SYNC_REQUIRED:-0}"
 github_env="${GITHUB_ENVIRONMENT:-cluster}"
 write_vm_env="${WRITE_VM_ENV:-0}"
 require_cloudflare_bootstrap="${REQUIRE_CLOUDFLARE_BOOTSTRAP:-0}"
 require_tailscale_bootstrap="${REQUIRE_TAILSCALE_BOOTSTRAP:-0}"
+tailscale_bootstrap_validated="${TAILSCALE_BOOTSTRAP_VALIDATED:-0}"
 
 have_openssl=0
 if command -v openssl >/dev/null 2>&1; then
@@ -1047,7 +1049,8 @@ KS_UPLOAD_TOKEN="${default_upload}"
 
 # Tailscale
 tailscale_mode_default="oauth"
-if [ -n "$(existing_value TAILSCALE_AUTHKEY)" ]; then
+existing_tailscale_authkey="$(existing_value TAILSCALE_AUTHKEY)"
+if [ -n "${existing_tailscale_authkey}" ]; then
   tailscale_mode_default="authkey"
 fi
 TAILSCALE_USER_API_TOKEN="$(prompt_value TAILSCALE_USER_API_TOKEN 'TAILSCALE_USER_API_TOKEN (optional fallback)' "$(existing_value TAILSCALE_USER_API_TOKEN)" 1)"
@@ -1060,7 +1063,11 @@ if [ "${TAILSCALE_MODE}" = "authkey" ]; then
   TAILSCALE_OAUTH_CLIENT_ID=""
   TAILSCALE_OAUTH_CLIENT_SECRET=""
 else
-  TAILSCALE_AUTHKEY=""
+  if [ "${tailscale_bootstrap_validated}" = "1" ]; then
+    TAILSCALE_AUTHKEY="${existing_tailscale_authkey}"
+  else
+    TAILSCALE_AUTHKEY=""
+  fi
   TAILSCALE_OAUTH_CLIENT_ID="$(prompt_value TAILSCALE_OAUTH_CLIENT_ID 'TAILSCALE_OAUTH_CLIENT_ID' "$(existing_value TAILSCALE_OAUTH_CLIENT_ID)")"
   TAILSCALE_OAUTH_CLIENT_SECRET="$(prompt_value TAILSCALE_OAUTH_CLIENT_SECRET 'TAILSCALE_OAUTH_CLIENT_SECRET' "$(existing_value TAILSCALE_OAUTH_CLIENT_SECRET)" 1)"
 fi
@@ -1080,7 +1087,15 @@ if [ "${require_tailscale_bootstrap}" = "1" ] && [ -z "${TAILSCALE_DOMAIN}" ]; t
   exit 1
 fi
 
-if [ "${TAILSCALE_MODE}" = "oauth" ] || [ "${require_tailscale_bootstrap}" = "1" ]; then
+if [ "${tailscale_bootstrap_validated}" = "1" ]; then
+  if [ -z "${TAILSCALE_OAUTH_CLIENT_ID:-}" ] || \
+     [ -z "${TAILSCALE_OAUTH_CLIENT_SECRET:-}" ] || \
+     [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
+    echo "Previously validated Tailscale bootstrap values are incomplete." >&2
+    exit 1
+  fi
+  echo "Reusing the validated one-day Tailscale bootstrap auth key."
+elif [ "${TAILSCALE_MODE}" = "oauth" ] || [ "${require_tailscale_bootstrap}" = "1" ]; then
   if tailscale_bootstrap_from_inputs "${TAILSCALE_USER_API_TOKEN}" "${TAILSCALE_DOMAIN}" "${TAILSCALE_OAUTH_CLIENT_ID}" "${TAILSCALE_OAUTH_CLIENT_SECRET}" "${TAILSCALE_CLUSTER_TAG}"; then
     if [ -n "${TAILSCALE_OAUTH_CLIENT_ID:-}" ] && [ -n "${TAILSCALE_OAUTH_CLIENT_SECRET:-}" ]; then
       echo "Validated Tailscale OAuth settings and tag capabilities."
@@ -1098,6 +1113,15 @@ if [ "${TAILSCALE_MODE}" = "oauth" ] || [ "${require_tailscale_bootstrap}" = "1"
     fi
     echo "Warning: could not validate Tailscale OAuth bootstrap settings."
   fi
+fi
+
+# The user API token is bootstrap-only. Once the durable OAuth client has been
+# validated and the one-day, non-reusable bootstrap auth key has been minted,
+# do not persist the broader, person-bound token in .env or GitHub sync.
+if [ -n "${TAILSCALE_OAUTH_CLIENT_ID:-}" ] && \
+   [ -n "${TAILSCALE_OAUTH_CLIENT_SECRET:-}" ] && \
+   [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
+  TAILSCALE_USER_API_TOKEN=""
 fi
 
 # Platform/Kubernetes render inputs
@@ -1330,7 +1354,12 @@ fi
 
 if [ "${non_interactive}" = "1" ]; then
   if [ "${github_sync}" = "1" ]; then
-    sync_github_secrets "${github_env}" || true
+    if ! sync_github_secrets "${github_env}"; then
+      if [ "${github_sync_required}" = "1" ]; then
+        echo "Required GitHub secret sync failed; setup cannot safely continue." >&2
+        exit 1
+      fi
+    fi
   fi
   exit 0
 fi

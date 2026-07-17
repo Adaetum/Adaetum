@@ -47,7 +47,8 @@ task init
 `task init` creates or reuses your fork, collects and reviews the public
 platform profile, finds or downloads the verified Rocky installer ISO, guides
 provider authorization, selects the cluster domain from Cloudflare zones visible
-to the authorized token, and then starts setup. The console carries one
+to the authorized token together with the zone's owning Cloudflare account, and
+then starts setup. The console carries one
 five-section journey throughout: Fork, Providers, Profile, Installer, and
 Bootstrap. At completion it prints the exact generated ISO path and tells you
 how to attach it to the first physical host or VM for the unattended install.
@@ -55,7 +56,13 @@ Use `task initialize` only to rerun the setup workflow after the first run.
 
 If the checkout still points at Adaetum upstream, `task init` installs GitHub
 CLI, authenticates in the browser, creates or reuses your personal fork, and
-updates `origin` after you confirm the action.
+updates `origin` after you confirm the action. It keeps this local checkout and
+preserves canonical Adaetum as the `upstream` remote; it does not clone a second
+copy. If your GitHub account already has an unrelated repository named
+`Adaetum`, setup explains the collision and suggests another name for the real
+fork. Existing GitHub CLI credentials are reused on later runs.
+Transient GitHub API failures are retried and reported without forcing another
+login; only an explicitly rejected credential enters GitHub's refresh flow.
 
 To rehearse that experience without installing tools, changing Git, collecting
 secrets, or contacting providers, run:

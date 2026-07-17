@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Restore tracked public outputs from the committed non-secret platform profile.
+"""Restore the repository's public-safe profile and generated tracked outputs.
 
 This supports maintainers who need a safe baseline after local setup work. It
-does not read or preserve runtime secrets: the profile renderer is the only
-authority for every file this command writes.
+does not read runtime secrets: the profile renderer is the only authority for
+every generated file this command writes.
 """
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +18,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RENDER_SCRIPT = REPO_ROOT / "tasks" / "scripts" / "render-pods-config.py"
 PROFILE_RENDER_SCRIPT = REPO_ROOT / "tasks" / "scripts" / "render-platform-profile.py"
 DEFAULT_CONFIG = REPO_ROOT / "pods" / "cluster-config" / "cluster-config.env"
+PROFILE = REPO_ROOT / "platform.yaml"
+
+
+def reset_profile() -> None:
+    """Restore the committed profile without introducing a second profile source."""
+    result = subprocess.run(
+        ["git", "show", "HEAD:platform.yaml"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    PROFILE.write_text(result.stdout, encoding="utf-8")
 
 
 def load_render_module():
@@ -40,7 +54,7 @@ def load_profile_render_module():
 def build_profile_config() -> dict[str, str]:
     """Validate first so cleanup cannot render a malformed public baseline."""
     profile_renderer = load_profile_render_module()
-    profile = profile_renderer.load_profile(REPO_ROOT / "platform.yaml")
+    profile = profile_renderer.load_profile(PROFILE)
     profile_renderer.validate_profile(profile)
     return profile_renderer.config_from_profile(profile)
 
@@ -69,7 +83,7 @@ def preview_baseline() -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Render tracked public-safe pods config and manifests from platform.yaml."
+        description="Reset platform.yaml and render the tracked public-safe manifests."
     )
     parser.add_argument(
         "--config-file",
@@ -87,12 +101,13 @@ def main(argv: list[str]) -> int:
         if args.preview:
             sys.stdout.write(preview_baseline())
             return 0
+        reset_profile()
         write_baseline(Path(args.config_file))
     except Exception as exc:  # noqa: BLE001
         print(str(exc), file=sys.stderr)
         return 1
 
-    print("Rendered tracked public-safe pods config from platform.yaml.", file=sys.stderr)
+    print("Reset platform.yaml and rendered tracked public-safe outputs.", file=sys.stderr)
     return 0
 
 

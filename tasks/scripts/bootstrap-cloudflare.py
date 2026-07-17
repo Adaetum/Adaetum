@@ -373,8 +373,9 @@ def create_r2_token(token: str, account_id: str, bucket: str):
 
   msg = "Unable to create R2 API token.\n" + "\n".join(errors)
   msg += (
-    "\nHint: bootstrap PAT must allow creating tokens via API "
-    "(Cloudflare template: 'Create additional tokens')."
+    "\nHint: the recommended account-owned bootstrap token must include "
+    "Account API Tokens Write. A legacy user-owned token must use Cloudflare's "
+    "Create Additional Tokens template."
   )
   raise RuntimeError(msg)
 

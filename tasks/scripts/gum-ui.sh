@@ -41,13 +41,17 @@ adaetum_gum_input() {
   local label="$1"
   local default="${2:-}"
   local secret="${3:-0}"
-  local -a args=(input --placeholder "${label}")
+  local -a args=(input)
+
+  gum style --foreground "${ADAETUM_UI_ACCENT}" --bold "${label}" >&2
 
   if [ "${secret}" = "1" ]; then
     # Existing secrets must never be placed in a UI default or echoed back.
-    args+=(--password)
+    args+=(--password --placeholder "Enter securely")
   elif [ -n "${default}" ]; then
-    args+=(--value "${default}")
+    args+=(--value "${default}" --placeholder "Press Enter to accept the default")
+  else
+    args+=(--placeholder "Enter a value")
   fi
   gum "${args[@]}"
 }

@@ -158,11 +158,11 @@ prepare_cloudflare_bootstrap_token() {
   sub_step "1.1a" "Create the Cloudflare bootstrap token"
   printf '%s\n' "Adaetum will use this one token to create or reuse the R2 bucket, its scoped upload credential, Cloudflare Tunnel, and the required DNS records."
   printf '%s\n' "The token must be restricted to the Adaetum Cloudflare account and the zone for ${default_zone_input}."
-  printf '%s\n' "On Cloudflare's token page, start with Create additional tokens, name it Adaetum bootstrap, then also grant Account: Workers R2 Storage Edit and Cloudflare Tunnel Edit; Zone: Zone Read and DNS Edit."
+  printf '%s\n' "In Manage Account > Account API Tokens, create Adaetum bootstrap with Account API Tokens: Edit, Workers R2 Storage: Edit, Workers Scripts: Edit, and Connectivity Directory: Admin; add Zone: Read, DNS: Edit, and Workers Routes: Edit for the target domain only."
 
   if [ "${dry_run}" != "1" ] && adaetum_ui_confirm "Open Cloudflare's token page now?" "y"; then
     if ! adaetum_open_url "https://dash.cloudflare.com/profile/api-tokens"; then
-      warn "Unable to open a browser automatically. Open https://dash.cloudflare.com/profile/api-tokens to create the token."
+      warn "Unable to open a browser automatically. Open Cloudflare My Profile > API Tokens, then follow the Account API Tokens link for the target account."
     fi
   fi
 
@@ -514,6 +514,7 @@ if [ "${first_run}" = "1" ]; then
 fi
 
 default_cf_token="${SETUP_CLOUDFLARE_API_TOKEN:-}"
+default_cf_account_id="${SETUP_CLOUDFLARE_ACCOUNT_ID:-}"
 default_gh_token="${SETUP_GITHUB_SYNC_TOKEN:-}"
 default_ts_user_token="${SETUP_TAILSCALE_USER_API_TOKEN:-}"
 default_ts_domain="${SETUP_TAILSCALE_DOMAIN:-}"
@@ -532,6 +533,7 @@ if [ "${dry_run}" = "1" ]; then
   default_ts_oauth_client_secret="${default_ts_oauth_client_secret:-dry-run-client-secret}"
 fi
 default_cf_token="$(normalize_compact "${default_cf_token}")"
+default_cf_account_id="$(normalize_compact "${default_cf_account_id}")"
 default_gh_token="$(normalize_compact "${default_gh_token}")"
 default_ts_user_token="$(normalize_compact "${default_ts_user_token}")"
 default_ts_domain="$(normalize_compact "${default_ts_domain}")"
@@ -1062,6 +1064,7 @@ if step_enabled "2"; then
   fi
   cat > "${tmp_existing}" <<EOF
 CLOUDFLARE_API_TOKEN=${cf_token}
+CLOUDFLARE_ACCOUNT_ID=${default_cf_account_id}
 TAILSCALE_USER_API_TOKEN=${ts_user_token}
 TAILSCALE_DOMAIN=${ts_domain}
 TAILSCALE_OAUTH_CLIENT_ID=${ts_oauth_client_id}
@@ -1080,7 +1083,17 @@ BOOTSTRAP_BACKUP_PASSPHRASE_B64=${existing_backup_passphrase_b64}
 EOF
 
   sub_step "2.3" "Render environment values"
-  WRITE_VM_ENV=0 NON_INTERACTIVE=1 OPINIONATED_GITHUB_TOKEN_MODE=1 REQUIRE_CLOUDFLARE_BOOTSTRAP=1 REQUIRE_TAILSCALE_BOOTSTRAP=1 ./tasks/scripts/generate-env-files.sh .env "${tmp_existing}"
+  WRITE_VM_ENV=0 \
+    NON_INTERACTIVE=1 \
+    OPINIONATED_GITHUB_TOKEN_MODE=1 \
+    REQUIRE_CLOUDFLARE_BOOTSTRAP=1 \
+    REQUIRE_TAILSCALE_BOOTSTRAP=1 \
+    TAILSCALE_BOOTSTRAP_VALIDATED=1 \
+    GITHUB_SYNC=1 \
+    GITHUB_SYNC_REQUIRED=1 \
+    GITHUB_ENVIRONMENT="${GITHUB_ENVIRONMENT:-Prod}" \
+    ./tasks/scripts/generate-env-files.sh .env "${tmp_existing}"
+  ok "Required setup credentials were synced to GitHub secrets."
   backup_passphrase="$(normalize_compact "$(existing_env_value .env BOOTSTRAP_BACKUP_PASSPHRASE)")"
   backup_passphrase_b64="$(normalize_compact "$(existing_env_value .env BOOTSTRAP_BACKUP_PASSPHRASE_B64)")"
   if [ -z "${backup_passphrase}" ] || [ -z "${backup_passphrase_b64}" ]; then

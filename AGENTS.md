@@ -26,8 +26,9 @@ The repository uses a new opinionated setup process:
      manager supports it, then confirms Cloudflare, GitHub, and Tailscale
      account readiness before secrets are requested
    - When the checkout points at upstream, installs GitHub CLI and uses its
-     browser authentication to create or reuse the operator's Adaetum fork
-     before changing the local `origin` remote
+     existing authentication when available to create or reuse the operator's
+     real Adaetum fork, preserves canonical Adaetum as `upstream`, and changes
+     the existing checkout's `origin` without cloning another local copy
    - Runs read-only preflight after the fork owner updates `platform.yaml` and
      adds the Rocky ISO
    - `task init:dryrun` is the no-mutation rehearsal path: it validates local
@@ -91,6 +92,12 @@ New nodes join the cluster through a phase-based break-glass process:
 - Prefer running playbooks from `ansible/` so `ansible.cfg` is picked up.
 - Keep sensitive hosts and secrets out of git; update `.gitignore` if new
   inventory files are introduced.
+- First-run resume credentials may use macOS Keychain, Linux Secret Service,
+  or Windows current-user DPAPI, but must never fall back to a plaintext
+  repository or home-directory cache.
+- `task clean` is the maintainer handoff boundary: it restores the public-safe
+  `platform.yaml`, re-renders tracked outputs, and removes derived installers
+  before changes are proposed upstream.
 - OS install/bootstrap is always single-node at install time. Break-glass may
   initialize a new cluster on that one node; HA comes later when additional
   nodes are added.
