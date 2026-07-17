@@ -11,6 +11,7 @@ cd "${repo_root}"
 . "${repo_root}/tasks/scripts/gum-ui.sh"
 dry_run="${ADAETUM_INIT_DRY_RUN:-0}"
 clean_run="${ADAETUM_INIT_CLEAN:-0}"
+auto_run="${ADAETUM_INIT_AUTO:-0}"
 first_run="${ADAETUM_FIRST_RUN:-0}"
 platform_profile="${ADAETUM_PLATFORM_PROFILE:-${repo_root}/platform.yaml}"
 supports_color=0
@@ -44,6 +45,7 @@ TOTAL_STEPS=4
 current_setup_step=""
 setup_local_iso_path=""
 iso_preflight_announced=0
+setup_detail_log="${repo_root}/.adaetum/logs/task-init-details.log"
 
 banner() {
   if [ "${first_run}" = "1" ]; then

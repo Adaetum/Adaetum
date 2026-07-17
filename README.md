@@ -62,6 +62,19 @@ how to attach it to the first physical host or VM for the unattended install.
 It also offers to place a ready-to-use copy in your Downloads folder.
 Use `task initialize` only to rerun the setup workflow after the first run.
 
+After one successful interactive setup, the same machine can replay the saved
+choices without questions:
+
+```bash
+task init:auto
+```
+
+Automatic replay validates and reuses the private recovery repository,
+`platform.yaml`, OS-protected provider credentials, generated runtime values,
+and verified installer media. It fails closed when required saved state is
+missing or expired; it never creates a plaintext answer file or bypasses
+provider validation.
+
 If the checkout still points at Adaetum upstream, `task init` installs GitHub
 CLI, authenticates in the browser, creates or reuses a standalone private
 repository, and updates `origin` after you confirm the action. It keeps this local checkout and

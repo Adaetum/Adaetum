@@ -18,6 +18,17 @@ first_run_status() {
   adaetum_ui_status "$1" "$2"
 }
 
+first_run_with_progress() {
+  local title="$1"
+  shift
+  if adaetum_gum_enabled; then
+    gum spin --title "${title}" -- "$@"
+    return $?
+  fi
+  first_run_status info "${title}"
+  "$@"
+}
+
 first_run_phase() {
   adaetum_ui_phase "$1" 5 "$2" "$3"
 }
@@ -97,6 +108,7 @@ first_run_ensure_github_login() {
   fi
 
   if ! gh auth token --hostname github.com >/dev/null 2>&1; then
+    [ "${auto_run}" != 1 ] || die "Automatic replay requires an existing GitHub CLI login. Run task init interactively once."
     adaetum_ui_confirm "Sign in to GitHub in your browser now?" y || exit 0
     gh auth login --hostname github.com --web --git-protocol https --scopes repo,workflow
     authentication_action="signed in"
@@ -108,6 +120,7 @@ first_run_ensure_github_login() {
     validation_rc=$?
   fi
   if [ "${validation_rc}" = 2 ]; then
+    [ "${auto_run}" != 1 ] || die "The saved GitHub credential was rejected. Run task init interactively to refresh it."
     adaetum_ui_confirm "The stored GitHub credential was rejected. Refresh it in your browser now?" y || exit 0
     gh auth refresh --hostname github.com --scopes repo,workflow
     authentication_action="refreshed"
@@ -154,9 +167,9 @@ first_run_ensure_github_actions() {
     first_run_message "${ADAETUM_UI_MUTED}" "Adaetum's workflow triggers use main, but this new repository currently defaults to ${default_branch}. Adaetum will publish the current commit to main and make main the repository's workflow branch. Your ${current_branch} development branch remains unchanged and available."
     adaetum_ui_confirm "Create and select the main workflow branch now?" y || exit 0
     if ! gh api "repos/${repository}/branches/main" >/dev/null 2>&1; then
-      gum spin --title "Publishing the main workflow branch..." -- git push origin HEAD:refs/heads/main
+      first_run_with_progress "Publishing the main workflow branch..." git push origin HEAD:refs/heads/main
     fi
-    gum spin --title "Selecting main as the default workflow branch..." -- gh repo edit "${repository}" --default-branch main
+    first_run_with_progress "Selecting main as the default workflow branch..." gh repo edit "${repository}" --default-branch main
     first_run_status info "Main is ready. Waiting for GitHub workflow registration..."
     attempt=1
     while [ "${attempt}" -le 10 ]; do
@@ -192,17 +205,45 @@ first_run_set_recovery_origin() {
   local recovery_url="$1" origin=""
   origin="$(adaetum_origin_url || true)"
 
-  if [ -n "${origin}" ] && adaetum_origin_is_upstream "${origin}" && ! git remote get-url upstream >/dev/null 2>&1; then
-    git remote rename origin upstream
-    git remote add origin "${recovery_url}"
-  elif git remote get-url origin >/dev/null 2>&1; then
-    if ! git remote get-url upstream >/dev/null 2>&1; then
+  # Keep remote names stable across retries. Renaming origin after gh has
+  # inspected or created a repository can leave a partially configured checkout
+  # when setup is interrupted between the rename and the replacement add.
+  if ! git remote get-url upstream >/dev/null 2>&1; then
+    if [ -n "${origin}" ] && adaetum_origin_is_upstream "${origin}"; then
+      git remote add upstream "${origin}"
+    else
       git remote add upstream "https://github.com/Adaetum/Adaetum.git"
     fi
+  fi
+  if git remote get-url origin >/dev/null 2>&1; then
     git remote set-url origin "${recovery_url}"
   else
-    git remote add upstream "https://github.com/Adaetum/Adaetum.git"
     git remote add origin "${recovery_url}"
+  fi
+}
+
+first_run_track_recovery_branch() {
+  local current_branch=""
+  current_branch="$(git branch --show-current)"
+  [ -n "${current_branch}" ] || die "Setup requires a named Git branch before it can publish recovery state."
+
+  if git ls-remote --exit-code --heads origin "${current_branch}" >/dev/null 2>&1; then
+    first_run_with_progress "Refreshing the existing recovery branch..." \
+      git fetch origin "+refs/heads/${current_branch}:refs/remotes/origin/${current_branch}"
+    if ! git merge-base --is-ancestor "origin/${current_branch}" HEAD; then
+      if ! git diff --quiet || ! git diff --cached --quiet; then
+        die "The existing recovery branch must be merged, but this checkout has uncommitted changes. Commit or stash them, then rerun task init."
+      fi
+      first_run_status info "Restoring existing cluster configuration and recovery history from ${current_branch}..."
+      if ! first_run_with_progress "Merging the existing recovery branch..." \
+        git merge --no-edit "origin/${current_branch}"; then
+        die "The existing recovery branch conflicts with this checkout. Resolve or abort the Git merge, then rerun task init."
+      fi
+    fi
+    git branch --set-upstream-to="origin/${current_branch}" "${current_branch}" >/dev/null
+    first_run_status success "Reusing ${current_branch} from the private recovery repository."
+  else
+    first_run_with_progress "Publishing the current development branch..." git push --set-upstream origin HEAD
   fi
 }
 
@@ -282,9 +323,33 @@ first_run_find_available_recovery_destination() {
   die "Could not find an available private repository name after checking Adaetum-cluster through Adaetum-cluster-50."
 }
 
+first_run_find_preferred_recovery_destination() {
+  local owner="$1" candidate=""
+  local visibility="" can_admin="" is_fork="" repository_size=""
+  candidate="${owner}/Adaetum-cluster"
+
+  first_run_lookup_repository "${candidate}"
+  if [ "${first_run_repository_state}" = "exists" ]; then
+    visibility="$(gh api "repos/${candidate}" --jq '.visibility // empty' 2>/dev/null || true)"
+    can_admin="$(gh api "repos/${candidate}" --jq '.permissions.admin // false' 2>/dev/null || true)"
+    is_fork="$(gh api "repos/${candidate}" --jq '.fork // false' 2>/dev/null || true)"
+    repository_size="$(gh api "repos/${candidate}" --jq '.size // 0' 2>/dev/null || printf '0')"
+    if [ "${visibility}" = private ] && [ "${can_admin}" = true ] && [ "${is_fork}" = false ]; then
+      if [ "${repository_size}" -eq 0 ] || gh api "repos/${candidate}/contents/Taskfile.yml" >/dev/null 2>&1; then
+        first_run_available_recovery_destination="${candidate}"
+        return 0
+      fi
+    fi
+  fi
+
+  # A same-named unrelated repository is a collision; only then suggest the
+  # first unused suffix instead of hiding a valid existing recovery repository.
+  first_run_find_available_recovery_destination "${owner}"
+}
+
 first_run_configure_recovery_repository() {
   local origin="$(adaetum_origin_url || true)" login="" repository="" recovery_url=""
-  local visibility="" can_admin="" is_fork="" owner="" name="" suggested="" current_repository="" repository_size="" created=0 current_branch=""
+  local visibility="" can_admin="" is_fork="" owner="" name="" suggested="" current_repository="" repository_size="" created=0
 
   first_run_ensure_github_login
   login="${first_run_github_login}"
@@ -300,6 +365,7 @@ first_run_configure_recovery_repository() {
           git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "https://github.com/Adaetum/Adaetum.git"
           first_run_heading "Private recovery repository"
           first_run_status success "Using private origin: ${origin}"
+          first_run_track_recovery_branch
           return 0
         fi
       fi
@@ -316,8 +382,12 @@ first_run_configure_recovery_repository() {
   if [ "${dry_run}" = 1 ]; then
     suggested="${login}/Adaetum-cluster"
   else
-    first_run_find_available_recovery_destination "${login}"
+    first_run_find_preferred_recovery_destination "${login}"
     suggested="${first_run_available_recovery_destination}"
+    if [ "${auto_run}" = 1 ]; then
+      first_run_lookup_repository "${suggested}"
+      [ "${first_run_repository_state}" = exists ] || die "Automatic replay requires an existing private recovery repository. Run task init interactively once."
+    fi
   fi
 
   while :; do
@@ -351,21 +421,16 @@ first_run_configure_recovery_repository() {
       adaetum_ui_confirm "Reuse the private Adaetum recovery repository ${repository}?" y || exit 0
     else
       adaetum_ui_confirm "Create ${repository} as a private repository now?" y || exit 0
-      gum spin --title "Creating private recovery repository..." -- gh repo create "${repository}" --private --description "Private Adaetum cluster configuration and recovery"
+      first_run_with_progress "Creating private recovery repository..." gh repo create "${repository}" --private --description "Private Adaetum cluster configuration and recovery"
       created=1
     fi
     first_run_move_resume_credentials "${origin}" "${recovery_url}"
     first_run_set_recovery_origin "${recovery_url}"
-    current_branch="$(git branch --show-current)"
     if [ "${created}" = 1 ]; then
-      gum spin --title "Publishing the main workflow branch..." -- git push origin HEAD:refs/heads/main
-      gum spin --title "Selecting main as the default workflow branch..." -- gh repo edit "${repository}" --default-branch main
+      first_run_with_progress "Publishing the main workflow branch..." git push origin HEAD:refs/heads/main
+      first_run_with_progress "Selecting main as the default workflow branch..." gh repo edit "${repository}" --default-branch main
     fi
-    if [ "${current_branch}" = main ]; then
-      git branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
-    else
-      gum spin --title "Publishing the current development branch..." -- git push --set-upstream origin HEAD
-    fi
+    first_run_track_recovery_branch
     break
   done
   first_run_heading "Private recovery repository"
@@ -428,6 +493,7 @@ first_run_select_cloudflare_domain() {
       fi
     fi
     if [ -z "${first_run_cloudflare_token:-}" ]; then
+      [ "${auto_run}" != 1 ] || die "Automatic replay could not load a valid saved Cloudflare token. Run task init interactively to replace it."
       if adaetum_ui_confirm "Open Cloudflare's token page now?" y; then
         adaetum_open_url "https://dash.cloudflare.com/profile/api-tokens" || first_run_message 11 "Open Cloudflare My Profile → API Tokens, then follow the Account API Tokens link for the target account."
       fi
@@ -468,7 +534,19 @@ first_run_select_cloudflare_domain() {
   done <<< "${zone_rows}"
   [ "${#zone_options[@]}" -gt 0 ] || die "Cloudflare returned no active zones with an owning account."
 
-  selected_label="$(first_run_choose "Choose the public DNS zone and owning Cloudflare account" "${zone_options[@]}")"
+  selected_label=""
+  if [ "${auto_run}" = 1 ] && [ "${dry_run}" != 1 ] && [ -n "${first_run_domain:-}" ]; then
+    for index in "${!zone_options[@]}"; do
+      if [ "${zone_names[${index}]}" = "${first_run_domain}" ]; then
+        selected_label="${zone_options[${index}]}"
+        first_run_status info "Automatic replay selected saved Cloudflare zone ${first_run_domain}."
+        break
+      fi
+    done
+    [ -n "${selected_label}" ] || die "Saved Cloudflare zone ${first_run_domain} is not available to the saved token. Run task init interactively to select another zone."
+  else
+    selected_label="$(first_run_choose "Choose the public DNS zone and owning Cloudflare account" "${zone_options[@]}")"
+  fi
   for index in "${!zone_options[@]}"; do
     if [ "${zone_options[${index}]}" = "${selected_label}" ]; then
       first_run_domain="${zone_names[${index}]}"
@@ -485,6 +563,7 @@ first_run_select_cloudflare_domain() {
       --account-id "${first_run_cloudflare_account_id}" \
       --zone-domain "${first_run_domain}" \
       --validate-access-only >/dev/null 2>&1; then
+    [ "${auto_run}" != 1 ] || die "The saved Cloudflare token no longer has the required access. Run task init interactively to replace it."
     local replacement_token="" replacement_rows="" replacement_zone="" replacement_account_id="" replacement_account_name=""
     local replacement_has_zone=0
     first_run_heading "Cloudflare permission required"
@@ -529,6 +608,33 @@ first_run_select_cloudflare_domain() {
   export ADAETUM_CLOUDFLARE_AUTHORIZED=1
 }
 
+first_run_load_saved_tailscale_oauth() {
+  local credential_store="$1" credential_namespace="$2" credential_backend="$3"
+  local stored_id="" stored_secret=""
+  [ "${dry_run}" != 1 ] || return 1
+  [ "${clean_run}" != 1 ] || return 1
+  [ -n "${credential_backend}" ] || return 1
+  if [ -n "${first_run_tailscale_oauth_client_id:-}" ] && [ -n "${first_run_tailscale_oauth_client_secret:-}" ]; then
+    return 0
+  fi
+
+  stored_id="$(bash "${credential_store}" get "${credential_namespace}" tailscale-oauth-client-id 2>/dev/null || true)"
+  stored_secret="$(bash "${credential_store}" get "${credential_namespace}" tailscale-oauth-client-secret 2>/dev/null || true)"
+  [ -n "${stored_id}" ] && [ -n "${stored_secret}" ] || return 1
+  first_run_status info "Found a saved Tailscale OAuth client in ${credential_backend}; validating it before reuse."
+  if printf '%s\n%s\n' "${stored_id}" "${stored_secret}" | python3 ./tasks/scripts/bootstrap-tailscale.py --oauth-credentials-stdin --validate-oauth-only >/dev/null 2>&1; then
+    first_run_tailscale_oauth_client_id="${stored_id}"
+    first_run_tailscale_oauth_client_secret="${stored_secret}"
+    first_run_status success "Reusing the validated Tailscale OAuth client from ${credential_backend}."
+    return 0
+  fi
+
+  first_run_status warning "The saved Tailscale OAuth client is invalid and will be removed from ${credential_backend}."
+  bash "${credential_store}" delete "${credential_namespace}" tailscale-oauth-client-id
+  bash "${credential_store}" delete "${credential_namespace}" tailscale-oauth-client-secret
+  return 1
+}
+
 first_run_select_tailscale_domain() {
   local tailnets="" credential_store="${repo_root}/tasks/scripts/setup-credential-store.sh"
   local credential_namespace="" credential_backend="" stored_token="" tailnet_input=""
@@ -550,6 +656,7 @@ first_run_select_tailscale_domain() {
   if [ "${dry_run}" != 1 ]; then
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
+    first_run_load_saved_tailscale_oauth "${credential_store}" "${credential_namespace}" "${credential_backend}" || true
     if [ "${clean_run}" != 1 ] && [ -n "${credential_backend}" ]; then
       stored_token="$(bash "${credential_store}" get "${credential_namespace}" tailscale-api-token 2>/dev/null || true)"
     fi
@@ -564,18 +671,24 @@ first_run_select_tailscale_domain() {
       fi
     fi
     if [ -z "${first_run_tailscale_token:-}" ]; then
-      if adaetum_ui_confirm "Open Tailscale's access-token page now?" y; then
-        adaetum_open_url "https://login.tailscale.com/admin/settings/keys" || first_run_message 11 "Open Tailscale's API key page in your browser."
-      fi
-      adaetum_ui_confirm "I created the token and copied it. Continue to secure entry?" y || exit 0
-      first_run_tailscale_token="$(first_run_secret "Tailscale access token")"
-      [ -n "${first_run_tailscale_token}" ] || die "Tailscale access token is required to find your tailnet."
-      first_run_status info "Validating Tailscale access and loading available tailnets..."
-      tailnets="$(printf '%s' "${first_run_tailscale_token}" | python3 ./tasks/scripts/list-tailscale-tailnets.py --token-stdin)" || die "Unable to validate Tailscale access. Check the token and required permissions shown above."
-      first_run_status success "Tailscale access validated."
-      if [ -n "${credential_backend}" ] && { [ "${clean_run}" = 1 ] || adaetum_ui_confirm "Save this one-day token in ${credential_backend} so a cancelled setup can resume?" y; }; then
-        printf '%s\n' "${first_run_tailscale_token}" | bash "${credential_store}" set "${credential_namespace}" tailscale-api-token
-        first_run_status success "Tailscale setup token saved in ${credential_backend}; any previous value was replaced and no plaintext cache was created."
+      if [ -n "${first_run_tailscale_oauth_client_id:-}" ] && [ -n "${first_run_overlay_domain:-}" ]; then
+        tailnets="${first_run_overlay_domain}"
+        first_run_status success "The durable saved OAuth client replaces the expired temporary Tailscale setup token for this rerun."
+      else
+        [ "${auto_run}" != 1 ] || die "Automatic replay could not load durable Tailscale OAuth credentials and a saved tailnet. Run task init interactively once."
+        if adaetum_ui_confirm "Open Tailscale's access-token page now?" y; then
+          adaetum_open_url "https://login.tailscale.com/admin/settings/keys" || first_run_message 11 "Open Tailscale's API key page in your browser."
+        fi
+        adaetum_ui_confirm "I created the token and copied it. Continue to secure entry?" y || exit 0
+        first_run_tailscale_token="$(first_run_secret "Tailscale access token")"
+        [ -n "${first_run_tailscale_token}" ] || die "Tailscale access token is required to find your tailnet."
+        first_run_status info "Validating Tailscale access and loading available tailnets..."
+        tailnets="$(printf '%s' "${first_run_tailscale_token}" | python3 ./tasks/scripts/list-tailscale-tailnets.py --token-stdin)" || die "Unable to validate Tailscale access. Check the token and required permissions shown above."
+        first_run_status success "Tailscale access validated."
+        if [ -n "${credential_backend}" ] && { [ "${clean_run}" = 1 ] || adaetum_ui_confirm "Save this one-day token in ${credential_backend} so a cancelled setup can resume?" y; }; then
+          printf '%s\n' "${first_run_tailscale_token}" | bash "${credential_store}" set "${credential_namespace}" tailscale-api-token
+          first_run_status success "Tailscale setup token saved in ${credential_backend}; any previous value was replaced and no plaintext cache was created."
+        fi
       fi
     fi
   else
@@ -586,7 +699,12 @@ first_run_select_tailscale_domain() {
   export SETUP_TAILSCALE_USER_API_TOKEN="${first_run_tailscale_token}"
   export ADAETUM_TAILSCALE_AUTHORIZED=1
   if [ -n "${tailnets}" ]; then
-    first_run_overlay_domain="$(first_run_choose "Choose the Tailscale tailnet for this cluster" ${tailnets})"
+    if [ "${auto_run}" = 1 ] && [ "${dry_run}" != 1 ] && [ -n "${first_run_overlay_domain:-}" ]; then
+      printf '%s\n' ${tailnets} | grep -Fxq "${first_run_overlay_domain}" || die "Saved Tailscale tailnet ${first_run_overlay_domain} is not available to the saved credentials. Run task init interactively to select another tailnet."
+      first_run_status info "Automatic replay selected saved Tailscale tailnet ${first_run_overlay_domain}."
+    else
+      first_run_overlay_domain="$(first_run_choose "Choose the Tailscale tailnet for this cluster" ${tailnets})"
+    fi
   else
     first_run_heading "New or empty tailnet"
     first_run_message "${ADAETUM_UI_MUTED}" "Tailscale validated the token, but this tailnet has no device DNS names to discover yet. This is normal for a new or emptied tailnet."
@@ -610,6 +728,14 @@ first_run_select_tailscale_domain() {
   adaetum_ui_key_value "OAuth tags prepared" "tag:rocky10, tag:server, tag:cluster"
   if [ "${dry_run}" = 1 ]; then
     first_run_status info "Dry run would validate and prepare Tailscale tag ownership with the temporary API token."
+  elif [ -n "${first_run_tailscale_oauth_client_id:-}" ] && [ -n "${first_run_tailscale_oauth_client_secret:-}" ]; then
+    first_run_status info "Validating Tailscale tag ownership with the durable OAuth client..."
+    printf '%s\n%s\n' "${first_run_tailscale_oauth_client_id}" "${first_run_tailscale_oauth_client_secret}" | python3 ./tasks/scripts/bootstrap-tailscale.py \
+      --oauth-credentials-stdin \
+      --tailnet "${first_run_overlay_domain}" \
+      --cluster-tag "tag:cluster" \
+      --prepare-policy-only >/dev/null || die "Unable to validate Tailscale tag ownership with the saved OAuth client."
+    first_run_status success "Tailscale tag ownership is ready."
   else
     first_run_status info "Validating and preparing Tailscale tag ownership..."
     printf '%s' "${first_run_tailscale_token}" | python3 ./tasks/scripts/bootstrap-tailscale.py \
@@ -623,7 +749,7 @@ first_run_select_tailscale_domain() {
 
 first_run_capture_tailscale_oauth() {
   local credential_store="${repo_root}/tasks/scripts/setup-credential-store.sh"
-  local credential_namespace="" credential_backend="" stored_id="" stored_secret="" oauth_output="" key="" value=""
+  local credential_namespace="" credential_backend="" oauth_output="" key="" value=""
   first_run_heading "Tailscale enrollment"
   first_run_message "${ADAETUM_UI_MUTED}" "This OAuth client replaces the temporary user token for future node enrollment. Unlike the user token, it is an application identity rather than one person's identity."
   first_run_heading "OAuth client Adaetum will create"
@@ -637,23 +763,9 @@ first_run_capture_tailscale_oauth() {
   if [ "${dry_run}" != 1 ]; then
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
-    if [ "${clean_run}" != 1 ] && [ -n "${credential_backend}" ]; then
-      stored_id="$(bash "${credential_store}" get "${credential_namespace}" tailscale-oauth-client-id 2>/dev/null || true)"
-      stored_secret="$(bash "${credential_store}" get "${credential_namespace}" tailscale-oauth-client-secret 2>/dev/null || true)"
-    fi
-    if [ -n "${stored_id}" ] && [ -n "${stored_secret}" ]; then
-      first_run_status info "Found a saved Tailscale OAuth client in ${credential_backend}; validating it before reuse."
-      if printf '%s\n%s\n' "${stored_id}" "${stored_secret}" | python3 ./tasks/scripts/bootstrap-tailscale.py --oauth-credentials-stdin --validate-oauth-only >/dev/null 2>&1; then
-        first_run_tailscale_oauth_client_id="${stored_id}"
-        first_run_tailscale_oauth_client_secret="${stored_secret}"
-        first_run_status success "Reusing the validated Tailscale OAuth client from ${credential_backend}."
-      else
-        first_run_status warning "The saved Tailscale OAuth client is invalid and will be removed from ${credential_backend}."
-        bash "${credential_store}" delete "${credential_namespace}" tailscale-oauth-client-id
-        bash "${credential_store}" delete "${credential_namespace}" tailscale-oauth-client-secret
-      fi
-    fi
+    first_run_load_saved_tailscale_oauth "${credential_store}" "${credential_namespace}" "${credential_backend}" || true
     if [ -z "${first_run_tailscale_oauth_client_id:-}" ] || [ -z "${first_run_tailscale_oauth_client_secret:-}" ]; then
+      [ "${auto_run}" != 1 ] || die "Automatic replay could not load a valid saved Tailscale OAuth client. Run task init interactively once."
       first_run_status info "Creating the scoped Tailscale OAuth client automatically..."
       oauth_output="$(printf '%s' "${first_run_tailscale_token}" | python3 ./tasks/scripts/bootstrap-tailscale.py \
         --user-token-stdin \
@@ -752,6 +864,7 @@ first_run_review_profile() {
 first_run_installer_media() {
   local helper="${repo_root}/tasks/scripts/manage-rocky-installer-iso.sh" report path version architecture image_type size selected preferred_arch=x86_64
   local other_arch=aarch64 release_choice="" selected_release=10.2 type_choice="" selected_type=minimal arch_choice="" selected_arch="" download_size=""
+  local saved_media=""
   first_run_heading "Rocky Linux installer media"
   report="$(bash "${helper}" list 2>/dev/null || true)"
   if [ -n "${report}" ]; then
@@ -761,7 +874,24 @@ first_run_installer_media() {
       media_options+=("${media_label}")
       media_paths+=("${path}")
     done <<< "${report}"
-    if [ "${#media_options[@]}" -eq 1 ]; then
+    if [ "${auto_run}" = 1 ] && [ "${dry_run}" != 1 ] && [ -f .env ]; then
+      saved_media="$(awk -F= '$1 == "LOCAL_ISO_PATH" {print substr($0, index($0, "=") + 1); exit}' .env | tr -d '\r\n')"
+      case "${saved_media}" in
+        "") ;;
+        /*) ;;
+        *) saved_media="${repo_root}/${saved_media}" ;;
+      esac
+    fi
+    if [ -n "${saved_media}" ]; then
+      for media_index in "${!media_paths[@]}"; do
+        if [ "${media_paths[${media_index}]}" = "${saved_media}" ]; then
+          selected="${media_paths[${media_index}]}"
+          first_run_status info "Automatic replay selected saved installer media: $(basename "${selected}")."
+          break
+        fi
+      done
+      [ -n "${selected}" ] || die "Saved installer media is no longer available: ${saved_media}. Run task init interactively to select or download another ISO."
+    elif [ "${#media_options[@]}" -eq 1 ]; then
       selected="${media_paths[0]}"
       first_run_status info "Found supported installer media: ${media_options[0]}"
     else
@@ -837,7 +967,12 @@ first_run_installer_media() {
 }
 
 adaetum_first_run_prepare() {
-  [ -t 0 ] && [ -t 1 ] || die "task init needs an interactive terminal."
+  if [ "${auto_run}" != 1 ]; then
+    [ -t 0 ] && [ -t 1 ] || die "task init needs an interactive terminal. Use task init:auto only after one successful interactive setup."
+  else
+    first_run_heading "Automatic saved-state replay"
+    first_run_message "${ADAETUM_UI_MUTED}" "Adaetum will reuse the validated recovery repository, platform profile, protected provider credentials, runtime values, and installer media saved by an earlier interactive setup. No plaintext answer file is used."
+  fi
   command -v task >/dev/null 2>&1 || die "Task is required to continue."
   command -v git >/dev/null 2>&1 || die "git is required to continue."
   [ "${dry_run}" = 1 ] || command -v gh >/dev/null 2>&1 || die "GitHub CLI is required. Rerun task init so it can install gh."

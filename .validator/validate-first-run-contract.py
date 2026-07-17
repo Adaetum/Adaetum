@@ -53,6 +53,7 @@ def main() -> int:
     rocky_header = ROCKY_HEADER.read_text(encoding="utf-8")
     taskfile = TASKFILE.read_text(encoding="utf-8")
     env_tasks = ENV_TASKS.read_text(encoding="utf-8")
+    gum_ui = (ROOT / "tasks" / "scripts" / "gum-ui.sh").read_text(encoding="utf-8")
     if "ADAETUM_FIRST_RUN=1" not in wizard:
         fail("first-run launcher does not enter the shared setup program")
     if "I have updated platform.yaml" in first_run or "placed the Rocky Linux" in first_run:
@@ -79,6 +80,8 @@ def main() -> int:
         fail("first-run still creates a public GitHub fork")
     if "first_run_find_available_recovery_destination" not in first_run:
         fail("first-run does not search for an available private repository name after a collision")
+    if "first_run_find_preferred_recovery_destination" not in first_run:
+        fail("first-run does not prefer an existing valid recovery repository")
     if 'candidate="${owner}/Adaetum-cluster-${suffix}"' not in first_run:
         fail("private repository collision recovery can repeat the same occupied suggestion")
     if "first_run_lookup_repository" not in first_run or 'first_run_repository_state="available"' not in first_run:
@@ -89,11 +92,19 @@ def main() -> int:
         fail("first-run does not verify private visibility and administrative access")
     if ".fork // false" not in first_run or "contents/Taskfile.yml" not in first_run:
         fail("first-run can accept a fork or unrelated private repository")
+    if "first_run_track_recovery_branch" not in first_run or "Refreshing the existing recovery branch" not in first_run:
+        fail("reused recovery repositories do not restore branch tracking")
+    if 'git merge --no-edit "origin/${current_branch}"' not in first_run:
+        fail("reused recovery repositories do not reconcile existing cluster history")
+    if "this checkout has uncommitted changes" not in first_run:
+        fail("recovery branch reconciliation can overwrite an uncommitted worktree")
+    if "git remote rename origin upstream" in first_run:
+        fail("recovery remote setup can leave origin missing after a partial rename")
     if "The current repository will not be deleted" not in first_run:
         fail("public-origin migration does not preserve the existing repository safely")
     if "first_run_move_resume_credentials" not in first_run or "Moved protected resume credentials" not in first_run:
         fail("repository migration strands credentials in the previous secure-store namespace")
-    if "git remote rename origin upstream" not in first_run:
+    if 'git remote add upstream "https://github.com/Adaetum/Adaetum.git"' not in first_run:
         fail("first-run does not preserve canonical Adaetum as the upstream remote")
     if "first_run_select_tailscale_domain" not in first_run:
         fail("first-run does not discover the Tailscale tailnet")
@@ -367,6 +378,16 @@ def main() -> int:
         fail("one discovered installer ISO is not automatically verified and reused")
     if "init:clean:" not in taskfile or "ADAETUM_INIT_CLEAN" not in env_tasks:
         fail("fresh-input first-run mode is not exposed as task init:clean")
+    if "init:auto:" not in taskfile or "ADAETUM_INIT_AUTO" not in env_tasks:
+        fail("saved-state first-run replay is not exposed as task init:auto")
+    if "adaetum_ui_auto_enabled" not in gum_ui or "Automatic replay" not in gum_ui:
+        fail("first-run questions cannot replay saved/default decisions")
+    if "Automatic replay could not load a valid saved Cloudflare token" not in first_run:
+        fail("automatic replay can fall through to interactive Cloudflare credential capture")
+    if "durable saved OAuth client replaces the expired temporary Tailscale setup token" not in first_run:
+        fail("automatic replay still depends on the one-day Tailscale setup token")
+    if "Automatic saved-state replay" not in first_run or "No plaintext answer file is used" not in first_run:
+        fail("automatic replay does not explain its saved-state ownership boundary")
     if '[ "${clean_run}" != 1 ]' not in first_run or "ADAETUM_IGNORE_EXISTING_ENV" not in setup:
         fail("clean initialization can reuse saved provider or runtime values")
     if "ADAETUM_IGNORE_EXISTING_ENV" not in env_renderer:

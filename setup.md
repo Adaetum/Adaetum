@@ -81,6 +81,9 @@ recovery store.
 Setup publishes `main` as the default workflow branch because Adaetum's Actions
 triggers target `main`. If setup is launched from another branch, that development
 branch is also published and remains checked out locally.
+When an existing recovery repository is selected, setup restores its matching
+branch and merges that cluster history with newer local Adaetum changes before
+continuing. It refuses to perform that merge over uncommitted work.
 If an older Adaetum setup already synchronized environment secrets to a public
 fork, remove those secrets and rotate the provider credentials after the private
 repository is ready; GitHub does not permit reading the old secret values back.
@@ -147,6 +150,22 @@ entries, generated `.env`, and GitHub environment secrets. It deliberately
 retains the GitHub CLI login, private recovery repository, and verified Rocky
 installer media because those are setup infrastructure rather than saved
 provider values.
+
+### Replay saved setup state
+
+After completing `task init` interactively once, use `task init:auto` for an
+unattended rerun on the same workstation. This is the supported path for an
+automation agent iterating on setup: normal default-Yes actions are accepted,
+while the selected recovery repository, public profile, provider credentials,
+runtime values, and installer media are recovered from their existing owners.
+
+Adaetum deliberately does not create an answers file. Public configuration
+remains in `platform.yaml`; Git owns the recovery destination; Cloudflare and
+Tailscale credentials remain in the OS credential store; `.env` remains a
+gitignored runtime output; and the verified local ISO records installer media
+selection. If any required value is missing, expired, or no longer authorized,
+automatic replay stops and asks you to run `task init` interactively rather
+than opening a browser or guessing a replacement.
 
 ### Terminal experience
 
