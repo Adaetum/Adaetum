@@ -567,9 +567,27 @@ echo "[KS] install_src=${install_src:-<none>} install_disk=${install_disk:-<none
 target_disk=""
 target_size=0
 
+is_install_target_candidate() {
+  local name="$1"
+  local type="$2"
+  local removable="$3"
+  local size="$4"
+
+  [ "${type}" = "disk" ] || return 1
+  [ "${removable}" = "0" ] || return 1
+  # Anaconda exposes zram swap as TYPE=disk. Never let memory-backed,
+  # loopback, or optical devices reach the destructive wipe boundary.
+  case "${name}" in
+    zram*|ram*|loop*|sr*) return 1 ;;
+  esac
+  # The generated root LV requires 10 GiB plus boot partitions and metadata.
+  # Keep 2 GiB of headroom instead of selecting a disk Anaconda cannot use.
+  [ "${size}" -ge 12884901888 ] || return 1
+  return 0
+}
+
 while read -r name type rm size; do
-  [ "${type}" = "disk" ] || continue
-  [ "${rm}" = "0" ] || continue
+  is_install_target_candidate "${name}" "${type}" "${rm}" "${size}" || continue
   if [ -n "${install_disk}" ] && [ "${name}" = "${install_disk}" ]; then
     continue
   fi
@@ -577,20 +595,6 @@ while read -r name type rm size; do
   target_size="${size}"
   break
 done < <(lsblk -dbn -o NAME,TYPE,RM,SIZE 2>/dev/null || true)
-
-if [ -z "${target_disk}" ]; then
-  # Fallback: first non-removable disk if install media couldn't be identified.
-  while read -r name type rm size; do
-    [ "${type}" = "disk" ] || continue
-    [ "${rm}" = "0" ] || continue
-    if [ -n "${install_disk}" ] && [ "${name}" = "${install_disk}" ]; then
-      continue
-    fi
-    target_disk="${name}"
-    target_size="${size}"
-    break
-  done < <(lsblk -dbn -o NAME,TYPE,RM,SIZE 2>/dev/null || true)
-fi
 
 if [ -z "${target_disk}" ]; then
   echo "[KS] ERROR: no suitable target disk found."

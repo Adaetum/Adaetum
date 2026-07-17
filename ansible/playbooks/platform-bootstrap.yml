@@ -1106,12 +1106,14 @@
     - name: Install Rancher
       ansible.builtin.shell: |
         {{ kubectl_cmd }} create namespace cattle-system --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
+        # The next task relaxes Rancher's startup probe for slower homelab
+        # nodes. Waiting here would let the chart's shorter default probe
+        # restart Rancher before Adaetum can apply that policy.
         helm upgrade --install rancher rancher-latest/rancher \
           --namespace cattle-system \
           --set replicas={{ rancher_replica_target | default('1') }} \
           --set hostname={{ rancher_hostname }} \
           --set bootstrapPassword={{ rancher_admin_password }} \
-          --wait \
           --timeout 15m
       args:
         executable: /bin/bash
@@ -1172,6 +1174,8 @@
     - name: Relax Rancher startup probe for single-node and reboot convergence
       ansible.builtin.shell: |
         set -euo pipefail
+        # Match the 15-minute Helm timeout above. The first Rancher catalog
+        # restore can exceed five minutes on constrained homelab nodes.
         {{ kubectl_cmd }} -n cattle-system patch deployment rancher --type=strategic -p '{
           "spec": {
             "replicas": {{ rancher_replica_target | default("1") }},
@@ -1185,7 +1189,7 @@
                       "httpGet": {"path": "/healthz", "port": 80, "scheme": "HTTP"},
                       "timeoutSeconds": 5,
                       "periodSeconds": 5,
-                      "failureThreshold": 60,
+                      "failureThreshold": 180,
                       "successThreshold": 1
                     }
                   }

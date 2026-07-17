@@ -998,7 +998,7 @@ if ! tailscale ip -4 >/dev/null 2>&1; then
 fi
 
 resolve_automatic_bootstrap_mode() {
-  mode_detector="/opt/ansible-runner/ansible/ansible-scripts/detect-cluster-bootstrap-mode.py"
+  mode_detector="/usr/local/libexec/adaetum/detect-cluster-bootstrap-mode.py"
   status_file="$(mktemp)"
   if ! tailscale status --json >"${status_file}"; then
     rm -f "${status_file}"

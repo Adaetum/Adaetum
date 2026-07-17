@@ -380,6 +380,15 @@ tasks:
           fi
           mkdir -p "${work_dir}/ks"
           cp -f "${ks_rendered}" "${work_dir}/ks/${ks_name}"
+          mode_detector="ansible/ansible-scripts/detect-cluster-bootstrap-mode.py"
+          if [ ! -f "${mode_detector}" ]; then
+            echo "Missing automatic bootstrap mode detector: ${mode_detector}"
+            exit 1
+          fi
+          # Tailscale decides start versus join before the remotely fetched
+          # Ansible bundle runs, so this small decision helper belongs on the
+          # installer media beside the kickstart that invokes it.
+          cp -f "${mode_detector}" "${work_dir}/ks/detect-cluster-bootstrap-mode.py"
           ks_url="cdrom:/ks/${ks_name}"
         fi
         ks_args="inst.ks=${ks_url}"
