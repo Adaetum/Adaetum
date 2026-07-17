@@ -6,13 +6,13 @@ metadata:
 spec:
   installation: rocky10
   cluster:
-    domain: adaetum.invalid
-    localDomain: adaetum.local
-    overlayDomain: example-tailnet.ts.net
+    domain: mudazukai.cloud
+    localDomain: mudazukai.cloud.local
+    overlayDomain: armadillo-peacock.ts.net
     overlayClusterTag: tag:cluster
     repository:
       owner: gitea-admin
       name: cluster
   delivery:
-    bootstrapBaseUrl: https://bootstrap.adaetum.invalid
+    bootstrapBaseUrl: https://bootstrap.mudazukai.cloud
     r2Bucket: iso
