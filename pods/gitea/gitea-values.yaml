@@ -49,8 +49,8 @@ gitea:
     queue:
       TYPE: level
     server:
-      DOMAIN: gitea.adaetum.local
-      ROOT_URL: http://gitea.adaetum.local/
+      DOMAIN: gitea.mudazukai.cloud.local
+      ROOT_URL: http://gitea.mudazukai.cloud.local/
   admin:
     existingSecret: gitea-admin-secret
     passwordMode: initialOnlyRequireReset

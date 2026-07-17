@@ -4,7 +4,7 @@ metadata:
   name: prometheus-ui-public
   namespace: observability
   annotations:
-    external-dns.alpha.kubernetes.io/hostname: prometheus.adaetum.invalid
+    external-dns.alpha.kubernetes.io/hostname: prometheus.mudazukai.cloud
     nginx.ingress.kubernetes.io/auth-url: http://authentik-server.authentik.svc.cluster.local:80/outpost.goauthentik.io/auth/nginx
     nginx.ingress.kubernetes.io/auth-snippet: proxy_set_header X-Forwarded-Host $http_host;
     nginx.ingress.kubernetes.io/auth-signin: https://$host/outpost.goauthentik.io/start?rd=$scheme://$http_host$escaped_request_uri
@@ -12,7 +12,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: prometheus.adaetum.invalid
+    - host: prometheus.mudazukai.cloud
       http:
         paths:
           - path: /

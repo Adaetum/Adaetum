@@ -31,7 +31,7 @@ spec:
             - name: ANSIBLE_EXTRA_ARGS
               value: ""
             - name: TAILSCALE_DOMAIN
-              value: "example-tailnet.ts.net"
+              value: "armadillo-peacock.ts.net"
             - name: TAILSCALE_CLUSTER_TAG
               value: "tag:cluster"
           volumeMounts:
