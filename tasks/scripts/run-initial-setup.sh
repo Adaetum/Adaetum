@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Execute the stateful half of `task initialize` after public profile rendering
 # and secret collection. This script may mutate GitHub, Cloudflare, R2, and the
-# fork's rendered GitOps files; keep discovery and profile validation outside it.
+# recovery repository's rendered GitOps files; keep discovery and profile validation outside it.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
@@ -14,6 +14,8 @@ initial_setup_auto_yes="$(printf '%s' "${INITIAL_SETUP_AUTO_YES:-0}" | tr '[:upp
 initial_setup_skip_env="$(printf '%s' "${INITIAL_SETUP_SKIP_ENV_SETUP:-0}" | tr '[:upper:]' '[:lower:]')"
 initial_setup_embedded="$(printf '%s' "${INITIAL_SETUP_EMBEDDED:-0}" | tr '[:upper:]' '[:lower:]')"
 initial_setup_embedded_prefix="${INITIAL_SETUP_EMBEDDED_PREFIX:-3}"
+initial_setup_compact="$(printf '%s' "${INITIAL_SETUP_COMPACT:-0}" | tr '[:upper:]' '[:lower:]')"
+initial_setup_detail_log="${INITIAL_SETUP_DETAIL_LOG:-${repo_root}/.adaetum/logs/initial-setup-details.log}"
 dry_run="${ADAETUM_INIT_DRY_RUN:-0}"
 # Track remote workflow outcomes separately from local preparation so the final
 # report can tell an operator exactly which provider-side action needs attention.
@@ -21,6 +23,26 @@ workflow_errors=0
 triggered_workflow_run_ids=()
 triggered_workflow_files=()
 bootstrap_bundle_uploaded=0
+
+compact_enabled() {
+  [ "${initial_setup_compact}" = "1" ] || [ "${initial_setup_compact}" = "true" ] || [ "${initial_setup_compact}" = "yes" ]
+}
+
+run_with_details() {
+  local label="$1"
+  shift
+  if ! compact_enabled; then
+    "$@"
+    return $?
+  fi
+  mkdir -p "$(dirname "${initial_setup_detail_log}")"
+  if "$@" >>"${initial_setup_detail_log}" 2>&1; then
+    status_ok "${label}"
+    return 0
+  fi
+  status_fail "${label} — details: ${initial_setup_detail_log}"
+  return 1
+}
 
 prompt_yes_no() {
   local label="$1"
@@ -588,7 +610,6 @@ GITHUB_APP_PRIVATE_KEY_B64
 MONOREPO_GITHUB_APP_ID
 MONOREPO_GITHUB_APP_INSTALLATION_ID
 MONOREPO_GITHUB_APP_PRIVATE_KEY_B64
-GITHUB_SYNC_TOKEN
 GITEA_SEED_SOURCE_USERNAME
 GITEA_SEED_SOURCE_TOKEN
 GITEA_PUSH_MIRROR_ENABLED
@@ -915,6 +936,15 @@ ensure_repo_clean_for_workflow_dispatch() {
     return 0
   fi
 
+  if compact_enabled; then
+    echo "Warning: ${workflow_file} has relevant uncommitted changes; GitHub uses the committed branch."
+    if [ "${#pathspecs[@]}" -eq 0 ]; then
+      git status --short --untracked-files=no >>"${initial_setup_detail_log}" 2>&1 || true
+    else
+      git status --short --untracked-files=no -- "${pathspecs[@]}" >>"${initial_setup_detail_log}" 2>&1 || true
+    fi
+    return 0
+  fi
   echo "Warning: detected uncommitted tracked changes relevant to GitHub workflow dispatch."
   echo "GitHub Actions read committed repo state from GitHub, not your local edits."
   if [ "${#pathspecs[@]}" -eq 0 ]; then
@@ -1091,6 +1121,15 @@ run_workflow_step() {
   local workflow_file="$1"
   local branch="$2"
   local extra_input="${3:-}"
+  if compact_enabled; then
+    if run_workflow "${workflow_file}" "${branch}" "${extra_input}" >>"${initial_setup_detail_log}" 2>&1; then
+      status_ok "$(workflow_short_name "${workflow_file}") triggered"
+      return 0
+    fi
+    status_fail "$(workflow_short_name "${workflow_file}") could not be triggered — details: ${initial_setup_detail_log}"
+    workflow_errors=1
+    return 0
+  fi
   if ! run_workflow "${workflow_file}" "${branch}" "${extra_input}"; then
     echo "Warning: workflow step failed for ${workflow_file}; continuing to collect failures."
     workflow_errors=1
@@ -1197,7 +1236,7 @@ if [ "${initial_setup_embedded}" = "1" ] || [ "${initial_setup_embedded}" = "tru
   :
 else
   adaetum_ui_hero "ADAETUM  /  BOOTSTRAP" "Initial setup wizard" "Prepare, upload, sync, and publish the first install"
-  adaetum_ui_message 245 "Fork: ${repo_root}"
+  adaetum_ui_message 245 "Checkout: ${repo_root}"
 fi
 
 if [ "${dry_run}" = "1" ]; then
@@ -1232,53 +1271,48 @@ sub_stage "1.1" "Use existing .env or run env wizard"
 if [ "${initial_setup_skip_env}" = "1" ] || [ "${initial_setup_skip_env}" = "true" ] || [ "${initial_setup_skip_env}" = "yes" ]; then
   :
 elif prompt_yes_no "Run env wizard first (writes .env)?" "y"; then
-  ./tasks/scripts/generate-env-files.sh .env .env
+  bash ./tasks/scripts/generate-env-files.sh .env .env
 fi
 
 stage "2/8" "Backup passphrase"
 sub_stage "2.1" "Ensure BOOTSTRAP_BACKUP_PASSPHRASE values exist"
-ensure_backup_passphrase ".env" ""
-update_runtime_env_cache_buster ".env"
+run_with_details "Recovery passphrase ready" ensure_backup_passphrase ".env" ""
+run_with_details "Runtime version updated" update_runtime_env_cache_buster ".env"
 
 stage "3/8" "Golden ISO upload"
 sub_stage "3.1" "Upload local root ISOs to R2"
 if prompt_yes_no "Upload golden ISOs from local files to Cloudflare R2 now?" "y"; then
-  if ! upload_golden_isos; then
-    echo "Warning: golden ISO upload failed; continuing with the wizard."
-    echo "Fix R2 credentials/permissions and re-run later if needed."
+  if ! run_with_details "Installer media uploaded to R2" upload_golden_isos; then
+    echo "Warning: installer upload failed; continuing. Details: ${initial_setup_detail_log}"
   fi
 fi
 
 stage "4/8" "Break-glass bundle upload"
 sub_stage "4.0" "Validate Phase 50 source repo auth"
-validate_phase50_source_repo_auth ".env"
+run_with_details "Source repository access validated" validate_phase50_source_repo_auth ".env"
 sub_stage "4.0b" "Validate opinionated GitHub push mirror auth"
-validate_opinionated_github_push_mirror_auth ".env"
+run_with_details "Recovery mirror access validated" validate_opinionated_github_push_mirror_auth ".env"
 sub_stage "4.1" "Build ansible-runner bundle"
 sub_stage "4.2" "Upload bundle to R2/Worker"
 bundle_upload_mode="$(printf '%s' "${INITIAL_SETUP_FORCE_BUNDLE_UPLOAD:-1}" | tr '[:upper:]' '[:lower:]')"
 if [ "${bundle_upload_mode}" = "1" ] || [ "${bundle_upload_mode}" = "true" ] || [ "${bundle_upload_mode}" = "yes" ]; then
-  echo "Force mode enabled: always rebuilding and uploading the break-glass bundle."
-  if ! upload_bootstrap_bundle; then
-    echo "Warning: break-glass bundle upload failed; continuing with the wizard."
-    echo "Fix R2/Worker credentials and re-run later with: task publish"
+  if ! run_with_details "Break-glass bundle built and published" upload_bootstrap_bundle; then
+    echo "Warning: break-glass bundle publication failed; continuing. Details: ${initial_setup_detail_log}"
   fi
 elif prompt_yes_no "Build and upload break-glass ansible bundle now?" "y"; then
-  if ! upload_bootstrap_bundle; then
-    echo "Warning: break-glass bundle upload failed; continuing with the wizard."
-    echo "Fix R2/Worker credentials and re-run later with: task publish"
+  if ! run_with_details "Break-glass bundle built and published" upload_bootstrap_bundle; then
+    echo "Warning: break-glass bundle publication failed; continuing. Details: ${initial_setup_detail_log}"
   fi
 fi
 if [ -f "dist/bootstrap-runtime.env" ]; then
-  update_runtime_env_cache_buster ".env"
+  run_with_details "Runtime version finalized" update_runtime_env_cache_buster ".env"
 fi
 
 stage "5/8" "GitHub secret sync"
 sub_stage "5.1" "Sync non-empty .env values to GitHub secrets"
 if prompt_yes_no "Sync current .env non-empty secrets to GitHub ${github_env} now?" "y"; then
-  if ! sync_env_to_github "${github_env}"; then
-    echo "Warning: GitHub secret sync failed; continuing with the wizard."
-    echo "Fix GH token/repo permissions and re-run later with: task initialize"
+  if ! run_with_details "GitHub environment secrets synchronized" sync_env_to_github "${github_env}"; then
+    echo "Warning: GitHub secret sync failed; continuing. Details: ${initial_setup_detail_log}"
   fi
 fi
 
@@ -1327,7 +1361,7 @@ sub_stage "8.2" "Build local install ISO (task build-iso)"
 run_local_iso_setting="$(printf '%s' "${INITIAL_SETUP_RUN_LOCAL_ISO_BUILD:-prompt}" | tr '[:upper:]' '[:lower:]')"
 local_iso_requested=0
 local_iso_bg_pid=""
-local_iso_bg_log="dist/local-iso-build.log"
+local_iso_bg_log="${repo_root}/.adaetum/logs/local-iso-build.log"
 case "${run_local_iso_setting}" in
   1|true|yes|y)
     local_iso_requested=1
@@ -1342,9 +1376,9 @@ case "${run_local_iso_setting}" in
     ;;
 esac
 
-if [ "${local_iso_requested}" -eq 1 ]; then
+  if [ "${local_iso_requested}" -eq 1 ]; then
   if [ "${deferred_mode}" -eq 1 ]; then
-    mkdir -p dist
+    mkdir -p "$(dirname "${local_iso_bg_log}")"
     rm -f "${local_iso_bg_log}"
     echo "Starting local ISO build in background..."
     (run_task build-iso >"${local_iso_bg_log}" 2>&1) &
@@ -1370,8 +1404,12 @@ if [ -n "${local_iso_bg_pid}" ]; then
   else
     echo "Warning: local ISO build failed."
     if [ -f "${local_iso_bg_log}" ]; then
-      echo "Local ISO build log tail (last 60 lines):"
-      tail -n 60 "${local_iso_bg_log}" || true
+      if compact_enabled; then
+        echo "Details: ${local_iso_bg_log}"
+      else
+        echo "Local ISO build log tail (last 60 lines):"
+        tail -n 60 "${local_iso_bg_log}" || true
+      fi
     fi
   fi
 fi

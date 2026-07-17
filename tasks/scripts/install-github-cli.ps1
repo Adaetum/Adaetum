@@ -1,5 +1,5 @@
 # Installs GitHub CLI so task init can authenticate in the browser and create
-# the user's fork without asking them to manually copy a repository URL.
+# the user's private recovery repository without asking for a repository URL.
 
 $ErrorActionPreference = "Stop"
 

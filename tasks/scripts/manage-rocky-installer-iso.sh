@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Own the one supported installer-media input. This script only accepts Rocky
-# 10 Minimal ISOs because the bootstrap and validation paths are built around
-# that media; it verifies downloaded bytes before placing them in repo root.
+# Own the supported Rocky installer-media inputs. Minimal is the default; DVD
+# is available for operators who need a complete offline package repository.
+# Rocky's Boot ISO (online installer) is intentionally unsupported because it
+# lacks the local package repository consumed by Adaetum's kickstart.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 release="10.2"
@@ -17,22 +18,34 @@ format_size() {
   fi
 }
 
+sha256_file() {
+  local path="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${path}" | awk '{print $1}'
+  else
+    sha256sum "${path}" | awk '{print $1}'
+  fi
+}
+
 list() {
   local iso=""
   local base=""
   local version=""
   local arch=""
+  local image_type=""
   local found=0
   while IFS= read -r iso; do
     [ -n "${iso}" ] || continue
     base="$(basename "${iso}")"
-    if [[ ! "${base}" =~ ^Rocky-10(\.[0-9]+)?-(x86_64|aarch64)-minimal\.iso$ ]]; then
+    if [[ ! "${base}" =~ ^Rocky-10(\.[0-9]+)?-(x86_64|aarch64)-(minimal|dvd1|dvd)\.iso$ ]]; then
       continue
     fi
     version="${BASH_REMATCH[1]:-.0}"
     version="10${version}"
     arch="${BASH_REMATCH[2]}"
-    printf '%s\tRocky %s\t%s\t%s\n' "${iso}" "${version}" "${arch}" "$(format_size "${iso}")"
+    image_type="${BASH_REMATCH[3]}"
+    [ "${image_type}" = dvd1 ] && image_type=dvd
+    printf '%s\tRocky %s\t%s\t%s\t%s\n' "${iso}" "${version}" "${arch}" "${image_type}" "$(format_size "${iso}")"
     found=1
   done < <(
     {
@@ -48,7 +61,7 @@ adopt() {
   local source="$1"
   local base="$(basename "${source}")"
   local destination="${repo_root}/${base}"
-  if [[ ! "${base}" =~ ^Rocky-10(\.[0-9]+)?-(x86_64|aarch64)-minimal\.iso$ ]]; then
+  if [[ ! "${base}" =~ ^Rocky-10(\.[0-9]+)?-(x86_64|aarch64)-(minimal|dvd1|dvd)\.iso$ ]]; then
     echo "Unsupported Rocky installer ISO: ${source}" >&2
     exit 1
   fi
@@ -70,7 +83,11 @@ adopt() {
 
 download() {
   local arch="$1"
-  local base="Rocky-${release}-${arch}-minimal.iso"
+  local image_type="${2:-minimal}"
+  local requested_release="${3:-${release}}"
+  local file_type="${image_type}"
+  [ "${image_type}" = dvd ] && file_type=dvd1
+  local base="Rocky-${requested_release}-${arch}-${file_type}.iso"
   local url="https://download.rockylinux.org/pub/rocky/10/isos/${arch}/${base}"
   local checksum_url="${url}.CHECKSUM"
   local output="${repo_root}/${base}"
@@ -83,31 +100,56 @@ download() {
     x86_64|aarch64) ;;
     *) echo "Unsupported Rocky installer architecture: ${arch}" >&2; exit 1 ;;
   esac
+  case "${image_type}" in
+    minimal|dvd) ;;
+    *) echo "Unsupported Rocky installer image type: ${image_type}" >&2; exit 1 ;;
+  esac
   command -v curl >/dev/null 2>&1 || {
     echo "curl is required to download installer media." >&2
     exit 1
   }
-  if [ -f "${output}" ]; then
-    echo "Installer ISO already exists: ${output}"
-    return 0
-  fi
-
-  trap 'rm -f "${partial}" "${checksum_file}"' EXIT
-  echo "Downloading Rocky Linux ${release} Minimal (${arch})..."
-  curl --fail --location --progress-bar --output "${partial}" "${url}"
+  local display_type="Minimal"
+  [ "${image_type}" = dvd ] && display_type="DVD"
+  trap 'rm -f "${checksum_file}"' EXIT
   curl --fail --location --silent --show-error --output "${checksum_file}" "${checksum_url}"
-  expected="$(awk '{print $1}' "${checksum_file}" | tr -d '\r\n')"
-  if [ -z "${expected}" ]; then
+  # Rocky publishes BSD-style checksum files:
+  # SHA256 (Rocky-10.2-x86_64-minimal.iso) = <digest>
+  expected="$(awk '$1 == "SHA256" && $3 == "=" { print tolower($4); exit }' "${checksum_file}" | tr -d '\r\n')"
+  if [[ ! "${expected}" =~ ^[0-9a-f]{64}$ ]]; then
     echo "Official checksum file did not contain a SHA-256 digest." >&2
     exit 1
   fi
-  if command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "${partial}" | awk '{print $1}')"
-  else
-    actual="$(sha256sum "${partial}" | awk '{print $1}')"
+
+  if [ -f "${output}" ]; then
+    actual="$(sha256_file "${output}")"
+    if [ "${actual}" != "${expected}" ]; then
+      echo "Existing installer ISO does not match Rocky's published SHA-256: ${output}" >&2
+      exit 1
+    fi
+    rm -f "${checksum_file}"
+    trap - EXIT
+    echo "Reusing verified installer ISO: ${output}"
+    return 0
   fi
+
+  if [ -f "${partial}" ]; then
+    actual="$(sha256_file "${partial}")"
+    if [ "${actual}" = "${expected}" ]; then
+      mv "${partial}" "${output}"
+      rm -f "${checksum_file}"
+      trap - EXIT
+      echo "Reusing completed download and verified installer ISO: ${output}"
+      return 0
+    fi
+    echo "Resuming the existing Rocky Linux ${requested_release} ${display_type} download (${arch})..."
+  else
+    echo "Downloading Rocky Linux ${requested_release} ${display_type} (${arch})..."
+  fi
+
+  curl --fail --location --continue-at - --progress-bar --output "${partial}" "${url}"
+  actual="$(sha256_file "${partial}")"
   if [ "${actual}" != "${expected}" ]; then
-    echo "Downloaded ISO checksum did not match Rocky's published SHA-256." >&2
+    echo "Downloaded ISO checksum did not match Rocky's published SHA-256. The partial file was retained so a rerun can resume it: ${partial}" >&2
     exit 1
   fi
   mv "${partial}" "${output}"
@@ -119,6 +161,6 @@ download() {
 case "${1:-list}" in
   list) list ;;
   adopt) adopt "${2:?usage: manage-rocky-installer-iso.sh adopt <path>}" ;;
-  download) download "${2:?usage: manage-rocky-installer-iso.sh download <x86_64|aarch64>}" ;;
-  *) echo "usage: manage-rocky-installer-iso.sh [list|adopt <path>|download <x86_64|aarch64>]" >&2; exit 2 ;;
+  download) download "${2:?usage: manage-rocky-installer-iso.sh download <x86_64|aarch64> [minimal|dvd] [release]}" "${3:-minimal}" "${4:-${release}}" ;;
+  *) echo "usage: manage-rocky-installer-iso.sh [list|adopt <path>|download <x86_64|aarch64> [minimal|dvd] [release]]" >&2; exit 2 ;;
 esac

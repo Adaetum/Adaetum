@@ -88,7 +88,7 @@ load_env() {
 
 if adaetum_gum_enabled; then
   adaetum_gum_heading "R2 logs recovery"
-  gum style --foreground 245 "Fork: ${repo_root}"
+  gum style --foreground 245 "Checkout: ${repo_root}"
 else
   echo "R2 Logs Wizard"
   echo "Repo: ${repo_root}"

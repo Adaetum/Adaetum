@@ -10,7 +10,7 @@ manual test.
 | Rocky 10 clean install | Required | Required |
 | Default-profile bootstrap and recovery | Required | Required |
 | Cloudflare, GitHub, and Tailscale integration validation | Required | Required |
-| Fork recovery and clean-cluster rebuild drill | Required | Required |
+| Private-repository recovery and clean-cluster rebuild drill | Required | Required |
 | Documentation, links, and support matrix review | Required | Required |
 | Ubuntu experimental path | Not required | Required before stable support claim |
 

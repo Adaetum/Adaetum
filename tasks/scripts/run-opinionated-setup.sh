@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The supported fork-first setup entrypoint. It asks only for runtime secrets,
+# The supported private-recovery setup entrypoint. It asks only for runtime secrets,
 # derives public values from platform.yaml, and commits rendered GitOps output
-# before the break-glass bundle creates a cluster from this fork.
+# before the break-glass bundle creates a cluster from this repository.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
@@ -46,12 +46,12 @@ iso_preflight_announced=0
 
 banner() {
   if [ "${first_run}" = "1" ]; then
-    adaetum_ui_hero "ADAETUM  /  FIRST-RUN" "Build your break-glass cluster" "Fork · Providers · Profile · Installer · Bootstrap"
-    adaetum_ui_roadmap "1 Fork  ›  2 Providers  ›  3 Profile  ›  4 Installer  ›  5 Bootstrap"
+    adaetum_ui_hero "ADAETUM  /  FIRST-RUN" "Build your break-glass cluster" "Repository · Providers · Profile · Installer · Bootstrap"
+    adaetum_ui_roadmap "1 Repository  ›  2 Providers  ›  3 Profile  ›  4 Installer  ›  5 Bootstrap"
   else
     adaetum_ui_hero "ADAETUM  /  SETUP" "Prepare your break-glass cluster" "Validate · Render · Publish · Bootstrap"
   fi
-  adaetum_ui_message "${ADAETUM_UI_MUTED}" "Fork: ${repo_root}"
+  adaetum_ui_message "${ADAETUM_UI_MUTED}" "Checkout: ${repo_root}"
   printf '\n'
 }
 
@@ -158,7 +158,7 @@ prepare_cloudflare_bootstrap_token() {
   sub_step "1.1a" "Create the Cloudflare bootstrap token"
   printf '%s\n' "Adaetum will use this one token to create or reuse the R2 bucket, its scoped upload credential, Cloudflare Tunnel, and the required DNS records."
   printf '%s\n' "The token must be restricted to the Adaetum Cloudflare account and the zone for ${default_zone_input}."
-  printf '%s\n' "In Manage Account > Account API Tokens, create Adaetum bootstrap with Account API Tokens: Edit, Workers R2 Storage: Edit, Workers Scripts: Edit, and Connectivity Directory: Admin; add Zone: Read, DNS: Edit, and Workers Routes: Edit for the target domain only."
+  printf '%s\n' "In Manage Account > Account API Tokens, create Adaetum bootstrap with Account API Tokens Read/Write, Workers R2 Storage Read/Write, Cloudflare Tunnel Write, Connectivity Directory Read/Bind/Admin, and Workers Scripts Read/Write for the entire target account. Add Zone Read, DNS Read/Write, and Workers Routes Read/Write for the target domain only."
 
   if [ "${dry_run}" != "1" ] && adaetum_ui_confirm "Open Cloudflare's token page now?" "y"; then
     if ! adaetum_open_url "https://dash.cloudflare.com/profile/api-tokens"; then
@@ -414,7 +414,7 @@ EOF
         dry_run_arch="aarch64"
         ;;
     esac
-    setup_local_iso_path="${repo_root}/Rocky-10.2-${dry_run_arch}-minimal.iso"
+    setup_local_iso_path="${repo_root}/${ADAETUM_DRY_RUN_ISO_NAME:-Rocky-10.2-${dry_run_arch}-minimal.iso}"
     if [ "${iso_preflight_announced}" = "0" ]; then
       ok "Dry run validated the selected Rocky installer media."
       iso_preflight_announced=1
@@ -762,7 +762,6 @@ commit_and_push_rendered_gitops_state() {
   local -a pathspecs=()
   local path=""
   local commit_created=0
-  local status_output=""
   local auth_header=""
 
   prepare_gitops_push_context
@@ -779,10 +778,6 @@ EOF
   fi
 
   if gitops_subset_has_changes "${pathspecs[@]}"; then
-    status_output="$(git status --short --untracked-files=no -- "${pathspecs[@]}" || true)"
-    if [ -n "${status_output}" ]; then
-      echo "${status_output}"
-    fi
     git config user.name >/dev/null 2>&1 || git config user.name "initialize"
     git config user.email >/dev/null 2>&1 || git config user.email "initialize@local"
     git commit --only -m "Render cluster GitOps state" -- "${pathspecs[@]}" >/dev/null 2>&1 || {
@@ -993,7 +988,7 @@ if step_enabled "1"; then
   sub_step "1.2" "GitHub setup token"
   if [ -n "${default_gh_token}" ]; then
     gh_token="${default_gh_token}"
-    adaetum_ui_status info "Using the GitHub credential authorized during fork setup."
+    adaetum_ui_status info "Using the GitHub credential authorized during repository setup."
   else
     gh_token="$(prompt_value "GitHub setup token (GITHUB_SYNC_TOKEN, repo-capable and mirror-write-capable)" "${default_gh_token}" 1)"
   fi
@@ -1029,7 +1024,7 @@ if step_enabled "2"; then
     sub_step "2.3" "Render environment values"
     ok "Environment file generated."
     sub_step "2.4" "Sync pods cluster config"
-    sub_step "2.4.1" "Render fork-owned platform.yaml"
+    sub_step "2.4.1" "Render recovery-repository-owned platform.yaml"
     ok "Pods cluster config rendered."
     ok "Generated config is free of example placeholders."
     ok "Opinionated GitHub token contract is locally valid."
@@ -1056,6 +1051,11 @@ if step_enabled "2"; then
   fi
   explicit_argocd_github_token=""
   explicit_seed_source_token=""
+  recovery_repo="$(infer_github_repo || true)"
+  recovery_branch="$(current_git_branch || true)"
+  [ -n "${recovery_repo}" ] || die "Unable to determine the private recovery repository from origin."
+  [ -n "${recovery_branch}" ] || die "Unable to determine the recovery repository branch."
+  recovery_repo_url="https://github.com/${recovery_repo}.git"
   explicit_argocd_github_username="$(normalize_compact "$(existing_env_value .env ARGOCD_GITHUB_USERNAME)")"
   explicit_seed_source_username="$(normalize_compact "$(existing_env_value .env GITEA_SEED_SOURCE_USERNAME)")"
   if github_token_looks_git_capable "${gh_token}"; then
@@ -1071,8 +1071,12 @@ TAILSCALE_OAUTH_CLIENT_ID=${ts_oauth_client_id}
 TAILSCALE_OAUTH_CLIENT_SECRET=${ts_oauth_client_secret}
 KS_BASE_URL=${ks_base_url}
 GITHUB_SYNC_TOKEN=${gh_token}
+ARGOCD_GITHUB_REPO_URL=${recovery_repo_url}
+ARGOCD_GITHUB_REPO_BRANCH=${recovery_branch}
 ARGOCD_GITHUB_USERNAME=${explicit_argocd_github_username}
 ARGOCD_GITHUB_TOKEN=${explicit_argocd_github_token}
+GITEA_SEED_SOURCE_REPO_URL=${recovery_repo_url}
+GITEA_SEED_SOURCE_REPO_BRANCH=${recovery_branch}
 GITEA_SEED_SOURCE_USERNAME=${explicit_seed_source_username}
 GITEA_SEED_SOURCE_TOKEN=${explicit_seed_source_token}
 R2_BUCKET=${profile_r2_bucket}
@@ -1083,7 +1087,15 @@ BOOTSTRAP_BACKUP_PASSPHRASE_B64=${existing_backup_passphrase_b64}
 EOF
 
   sub_step "2.3" "Render environment values"
-  WRITE_VM_ENV=0 \
+  setup_detail_log="${repo_root}/.adaetum/logs/task-init-details.log"
+  setup_iso_for_env="${setup_local_iso_path}"
+  case "${setup_iso_for_env}" in
+    "${repo_root}/"*) setup_iso_for_env="${setup_iso_for_env#${repo_root}/}" ;;
+  esac
+  mkdir -p "$(dirname "${setup_detail_log}")"
+  : > "${setup_detail_log}"
+  if ! ADAETUM_LOCAL_ISO_PATH="${setup_iso_for_env}" \
+    WRITE_VM_ENV=0 \
     NON_INTERACTIVE=1 \
     OPINIONATED_GITHUB_TOKEN_MODE=1 \
     REQUIRE_CLOUDFLARE_BOOTSTRAP=1 \
@@ -1092,7 +1104,16 @@ EOF
     GITHUB_SYNC=1 \
     GITHUB_SYNC_REQUIRED=1 \
     GITHUB_ENVIRONMENT="${GITHUB_ENVIRONMENT:-Prod}" \
-    ./tasks/scripts/generate-env-files.sh .env "${tmp_existing}"
+    bash ./tasks/scripts/generate-env-files.sh .env "${tmp_existing}" >>"${setup_detail_log}" 2>&1; then
+    die "Environment rendering failed. Details: ${setup_detail_log}"
+  fi
+  bash ./tasks/scripts/validate-opinionated-github-token-contract.sh .env >>"${setup_detail_log}" 2>&1 || \
+    die "Rendered GitHub credentials are invalid. Details: ${setup_detail_log}"
+  rendered_backup_passphrase="$(normalize_compact "$(existing_env_value .env BOOTSTRAP_BACKUP_PASSPHRASE)")"
+  rendered_backup_passphrase_b64="$(normalize_compact "$(existing_env_value .env BOOTSTRAP_BACKUP_PASSPHRASE_B64)")"
+  if [ -z "${rendered_backup_passphrase}" ] || [ -z "${rendered_backup_passphrase_b64}" ]; then
+    die "Environment rendering omitted the bootstrap backup passphrase; setup stopped before GitOps publication."
+  fi
   ok "Required setup credentials were synced to GitHub secrets."
   backup_passphrase="$(normalize_compact "$(existing_env_value .env BOOTSTRAP_BACKUP_PASSPHRASE)")"
   backup_passphrase_b64="$(normalize_compact "$(existing_env_value .env BOOTSTRAP_BACKUP_PASSPHRASE_B64)")"
@@ -1108,23 +1129,22 @@ EOF
   if [ -z "${py_cmd}" ]; then
     die "Missing required command: python3"
   fi
-  sub_step "2.4.1" "Render fork-owned platform.yaml"
+  sub_step "2.4.1" "Render recovery-repository-owned platform.yaml"
   "${py_cmd}" ./tasks/scripts/render-platform-profile.py \
     --profile ./platform.yaml \
     --runtime-env .env \
     --output-env ./dist/platform.env \
     --config-file ./pods/cluster-config/cluster-config.env \
-    --render-pods
-  "${py_cmd}" ./tasks/scripts/render-pods-config.py --check
-  "${py_cmd}" ./.validator/validate-pods-consistency.py
+    --render-pods >>"${setup_detail_log}" 2>&1
+  "${py_cmd}" ./tasks/scripts/render-pods-config.py --check >>"${setup_detail_log}" 2>&1
+  "${py_cmd}" ./.validator/validate-pods-consistency.py >>"${setup_detail_log}" 2>&1
   ok "Pods cluster config rendered."
-  "${py_cmd}" ./.validator/validate-no-example-placeholders.py
+  "${py_cmd}" ./.validator/validate-no-example-placeholders.py >>"${setup_detail_log}" 2>&1
   ok "Generated config is free of example placeholders."
-  ./tasks/scripts/validate-opinionated-github-token-contract.sh .env
   ok "Opinionated GitHub token contract is locally valid."
-  "${py_cmd}" ./.validator/validate-ingress-contract.py
+  "${py_cmd}" ./.validator/validate-ingress-contract.py >>"${setup_detail_log}" 2>&1
   ok "Rendered ingress contract is locally valid."
-  ./tasks/scripts/validate-bootstrap-runtime-env.sh
+  bash ./tasks/scripts/validate-bootstrap-runtime-env.sh >>"${setup_detail_log}" 2>&1
   ok "Bootstrap runtime payload is locally valid."
   sub_step "2.5" "Commit and push rendered GitOps state"
   commit_and_push_rendered_gitops_state
@@ -1168,6 +1188,8 @@ if step_enabled "3"; then
   export INITIAL_SETUP_AUTO_YES=1
   export INITIAL_SETUP_SKIP_ENV_SETUP=1
   export INITIAL_SETUP_EMBEDDED=1
+  export INITIAL_SETUP_COMPACT=1
+  export INITIAL_SETUP_DETAIL_LOG="${setup_detail_log}"
   if [ "${first_run}" = "1" ]; then
     export INITIAL_SETUP_EMBEDDED_PREFIX=5.3
   else
@@ -1197,7 +1219,7 @@ if step_enabled "3"; then
   ok "Rendered bootstrap outputs are free of example placeholders."
   "${py_cmd}" ./.validator/validate-ingress-contract.py
   ok "Rendered ingress contract is locally valid."
-  ./tasks/scripts/validate-bootstrap-runtime-env.sh
+  bash ./tasks/scripts/validate-bootstrap-runtime-env.sh
   ok "Bootstrap runtime payload is locally valid."
   assert_fresh_local_iso_output "${setup_local_iso_path}"
   if [ -n "${selected_step}" ]; then
@@ -1241,7 +1263,7 @@ if [ "${first_run}" = "1" ]; then
   if [ "${dry_run}" = "1" ]; then
     adaetum_ui_completion "Dry run complete" "All five setup sections completed without changing local or provider state."
   else
-    adaetum_ui_completion "Adaetum setup complete" "The recovery fork and first-cluster installer are ready."
+    adaetum_ui_completion "Adaetum setup complete" "The private recovery repository and first-cluster installer are ready."
   fi
   adaetum_ui_key_value "Public domain" "${zone_input}"
   adaetum_ui_key_value "Tailscale tailnet" "${ts_domain}"

@@ -36,7 +36,7 @@ artifacts and configuration needed for a new cluster install.
 
 The console presents one five-section journey from beginning to end:
 
-1. **Fork** creates or verifies the GitHub recovery fork.
+1. **Repository** creates or verifies the standalone private GitHub recovery repository.
 2. **Providers** authorizes Cloudflare and Tailscale and discovers their public
    choices.
 3. **Profile** reviews and writes the two public cluster values.
@@ -57,33 +57,40 @@ beneath milestone 5.3 instead of introducing another top-level progress model.
 ## What you need
 
 Clone Adaetum and run `task init` from the repository root. The walkthrough
-creates or reuses your fork, so cloning upstream is supported.
+creates or reuses your private recovery repository, so cloning upstream is
+supported.
 
 ```bash
-git clone <your-fork-or-repo-url>
-cd Cluster
+git clone https://github.com/Adaetum/Adaetum.git
+cd Adaetum
 ```
 
 `task init` checks `origin` before it asks for credentials. If this checkout
 points at canonical `github.com/Adaetum/Adaetum`, it installs GitHub CLI,
 opens GitHub's browser authentication when needed, and uses that session as the
-default setup credential. It then creates the authenticated account's `Adaetum`
-fork (or reuses it), waits for GitHub to finish, and updates this checkout's
-`origin`. You confirm before that external action. Setup can then push rendered
-configuration, sync secrets, and trigger workflows against your fork.
+default setup credential. It then creates or reuses a standalone private
+recovery repository and updates this checkout's `origin`. You confirm before
+that external action. Setup can then push rendered configuration, sync secrets,
+and trigger workflows against that private repository.
 
 Setup reuses the current local checkout rather than cloning another directory.
-Canonical Adaetum is retained as the `upstream` remote and the selected fork
-becomes `origin`. If `owner/Adaetum` already exists but is not a GitHub fork of
-`Adaetum/Adaetum`, the walkthrough explains the name collision and suggests
-`owner/Adaetum-cluster` before creating the real fork. A valid existing GitHub
-CLI login and its token are reused instead of requesting another device login.
+Canonical Adaetum is retained as the public `upstream` remote and the selected
+private repository becomes `origin`. GitHub requires forks of public
+repositories to remain public, so setup never uses a public fork as the cluster
+recovery store.
+If an older Adaetum setup already synchronized environment secrets to a public
+fork, remove those secrets and rotate the provider credentials after the private
+repository is ready; GitHub does not permit reading the old secret values back.
+If `owner/Adaetum-cluster` already exists, the walkthrough verifies that it is a
+standalone private Adaetum repository or suggests another available name. A
+valid existing GitHub CLI login and its token are reused instead of requesting
+another device login.
 If GitHub explicitly rejects the stored token, setup offers the CLI refresh
 flow. A temporary GitHub API failure is retried and reported as an availability
 problem; it never causes setup to replace a stored credential.
 
-Your fork is the out-of-band configuration and recovery copy. `task init`
-builds the break-glass materials from it; bootstrap then seeds the newly created
+Your private repository is the out-of-band configuration and recovery copy.
+`task init` builds the break-glass materials from it; bootstrap then seeds the newly created
 cluster's Gitea repository. After that handoff, make routine day-2 changes in
 the in-cluster Gitea repository and let Argo CD reconcile them.
 
@@ -92,8 +99,8 @@ the in-cluster Gitea repository and let Argo CD reconcile them.
 | Task runner | Install `task`: <https://taskfile.dev/docs/installation> |
 | Python runtime | Install Python 3 and PyYAML: `python3 -m pip install pyyaml` |
 | Docker (optional) | Install Docker if you want to build the install ISO locally instead of downloading or reusing the copy from R2 |
-| Installer media | `task init` finds or downloads and verifies Rocky Linux 10 Minimal |
-| Repo access | GitHub admin access to your fork or target repo |
+| Installer media | `task init` finds or downloads and verifies Rocky Linux 10 Minimal or DVD media |
+| Repo access | GitHub admin access to the private recovery repository |
 | Edge/bootstrap access | Cloudflare access for Workers and R2 |
 | Tailnet access | Tailscale access to the target tailnet |
 
@@ -104,14 +111,24 @@ when Homebrew, DNF, Pacman, or Windows winget can provide it. On another
 platform, install Gum from its official instructions and rerun `task init`.
 Docker is optional and is only needed for the local `task build-iso` path.
 
-Adaetum accepts only Rocky 10 Minimal media at this boundary. `task init`
+Adaetum accepts Rocky 10 Minimal and DVD media at this boundary. `task init`
 finds matching media in the checkout and common download locations. If none is
-present, it offers the official SHA-256 verified Rocky 10.2 Minimal download.
+present, it asks for the release, image type, and target architecture. The
+newest supported release, Minimal image, and detected host architecture are
+the first/default choices. The menu labels Minimal and DVD as offline
+installers; choose DVD when the target needs the complete package repository.
+Rocky's separately named Boot ISO is labeled as an online installer and is
+excluded because it downloads packages during installation rather than
+carrying the local package source required by Adaetum's kickstart. Minimal and
+DVD are both bootable installer images.
+Previously downloaded media is reused after checksum verification. Interrupted
+downloads remain as `.partial` files and resume the next time setup runs.
 You can also run this explicitly:
 
 ```bash
 task iso:download                 # x86_64 (default)
 ROCKY_ARCH=aarch64 task iso:download
+ROCKY_IMAGE_TYPE=dvd task iso:download
 ```
 
 ### Terminal experience
@@ -129,7 +146,7 @@ ADAETUM_GUM_UI=0 task initialize
 
 To see the complete first-run journey before committing local or provider
 state, run `task init:dryrun`. It does not install helpers, authenticate to
-GitHub, create a fork, change `origin`, collect secrets, render files, upload
+GitHub, create a repository, change `origin`, collect secrets, render files, upload
 artifacts, or trigger workflows. It remains interactive for every decision and
 uses fixture credentials behind the normal hidden prompts. It runs the same
 read-only setup preflight as `task init`, so a reported blocker stops both
@@ -194,32 +211,36 @@ provides the account-token link without hardcoding an operator's Cloudflare
 account ID. Cloudflare then routes to an account-specific address such as
 `https://dash.cloudflare.com/<account-id>/api-tokens/create`.
 
-- Account: `Account API Tokens` → `Edit`
-- Account: `Workers R2 Storage` → `Edit`
-- Account: `Workers Scripts` → `Edit`
-- Account: `Connectivity Directory` → `Admin`
+- Account: `Connectivity Directory` → `Read`, `Bind`, and `Admin`
+- Account: `Account API Tokens` → `Read` and `Write`
+- Account: `Workers R2 Storage` → `Read` and `Write`
+- Account: `Cloudflare Tunnel` → `Write`
+- Account: `Workers Scripts` → `Read` and `Write`
 - Zone: `Zone` → `Read`
-- Zone: `DNS` → `Edit`
-- Zone: `Workers Routes` → `Edit`
+- Zone: `DNS` → `Read` and `Write`
+- Zone: `Workers Routes` → `Read` and `Write`
 
 In Account Resources, include only the account that will own the cluster. In
 Zone Resources, include only its public domain/zone. The `Account API Tokens`
-permission at the `Edit` level allows Adaetum to derive the narrower
-bucket-scoped R2 credential. These names
-match the current dashboard; Cloudflare's API documentation and responses may
-refer to several `Edit` permissions as `Write`. User-owned tokens remain a
-compatibility path, but setup warns before accepting one.
+Write permission allows Adaetum to derive the narrower bucket-scoped R2
+credential. This is the known-working permission set confirmed against the
+current Account API Token UI. It is intentionally documented as a validated
+baseline rather than audited least privilege until provider regression testing
+proves which individual Read and Connectivity Directory permissions can be
+removed. User-owned tokens remain a compatibility path, but setup warns before
+accepting one. First-run inspects the token policy before creating or updating
+provider resources.
 
 After validating the token, first-run offers to save it for interrupted setup
 resumption. The default is Yes. Adaetum uses macOS Login Keychain, Linux
 Secret Service, or a Windows current-user DPAPI-protected store when available
 and never falls back to a plaintext credential file. The saved value is keyed
-to the selected fork and is validated before every reuse; an invalid entry is
+to the selected private repository and is validated before every reuse; an invalid entry is
 removed automatically.
 
 The local protected copy exists only to resume an interrupted walkthrough. A
 successful real `task init` also syncs `CLOUDFLARE_API_TOKEN` and the other
-required runtime credentials to the fork's `Prod` GitHub environment. Setup
+required runtime credentials to the private repository's `Prod` GitHub environment. Setup
 stops if that required secret sync fails; dry-run never performs it.
 
 </details>
@@ -239,7 +260,7 @@ stops if that required secret sync fails; dry-run never performs it.
 - `TAILSCALE_OAUTH_CLIENT_SECRET`
   Used for the long-term Tailscale OAuth credential.
 
-The OAuth client ID and secret are synchronized to the fork's `Prod` GitHub
+The OAuth client ID and secret are synchronized to the private repository's `Prod` GitHub
 environment. Setup validates that identity by minting the first node's tagged,
 non-reusable auth key. That key is saved in the gitignored local `.env` for the
 installer build and synchronized as `TAILSCALE_AUTHKEY` to the same GitHub
@@ -304,7 +325,7 @@ the existing policy. The OAuth screen can then offer `tag:rocky10`,
 
 </details>
 
-### Fork profile
+### Recovery repository profile
 
 `task init` collects and reviews only the two values a normal first cluster
 needs: the public cluster domain (selected from the authorized Cloudflare
@@ -479,7 +500,7 @@ task init
 ### Bootstrap milestone 5.1: Validate captured inputs
 
 Setup collects provider credentials only for the active process, validates
-them, and syncs them to the fork's GitHub environment. It does not create a
+them, and syncs them to the private repository's GitHub environment. It does not create a
 persistent local prompt-answer cache.
 
 ### Bootstrap milestone 5.2: Render and publish configuration
@@ -495,12 +516,12 @@ values such as:
 
 During this same step, setup also writes `pods/cluster-config/cluster-config.env` and
 re-renders the small set of Argo/bootstrap files that depend on concrete repo,
-domain, and hostname values committed in the fork.
+domain, and hostname values committed in the private repository.
 
 The GitHub credential obtained through the first-run browser sign-in is reused
 for this process as the canonical opinionated credential. Generated runtime
 values remain in `.env` only as required by the bootstrap workflow; secrets are
-synced to the fork's GitHub environment for remote recovery.
+synced to the private repository's GitHub environment for remote recovery.
 
 By default, setup may also start a local `task build-iso` run in the
 background so the local install ISO finishes earlier. That local build path is

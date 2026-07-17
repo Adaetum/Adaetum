@@ -11,7 +11,7 @@ cd "${repo_root}"
 
 if adaetum_gum_enabled; then
   adaetum_gum_heading "Backup recovery"
-  gum style --foreground 245 "Fork: ${repo_root}"
+  gum style --foreground 245 "Checkout: ${repo_root}"
 fi
 
 normalize_value() {

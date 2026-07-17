@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Trigger the GitHub workflows that publish installer artifacts from this fork.
+# Trigger workflows that publish installer artifacts from the recovery repository.
 # It resolves credentials locally, then reports remote workflow results rather
 # than attempting to hide provider-side failures.
 

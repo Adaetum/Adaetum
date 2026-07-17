@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report whether a fork is ready to begin setup without inspecting secrets."""
+"""Report whether a recovery repository is ready without inspecting secrets."""
 from __future__ import annotations
 
 import importlib.util
@@ -12,7 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROFILE_PATH = REPO_ROOT / "platform.yaml"
 PROFILE_VALIDATOR = REPO_ROOT / "tasks" / "scripts" / "validate-platform-profile.py"
-ROCKY_MINIMAL_ISO = re.compile(r"^Rocky-10(?:\.\d+)?-(?:x86_64|aarch64)-minimal\.iso$")
+ROCKY_INSTALLER_ISO = re.compile(r"^Rocky-10(?:\.\d+)?-(?:x86_64|aarch64)-(?:minimal|dvd1|dvd)\.iso$")
 
 
 def load_profile_validator():
@@ -39,7 +39,7 @@ def has_pyyaml() -> bool:
 
 
 def main() -> int:
-    # This command is intentionally read-only: it tells a fork owner what they
+    # This command is intentionally read-only: it tells a repository owner what they
     # must provide without probing provider accounts or asking for credentials.
     blockers: list[str] = []
     notes: list[str] = []
@@ -75,8 +75,8 @@ def main() -> int:
         except (OSError, RuntimeError, ValueError) as exc:
             blockers.append(f"cannot validate platform.yaml: {exc}")
 
-    if not any(ROCKY_MINIMAL_ISO.match(path.name) for path in REPO_ROOT.glob("*.iso")):
-        blockers.append("no supported Rocky Linux 10 Minimal installer ISO is present in the repository root")
+    if not any(ROCKY_INSTALLER_ISO.match(path.name) for path in REPO_ROOT.glob("*.iso")):
+        blockers.append("no supported Rocky Linux 10 Minimal or DVD installer ISO is present in the repository root")
     if not has_command("uv"):
         notes.append("uv is absent; task initialize can install it automatically")
     if not has_command("gum"):

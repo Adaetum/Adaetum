@@ -2,12 +2,13 @@
 set -euo pipefail
 
 # Inspect the checkout that first-run setup will target. Git exposes a remote
-# URL but not GitHub's fork metadata; the interactive wizard uses this to guide
-# an upstream checkout through creating a real fork before provider mutations.
+# URL but not GitHub's visibility metadata; the interactive wizard uses this to
+# guide an upstream checkout toward a private recovery repository before any
+# provider mutation.
 
 adaetum_origin_url() {
   if ! command -v git >/dev/null 2>&1; then
-    echo "git is required to verify that task init targets your fork." >&2
+    echo "git is required to verify that task init targets your recovery repository." >&2
     return 1
   fi
 
@@ -35,7 +36,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   origin_url="$(adaetum_origin_url)"
   if adaetum_origin_is_upstream "${origin_url}"; then
     printf 'origin is Adaetum upstream: %s\n' "${origin_url}"
-    printf 'task init will guide you through creating and selecting a fork.\n'
+    printf 'task init will guide you through creating a private recovery repository.\n'
   else
     printf 'Checkout origin: %s\n' "${origin_url}"
   fi

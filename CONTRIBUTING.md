@@ -2,9 +2,11 @@
 
 Adaetum welcomes documentation, validation, installer, integration, and bootstrap
 contributions. Fork the repository, create a focused branch, and open or
-comment on an issue so changes remain small and reviewable. Adaetum is
-fork-first: do not preserve legacy internals merely for in-place compatibility
-when a clearer documented replacement is better.
+comment on an issue so changes remain small and reviewable. Contributor forks
+are public collaboration branches; operator cluster state belongs in the
+standalone private recovery repository created by `task init`. Do not preserve
+legacy internals merely for in-place compatibility when a clearer documented
+replacement is better.
 
 ## Local checks
 

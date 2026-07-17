@@ -27,13 +27,13 @@ The repository uses a new opinionated setup process:
      account readiness before secrets are requested
    - When the checkout points at upstream, installs GitHub CLI and uses its
      existing authentication when available to create or reuse the operator's
-     real Adaetum fork, preserves canonical Adaetum as `upstream`, and changes
+     standalone private recovery repository, preserves canonical Adaetum as `upstream`, and changes
      the existing checkout's `origin` without cloning another local copy
-   - Runs read-only preflight after the fork owner updates `platform.yaml` and
-     adds the Rocky ISO
+   - Collects and reviews the public profile, finds or downloads Rocky media,
+     then runs read-only preflight after the guided preparation is complete
    - `task init:dryrun` is the no-mutation rehearsal path: it validates local
-     readiness and simulates the rest of the first-run journey without
-     installing tools or contacting providers
+     readiness and simulates the same first-run journey without installing
+     tools, contacting providers, or mutating repository state
    - Use `task initialize` to rerun the automation without the first-run
      account walkthrough
    - Prompts for required runtime credentials; public cluster and delivery
@@ -59,7 +59,7 @@ New nodes join the cluster through a phase-based break-glass process:
   adding repository content, automation, abstractions, dependencies, or process.
   Do not equate more files, checks, or features with progress. Ask whether the
   proposed change has a concrete operator or contributor benefit now, fits the
-  fork-first architecture, has a clear owner and source of truth, and can be
+  private-recovery architecture, has a clear owner and source of truth, and can be
   validated at the appropriate boundary. If any answer is unclear, explain the
   concern and propose the smallest viable alternative (including no change)
   before editing. Reject speculative frameworks, duplicate contracts, generic
@@ -75,7 +75,7 @@ New nodes join the cluster through a phase-based break-glass process:
   not add a parallel module, provider-selection, plugin, or capability layer
   around applications already defined in `pods/` unless the user explicitly
   asks for a real, tested interchangeable implementation.
-- `platform.yaml` is the single public, non-secret fork configuration contract.
+- `platform.yaml` is the single public, non-secret recovery repository configuration contract.
   It describes cluster identity and delivery settings; `.env`,
   `pods/cluster-config/cluster-config.env`, and rendered manifests are outputs.
   External integrations such as Cloudflare, GitHub, and Tailscale belong in
@@ -106,8 +106,12 @@ New nodes join the cluster through a phase-based break-glass process:
   `%post`.
 - Install media is handled directly as ISO files; do not add alternate USB media
   packaging workflows or related documentation back into the repo.
-- Use `task init` for a new fork and `task initialize` for reruns or
-  non-interactive automation. Edit
+- GitHub does not allow private forks of a public repository. Operator setup
+  therefore requires a standalone private recovery repository as `origin` and
+  preserves `Adaetum/Adaetum` as the public `upstream`. Never reintroduce a
+  public GitHub fork as the destination for cluster configuration or secrets.
+- Use `task init` for a new private recovery repository and `task initialize`
+  for reruns or non-interactive automation. Edit
   `platform.yaml` for public platform changes; provide `.env` values only when
   setup requests runtime secrets. Never treat `.env` as a second public
   configuration contract.

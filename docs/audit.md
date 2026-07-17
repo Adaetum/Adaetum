@@ -13,7 +13,7 @@ change, and attractive to open-source contributors.
 | Installer | `ks-src/` templates and manifests | Rocky 10 is the stable target; Ubuntu remains experimental |
 | Bootstrap | Ansible playbooks and Phase 10–99 scripts | Explicit phase inputs/outputs and shared libraries |
 | Platform configuration | `platform.yaml` | One public, non-secret contract; all env and manifests are generated outputs |
-| Recovery fork | User's private fork and break-glass bundle | Out-of-band configuration and recovery copy |
+| Recovery repository | User's standalone private repository and break-glass bundle | Out-of-band configuration and recovery copy |
 | GitOps | Cluster-seeded Gitea plus Argo CD | Retained as the authoritative steady-state control pair |
 | Secrets | Local bootstrap files before Phase 40; OpenBao afterward | Retained; no secret values in profiles |
 | Operations | Homepage links to upstream UIs | Retained; Adaetum does not create a replacement console |
@@ -22,7 +22,7 @@ change, and attractive to open-source contributors.
 
 `ks-src/` is the installer source of truth and `dist/ks-templates/` is
 generated. `platform.yaml` is the public configuration authority in each
-user's fork. Rendering creates runtime environment values, cluster config, and
+user's private recovery repository. Rendering creates runtime environment values, cluster config, and
 manifests from that profile. Bootstrap logs, recovery artifacts, and Kubernetes
 Secrets are outputs—not user-owned configuration.
 
@@ -45,11 +45,11 @@ Every phase must state its input authority, output, mutation boundary, retry
 behavior, and owner. A phase may not silently take responsibility for another
 phase's concerns.
 
-The normal lifecycle is deliberately asymmetric: a user forks Adaetum, builds
-the break-glass bundle from that private fork, and uses it to create a new
+The normal lifecycle is deliberately asymmetric: a user creates a private recovery repository, builds
+the break-glass bundle from that private repository, and uses it to create a new
 cluster. Bootstrap clones/seeds the configuration into the newly deployed
 Gitea. That in-cluster repository, reconciled by Argo CD, is authoritative for
-day-2 changes. The original private fork is retained as the out-of-band copy
+day-2 changes. The original private repository is retained as the out-of-band copy
 needed to reconstruct configuration when the cluster itself is unavailable.
 
 ## Lock-in inventory
@@ -61,7 +61,7 @@ They are not a plugin system: the cluster product stack is defined directly in
 `pods/`, and Adaetum does not claim provider interchangeability it has not
 implemented and tested.
 
-Fork-first ownership means the project does not preserve old task names,
+Recovery-repository ownership means the project does not preserve old task names,
 environment variables, or internal file shapes when they obscure the contract.
 
 ## Complexity hotspots and remediation

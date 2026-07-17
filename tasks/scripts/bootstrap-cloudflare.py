@@ -37,6 +37,9 @@ def cf_api(method: str, path: str, token: str, payload=None):
   try:
     with urllib.request.urlopen(req) as resp:
       raw = resp.read().decode("utf-8")
+  except urllib.error.HTTPError as e:
+    body = e.read().decode("utf-8", errors="replace")
+    raise RuntimeError(f"Cloudflare API {method} {path} failed: HTTP {e.code}: {body}") from e
   except urllib.error.URLError as e:
     reason = str(getattr(e, "reason", e))
     # Windows Python installs can miss CA trust in some shells.
@@ -53,9 +56,6 @@ def cf_api(method: str, path: str, token: str, payload=None):
         raise RuntimeError(f"Cloudflare API {method} {path} TLS verify failed and insecure fallback failed: {e2}") from e2
     else:
       raise RuntimeError(f"Cloudflare API {method} {path} network failure: {reason}") from e
-  except urllib.error.HTTPError as e:
-    body = e.read().decode("utf-8", errors="replace")
-    raise RuntimeError(f"Cloudflare API {method} {path} failed: HTTP {e.code}: {body}") from e
   doc = json.loads(raw)
   if not doc.get("success", False):
     raise RuntimeError(f"Cloudflare API {method} {path} failed: {json.dumps(doc.get('errors', []))}")
@@ -159,6 +159,107 @@ def _find_zone_for_hostname(token: str, hostname: str):
 def _list_tunnels(token: str, account_id: str):
   result = cf_api("GET", f"/accounts/{account_id}/cfd_tunnel?is_deleted=false&per_page=100", token)
   return _result_items(result)
+
+
+def validate_bootstrap_access(token: str, account_id: str, zone_domain: str = ""):
+  """Check tunnel access without creating or changing provider resources."""
+  required_account_capabilities = {
+    "Account API Tokens Read": {"Account API Tokens Read"},
+    "Account API Tokens Write": {"Account API Tokens Write", "Account API Tokens Edit"},
+    "Workers R2 Storage Read": {"Workers R2 Storage Read"},
+    "Workers R2 Storage Write": {"Workers R2 Storage Write", "Workers R2 Storage Edit"},
+    "Cloudflare Tunnel Write": {
+      "Cloudflare Tunnel Write",
+      "Cloudflare Tunnel Edit",
+      "Cloudflare One Connectors Write",
+      "Cloudflare One Connector: cloudflared Write",
+    },
+    "Connectivity Directory Read": {"Connectivity Directory Read"},
+    "Connectivity Directory Bind": {"Connectivity Directory Bind"},
+    "Connectivity Directory Admin": {"Connectivity Directory Admin"},
+    "Workers Scripts Read": {"Workers Scripts Read"},
+    "Workers Scripts Write": {"Workers Scripts Write", "Workers Scripts Edit"},
+  }
+  required_zone_capabilities = {
+    "Zone Read": {"Zone Read"},
+    "DNS Read": {"DNS Read"},
+    "DNS Write": {"DNS Write", "DNS Edit"},
+    "Workers Routes Read": {"Workers Routes Read"},
+    "Workers Routes Write": {"Workers Routes Write", "Workers Routes Edit"},
+  }
+  try:
+    details = None
+    try:
+      verified = cf_api("GET", f"/accounts/{account_id}/tokens/verify", token)
+      token_id = (verified or {}).get("id", "") if isinstance(verified, dict) else ""
+      if token_id:
+        details = cf_api("GET", f"/accounts/{account_id}/tokens/{token_id}", token)
+    except RuntimeError:
+      # Compatibility path for legacy user-owned API tokens.
+      verified = cf_api("GET", "/user/tokens/verify", token)
+      token_id = (verified or {}).get("id", "") if isinstance(verified, dict) else ""
+      if token_id:
+        details = cf_api("GET", f"/user/tokens/{token_id}", token)
+    if not isinstance(details, dict):
+      raise RuntimeError("Cloudflare did not return the current token policy.")
+    account_resources = {
+      f"com.cloudflare.api.account.{account_id}",
+      "com.cloudflare.api.account.*",
+    }
+    account_permissions = set()
+    for policy in details.get("policies", []):
+      if policy.get("effect", "allow") != "allow":
+        continue
+      resources = policy.get("resources", {})
+      if not any(resource in resources for resource in account_resources):
+        continue
+      account_permissions.update({
+        group.get("name", "")
+        for group in policy.get("permission_groups", [])
+        if isinstance(group, dict) and group.get("name")
+      })
+    missing_account = [
+      label for label, accepted in required_account_capabilities.items()
+      if not account_permissions.intersection(accepted)
+    ]
+    if missing_account:
+      raise RuntimeError("Missing account permissions: " + ", ".join(missing_account))
+
+    if zone_domain:
+      zone_id, _zone_name = _find_zone_for_hostname(token, zone_domain)
+      if not zone_id:
+        raise RuntimeError(f"The token cannot read the selected zone: {zone_domain}")
+      zone_permissions = set()
+      exact_zone_resource = f"com.cloudflare.api.account.zone.{zone_id}"
+      for policy in details.get("policies", []):
+        if policy.get("effect", "allow") != "allow":
+          continue
+        resources = policy.get("resources", {})
+        applies_to_zone = exact_zone_resource in resources or "com.cloudflare.api.account.zone.*" in resources
+        nested_zones = resources.get(f"com.cloudflare.api.account.{account_id}", {})
+        if isinstance(nested_zones, dict) and "com.cloudflare.api.account.zone.*" in nested_zones:
+          applies_to_zone = True
+        if not applies_to_zone:
+          continue
+        zone_permissions.update({
+          group.get("name", "")
+          for group in policy.get("permission_groups", [])
+          if isinstance(group, dict) and group.get("name")
+        })
+      missing_zone = [
+        label for label, accepted in required_zone_capabilities.items()
+        if not zone_permissions.intersection(accepted)
+      ]
+      if missing_zone:
+        raise RuntimeError("Missing zone permissions: " + ", ".join(missing_zone))
+    _list_tunnels(token, account_id)
+  except RuntimeError as exc:
+    raise RuntimeError(
+      "Cloudflare rejected the required tunnel capability. Edit or recreate the "
+      "bootstrap token with Cloudflare Tunnel > Write for the entire selected "
+      "account. The currently validated setup baseline also includes Connectivity "
+      "Directory > Read, Bind, and Admin."
+    ) from exc
 
 
 def _find_tunnel_id_from_dns(token: str, zone_id: str, hostname: str):
@@ -382,7 +483,10 @@ def create_r2_token(token: str, account_id: str, bucket: str):
 
 def main():
   parser = argparse.ArgumentParser()
-  parser.add_argument("--token", required=True)
+  parser.add_argument("--token", default="")
+  parser.add_argument("--token-stdin", action="store_true")
+  parser.add_argument("--validate-access-only", action="store_true")
+  parser.add_argument("--zone-domain", default="")
   parser.add_argument("--account-id", default="")
   parser.add_argument("--bucket", default="iso")
   parser.add_argument("--ks-base-url", default="https://bootstrap.example.services")
@@ -400,12 +504,21 @@ def main():
   parser.add_argument("--existing-r2-endpoint", default="")
   args = parser.parse_args()
 
+  if args.token_stdin:
+    args.token = sys.stdin.read().strip()
+  if not args.token:
+    parser.error("provide --token or --token-stdin")
+
   account_id = args.account_id
   if not account_id and args.existing_r2_endpoint:
     prefix = ".r2.cloudflarestorage.com"
     if args.existing_r2_endpoint.startswith("https://") and args.existing_r2_endpoint.endswith(prefix):
       account_id = args.existing_r2_endpoint[len("https://") : -len(prefix)]
   account_id = get_account_id(args.token, account_id)
+  if args.validate_access_only:
+    validate_bootstrap_access(args.token, account_id, args.zone_domain)
+    print("Cloudflare bootstrap access validated.")
+    return
   ensure_bucket(args.token, account_id, args.bucket)
   key_id = args.existing_r2_access_key_id
   secret = args.existing_r2_secret_access_key
@@ -424,7 +537,7 @@ def main():
     if not zone_id:
       raise RuntimeError(
         f"Could not find a Cloudflare zone for hostname '{rancher_public_domain}'. "
-        "Ensure the domain is in this account and your token includes Zone DNS Edit."
+        "Ensure the domain is in this account and your token includes Zone DNS Read and Write."
       )
     tunnel_name = (args.cloudflared_tunnel_name or "").strip()
     if not tunnel_name:
@@ -468,7 +581,7 @@ def main():
     if not zone_id:
       raise RuntimeError(
         f"Could not find a Cloudflare zone for hostname '{ingress_public_domain}'. "
-        "Ensure the domain is in this account and your token includes Zone DNS Edit."
+        "Ensure the domain is in this account and your token includes Zone DNS Read and Write."
       )
     tunnel_name = (args.cloudflared_tunnel_name or "").strip()
     if not tunnel_name:

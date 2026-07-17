@@ -3,8 +3,8 @@
 # First-run preparation belongs to the same setup process as credential capture
 # and bootstrap. This file is a library, not a second wizard or entrypoint.
 
-# shellcheck source=tasks/scripts/validate-fork-checkout.sh
-. "${repo_root}/tasks/scripts/validate-fork-checkout.sh"
+# shellcheck source=tasks/scripts/validate-recovery-checkout.sh
+. "${repo_root}/tasks/scripts/validate-recovery-checkout.sh"
 
 first_run_heading() {
   adaetum_ui_panel "$1"
@@ -120,21 +120,79 @@ first_run_ensure_github_login() {
   first_run_status success "GitHub session ${authentication_action} for ${first_run_github_login}."
 }
 
-first_run_set_fork_origin() {
-  local fork_url="$1" origin=""
+first_run_ensure_github_actions() {
+  local origin="" repository="" workflow_count="" attempt=1 is_fork="false"
+  origin="$(adaetum_origin_url || true)"
+  repository="$(adaetum_normalize_github_url "${origin}")"
+  repository="${repository#https://github.com/}"
+  repository="${repository%.git}"
+  [ -n "${repository}" ] || die "Unable to determine the recovery repository for GitHub Actions setup."
+
+  if [ "${dry_run}" = 1 ]; then
+    first_run_status success "GitHub Actions registration simulated for the private recovery repository."
+    return 0
+  fi
+
+  while [ "${attempt}" -le 10 ]; do
+    workflow_count="$(gh api "repos/${repository}/actions/workflows" --jq '.total_count // 0' 2>/dev/null || printf '0')"
+    if [ "${workflow_count}" -gt 0 ] 2>/dev/null; then
+      first_run_status success "GitHub Actions is enabled with ${workflow_count} registered workflow(s)."
+      return 0
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  is_fork="$(gh api "repos/${repository}" --jq '.fork // false' 2>/dev/null || printf 'false')"
+  if [ "${is_fork}" = true ]; then
+    first_run_heading "Enable GitHub Actions"
+    first_run_message "${ADAETUM_UI_MUTED}" "This repository is still a public GitHub fork. GitHub requires one-time browser consent before its workflows run. Enable them now, then rerun setup; Adaetum will still require a private recovery repository before credentials are synchronized."
+    adaetum_open_url "https://github.com/${repository}/actions" || true
+    die "GitHub Actions requires one-time consent on the current public fork."
+  fi
+  die "GitHub has not registered the workflows in ${repository}. Confirm the current branch is the repository's default branch, then rerun task init."
+}
+
+first_run_set_recovery_origin() {
+  local recovery_url="$1" origin=""
   origin="$(adaetum_origin_url || true)"
 
   if [ -n "${origin}" ] && adaetum_origin_is_upstream "${origin}" && ! git remote get-url upstream >/dev/null 2>&1; then
     git remote rename origin upstream
-    git remote add origin "${fork_url}"
+    git remote add origin "${recovery_url}"
   elif git remote get-url origin >/dev/null 2>&1; then
-    git remote set-url origin "${fork_url}"
+    if ! git remote get-url upstream >/dev/null 2>&1; then
+      git remote add upstream "https://github.com/Adaetum/Adaetum.git"
+    fi
+    git remote set-url origin "${recovery_url}"
   else
-    git remote add origin "${fork_url}"
+    git remote add upstream "https://github.com/Adaetum/Adaetum.git"
+    git remote add origin "${recovery_url}"
   fi
 }
 
-first_run_available_fork_destination=""
+first_run_move_resume_credentials() {
+  local old_url="$1" new_url="$2" store="${repo_root}/tasks/scripts/setup-credential-store.sh"
+  local old_namespace="" new_namespace="" key="" value="" moved=0
+  [ -n "${old_url}" ] || return 0
+  bash "${store}" available >/dev/null 2>&1 || return 0
+  old_namespace="$(adaetum_normalize_github_url "${old_url}")"
+  new_namespace="$(adaetum_normalize_github_url "${new_url}")"
+  [ "${old_namespace}" != "${new_namespace}" ] || return 0
+
+  for key in cloudflare-api-token tailscale-api-token tailscale-oauth-client-id tailscale-oauth-client-secret; do
+    value="$(bash "${store}" get "${old_namespace}" "${key}" 2>/dev/null || true)"
+    [ -n "${value}" ] || continue
+    printf '%s\n' "${value}" | bash "${store}" set "${new_namespace}" "${key}"
+    bash "${store}" delete "${old_namespace}" "${key}"
+    moved=1
+  done
+  if [ "${moved}" = 1 ]; then
+    first_run_status success "Moved protected resume credentials to the private repository namespace."
+  fi
+}
+
+first_run_available_recovery_destination=""
 first_run_repository_state=""
 first_run_repository_full_name=""
 
@@ -165,9 +223,9 @@ first_run_lookup_repository() {
   die "Repository lookup failed. ${error_text}"
 }
 
-first_run_find_available_fork_destination() {
+first_run_find_available_recovery_destination() {
   local owner="$1" suffix=1 candidate=""
-  first_run_available_fork_destination=""
+  first_run_available_recovery_destination=""
 
   while [ "${suffix}" -le 50 ]; do
     if [ "${suffix}" = 1 ]; then
@@ -181,93 +239,98 @@ first_run_find_available_fork_destination() {
       continue
     fi
     if [ "${first_run_repository_state}" = "available" ]; then
-      first_run_available_fork_destination="${candidate}"
+      first_run_available_recovery_destination="${candidate}"
       return 0
     fi
   done
 
-  die "Could not find an available fork name after checking Adaetum-cluster through Adaetum-cluster-50."
+  die "Could not find an available private repository name after checking Adaetum-cluster through Adaetum-cluster-50."
 }
 
-first_run_configure_fork() {
-  local origin="$(adaetum_origin_url || true)" login="" repository="" fork_url=""
-  local existing="" can_push="" parent="" owner="" name="" suggested=""
-  if [ -n "${origin}" ] && ! adaetum_origin_is_upstream "${origin}"; then
-    first_run_heading "Fork checkout"
-    first_run_status success "Using the current fork origin: ${origin}"
-    return 0
-  fi
-  first_run_heading "Fork required"
-  [ -n "${origin}" ] && first_run_message 11 "This checkout currently points to Adaetum upstream: ${origin}" || first_run_message 11 "This checkout has no origin remote."
-  first_run_message "${ADAETUM_UI_MUTED}" "Setup needs your own GitHub fork for this cluster's public configuration, secret references, and recovery workflows. An unrelated repository with the same name cannot replace the fork."
-  adaetum_ui_key_value "Local checkout" "${repo_root}"
-  first_run_message "${ADAETUM_UI_MUTED}" "Adaetum will keep using this local folder—there is nothing else to clone. It will preserve canonical Adaetum as upstream and point origin at the fork it creates or reuses."
-  adaetum_ui_confirm "Create or reuse your Adaetum fork now?" y || exit 0
+first_run_configure_recovery_repository() {
+  local origin="$(adaetum_origin_url || true)" login="" repository="" recovery_url=""
+  local visibility="" can_admin="" is_fork="" owner="" name="" suggested="" current_repository="" repository_size="" created=0
+
   first_run_ensure_github_login
   login="${first_run_github_login}"
-  suggested="${login}/Adaetum"
+  if [ -n "${origin}" ] && ! adaetum_origin_is_upstream "${origin}"; then
+    current_repository="$(adaetum_normalize_github_url "${origin}")"
+    current_repository="${current_repository#https://github.com/}"
+    current_repository="${current_repository%.git}"
+    if [ "${dry_run}" != 1 ]; then
+      visibility="$(gh api "repos/${current_repository}" --jq '.visibility // empty' 2>/dev/null || true)"
+      can_admin="$(gh api "repos/${current_repository}" --jq '.permissions.admin // false' 2>/dev/null || true)"
+      is_fork="$(gh api "repos/${current_repository}" --jq '.fork // false' 2>/dev/null || true)"
+      if [ "${visibility}" = private ] && [ "${can_admin}" = true ] && [ "${is_fork}" = false ]; then
+        repository_size="$(gh api "repos/${current_repository}" --jq '.size // 0' 2>/dev/null || printf '0')"
+        if [ "${repository_size}" -eq 0 ] || gh api "repos/${current_repository}/contents/Taskfile.yml" >/dev/null 2>&1; then
+          git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "https://github.com/Adaetum/Adaetum.git"
+          first_run_heading "Private recovery repository"
+          first_run_status success "Using private origin: ${origin}"
+          return 0
+        fi
+      fi
+    fi
+    first_run_heading "Private recovery repository required"
+    first_run_message "${ADAETUM_UI_MUTED}" "The current origin is public. GitHub requires every fork of a public repository to remain public, so Adaetum uses a standalone private recovery repository instead. The current repository will not be deleted."
+    first_run_message "${ADAETUM_UI_MUTED}" "If an earlier setup synchronized GitHub environment secrets to that public repository, remove them and rotate the provider credentials after this private migration completes. GitHub secrets cannot be copied back out of the old repository."
+  else
+    first_run_heading "Private recovery repository required"
+    first_run_message "${ADAETUM_UI_MUTED}" "Adaetum stores public cluster configuration and recovery workflows in a private repository you control. Canonical Adaetum remains the read-only upstream remote."
+  fi
+  adaetum_ui_key_value "Local checkout" "${repo_root}"
+  adaetum_ui_confirm "Create or reuse a private recovery repository now?" y || exit 0
+  if [ "${dry_run}" = 1 ]; then
+    suggested="${login}/Adaetum-cluster"
+  else
+    first_run_find_available_recovery_destination "${login}"
+    suggested="${first_run_available_recovery_destination}"
+  fi
 
   while :; do
-    first_run_prompt_context \
-      "Choose your fork destination" \
-      "Enter the GitHub owner and repository name for the real Adaetum fork. Press Enter to accept the suggestion. If that name belongs to an unrelated repository, Adaetum will explain the conflict and suggest a different fork name."
-    adaetum_ui_key_value "Suggested fork" "${suggested}"
-    repository="$(first_run_input "GitHub fork destination (owner/name)" "${suggested}")"
-    case "${repository}" in
-      */*) ;;
-      *) first_run_status warning "Enter the fork destination as owner/name, for example ${login}/Adaetum."; continue ;;
-    esac
-    owner="${repository%%/*}"
-    name="${repository#*/}"
-    if [ -z "${owner}" ] || [ -z "${name}" ] || [[ "${name}" == */* ]]; then
-      first_run_status warning "Invalid GitHub fork destination: ${repository}"
-      continue
-    fi
-    fork_url="https://github.com/${repository}.git"
+    first_run_prompt_context "Choose the private repository" "Enter owner/name. Adaetum creates it as private and keeps using this local checkout."
+    adaetum_ui_key_value "Suggested repository" "${suggested}"
+    repository="$(first_run_input "Private recovery repository (owner/name)" "${suggested}")"
+    case "${repository}" in */*) ;; *) first_run_status warning "Enter owner/name, for example ${suggested}."; continue ;; esac
+    owner="${repository%%/*}"; name="${repository#*/}"
+    [ -n "${owner}" ] && [ -n "${name}" ] && [[ "${name}" != */* ]] || { first_run_status warning "Invalid repository name: ${repository}"; continue; }
+    recovery_url="https://github.com/${repository}.git"
 
     if [ "${dry_run}" = 1 ]; then
-      adaetum_ui_confirm "Create or reuse the simulated fork ${repository}?" y || exit 0
-      first_run_status info "Dry run would preserve Adaetum upstream and set origin to ${fork_url}."
+      adaetum_ui_confirm "Create or reuse the simulated private repository ${repository}?" y || exit 0
+      first_run_status info "Dry run would create a private repository, preserve Adaetum as upstream, and set origin to ${recovery_url}."
       break
     fi
-
     first_run_lookup_repository "${repository}"
-    existing="${first_run_repository_full_name}"
-    if [ "${first_run_repository_state}" = "exists" ]; then
-      parent="$(gh api "repos/${repository}" --jq '.parent.full_name // empty' 2>/dev/null || true)"
-      if [ "$(printf '%s' "${parent}" | tr '[:upper:]' '[:lower:]')" != "adaetum/adaetum" ]; then
-        first_run_status warning "${repository} already exists but is not a fork of Adaetum/Adaetum."
-        first_run_find_available_fork_destination "${owner}"
-        suggested="${first_run_available_fork_destination}"
-        first_run_message "${ADAETUM_UI_MUTED}" "Choose a different name for the real fork. Suggested: ${suggested}"
-        continue
+    if [ "${first_run_repository_state}" = exists ]; then
+      visibility="$(gh api "repos/${repository}" --jq '.visibility // empty')"
+      can_admin="$(gh api "repos/${repository}" --jq '.permissions.admin // false')"
+      is_fork="$(gh api "repos/${repository}" --jq '.fork // false')"
+      if [ "${visibility}" != private ] || [ "${can_admin}" != true ] || [ "${is_fork}" != false ]; then
+        first_run_status warning "${repository} is not a standalone private repository you can administer."
+        first_run_find_available_recovery_destination "${owner}"; suggested="${first_run_available_recovery_destination}"; continue
       fi
-      can_push="$(gh api "repos/${repository}" --jq '.permissions.push // false')"
-      [ "${can_push}" = true ] || die "The signed-in GitHub account cannot push to ${repository}. Choose a fork you can administer."
-      adaetum_ui_confirm "Reuse the existing Adaetum fork ${repository}?" y || exit 0
-      first_run_status success "Fork ownership and write access validated."
-      break
-    fi
-
-    adaetum_ui_confirm "Create the Adaetum fork ${repository} now?" y || exit 0
-    if [ "${owner}" = "${login}" ]; then
-      gum spin --title "Creating ${repository}..." -- gh repo fork Adaetum/Adaetum --clone=false --fork-name "${name}"
+      repository_size="$(gh api "repos/${repository}" --jq '.size // 0')"
+      if [ "${repository_size}" -gt 0 ] && ! gh api "repos/${repository}/contents/Taskfile.yml" >/dev/null 2>&1; then
+        first_run_status warning "${repository} is populated but does not look like Adaetum."
+        first_run_find_available_recovery_destination "${owner}"; suggested="${first_run_available_recovery_destination}"; continue
+      fi
+      adaetum_ui_confirm "Reuse the private Adaetum recovery repository ${repository}?" y || exit 0
     else
-      gum spin --title "Creating ${repository}..." -- gh repo fork Adaetum/Adaetum --clone=false --fork-name "${name}" --org "${owner}"
+      adaetum_ui_confirm "Create ${repository} as a private repository now?" y || exit 0
+      gum spin --title "Creating private recovery repository..." -- gh repo create "${repository}" --private --description "Private Adaetum cluster configuration and recovery"
+      created=1
+    fi
+    first_run_move_resume_credentials "${origin}" "${recovery_url}"
+    first_run_set_recovery_origin "${recovery_url}"
+    gum spin --title "Publishing the current Adaetum branch..." -- git push --set-upstream origin HEAD
+    if [ "${created}" = 1 ]; then
+      gh repo edit "${repository}" --default-branch "$(git branch --show-current)"
     fi
     break
   done
-
-  if [ "${dry_run}" != 1 ]; then
-    local attempt=0
-    until gh api "repos/${repository}" --jq '.full_name' >/dev/null 2>&1; do
-      attempt=$((attempt + 1)); [ "${attempt}" -lt 15 ] || die "GitHub is still preparing the fork. Rerun task init shortly."
-      first_run_message 245 "Waiting for GitHub to finish preparing the fork (${attempt}/15)..."; sleep 2
-    done
-    first_run_set_fork_origin "${fork_url}"
-  fi
-  first_run_heading "Fork checkout"
-  first_run_status success "Fork ready: ${fork_url}"
+  first_run_heading "Private recovery repository"
+  first_run_status success "Private recovery repository ready: ${recovery_url}"
 }
 
 first_run_load_profile() {
@@ -282,6 +345,9 @@ first_run_load_profile() {
   done < <(python3 ./tasks/scripts/configure-platform-profile.py --show)
   [[ "${first_run_domain}" == *.invalid ]] && { first_run_domain=""; first_run_local_domain=""; }
   [ "${first_run_overlay_domain}" = example-tailnet.ts.net ] && first_run_overlay_domain=""
+  # A real saved domain or tailnet is the normal rerun path. Do not leak the
+  # final placeholder comparison's false status into the fail-fast wizard.
+  return 0
 }
 
 first_run_select_cloudflare_domain() {
@@ -296,9 +362,13 @@ first_run_select_cloudflare_domain() {
   first_run_heading "Cloudflare account token"
   first_run_message "${ADAETUM_UI_MUTED}" "In the target Cloudflare account, open Manage Account → Account API Tokens, choose Create Token, and name it Adaetum bootstrap. Creating an account token requires Super Administrator access."
   adaetum_ui_key_value "Recommended token" "Account API token (new tokens start with cfat_) — durable and not tied to one person's membership"
-  adaetum_ui_key_value "Account permissions" "Account API Tokens: Edit; Workers R2 Storage: Edit; Workers Scripts: Edit; Connectivity Directory: Admin"
-  adaetum_ui_key_value "Zone permissions" "Zone: Read; DNS: Edit; Workers Routes: Edit"
-  first_run_message "${ADAETUM_UI_MUTED}" "Under Account Resources, include only the account that will own this cluster. Under Zone Resources, include only the public domain/zone you want Adaetum to use. These labels match the current Cloudflare dashboard; the API refers to several Edit permissions as Write."
+  adaetum_ui_key_value "Account API tokens" "Read and Write"
+  adaetum_ui_key_value "R2 storage" "Workers R2 Storage: Read and Write"
+  adaetum_ui_key_value "Tunnel" "Cloudflare Tunnel: Write"
+  adaetum_ui_key_value "Connectivity Directory" "Read, Bind, and Admin"
+  adaetum_ui_key_value "Worker deployment" "Workers Scripts: Read and Write"
+  adaetum_ui_key_value "Zone permissions" "Zone: Read; DNS: Read and Write; Workers Routes: Read and Write"
+  first_run_message "${ADAETUM_UI_MUTED}" "Under Account Resources, select the entire account that will own this cluster. Under Zone Resources, select only the public domain/zone Adaetum will use. This is the current known-working Account API Token permission set; it will be narrowed only after each permission can be removed in provider regression testing."
 
   first_run_heading "What Adaetum will create"
   first_run_message "${ADAETUM_UI_MUTED}" "After validation, Adaetum creates or reuses the iso R2 bucket, derives a bucket-scoped upload credential, deploys the bootstrap Worker, creates a Cloudflare Tunnel, and manages the required proxied DNS records."
@@ -369,6 +439,51 @@ first_run_select_cloudflare_domain() {
     fi
   done
   [ -n "${first_run_domain:-}" ] && [ -n "${first_run_cloudflare_account_id:-}" ] || die "Cloudflare zone selection did not resolve an owning account."
+  if [ "${dry_run}" = 1 ]; then
+    first_run_status info "Dry run would validate Cloudflare Tunnel access for the selected account."
+  elif ! printf '%s' "${first_run_cloudflare_token}" | python3 ./tasks/scripts/bootstrap-cloudflare.py \
+      --token-stdin \
+      --account-id "${first_run_cloudflare_account_id}" \
+      --zone-domain "${first_run_domain}" \
+      --validate-access-only >/dev/null 2>&1; then
+    local replacement_token="" replacement_rows="" replacement_zone="" replacement_account_id="" replacement_account_name=""
+    local replacement_has_zone=0
+    first_run_heading "Cloudflare permission required"
+    first_run_message "${ADAETUM_UI_MUTED}" "Edit the Adaetum bootstrap token—or recreate it if Cloudflare does not permit editing—and apply the complete known-working permission set shown earlier. In particular, confirm Cloudflare Tunnel → Write and Connectivity Directory → Read, Bind, and Admin apply to the entire selected account."
+    if adaetum_ui_confirm "Open the selected account's token page now?" y; then
+      adaetum_open_url "https://dash.cloudflare.com/${first_run_cloudflare_account_id}/api-tokens/create" || true
+    fi
+    adaetum_ui_confirm "I updated the existing token or created and copied a replacement. Validate now?" y || exit 0
+
+    if printf '%s' "${first_run_cloudflare_token}" | python3 ./tasks/scripts/bootstrap-cloudflare.py \
+        --token-stdin \
+        --account-id "${first_run_cloudflare_account_id}" \
+        --zone-domain "${first_run_domain}" \
+        --validate-access-only >/dev/null 2>&1; then
+      first_run_status success "The existing Cloudflare token now has tunnel access."
+    else
+      replacement_token="$(first_run_secret "Replacement Cloudflare bootstrap token")"
+      [ -n "${replacement_token}" ] || die "A replacement Cloudflare token is required to continue."
+      replacement_rows="$(printf '%s' "${replacement_token}" | python3 ./tasks/scripts/list-cloudflare-zones.py --token-stdin --details)" || die "The replacement token cannot read the selected Cloudflare zone."
+      while IFS=$'\t' read -r replacement_zone replacement_account_id replacement_account_name; do
+        if [ "${replacement_zone}" = "${first_run_domain}" ] && [ "${replacement_account_id}" = "${first_run_cloudflare_account_id}" ]; then
+          replacement_has_zone=1
+          break
+        fi
+      done <<< "${replacement_rows}"
+      [ "${replacement_has_zone}" = 1 ] || die "The replacement token is not scoped to ${first_run_domain} in the selected Cloudflare account."
+      printf '%s' "${replacement_token}" | python3 ./tasks/scripts/bootstrap-cloudflare.py \
+        --token-stdin \
+        --account-id "${first_run_cloudflare_account_id}" \
+        --zone-domain "${first_run_domain}" \
+        --validate-access-only >/dev/null || die "The replacement token still lacks part of the known-working Cloudflare account or zone permission set shown above."
+      first_run_cloudflare_token="${replacement_token}"
+      if [ -n "${credential_backend}" ]; then
+        printf '%s\n' "${first_run_cloudflare_token}" | bash "${credential_store}" set "${credential_namespace}" cloudflare-api-token
+        first_run_status success "Updated the saved Cloudflare setup token in ${credential_backend}."
+      fi
+    fi
+  fi
   first_run_status success "Selected zone ${first_run_domain} in Cloudflare account ${first_run_cloudflare_account_name}."
   export SETUP_CLOUDFLARE_API_TOKEN="${first_run_cloudflare_token}"
   export SETUP_CLOUDFLARE_ACCOUNT_ID="${first_run_cloudflare_account_id}"
@@ -392,7 +507,7 @@ first_run_select_tailscale_domain() {
   first_run_message "${ADAETUM_UI_MUTED}" "A user access token follows one person's Tailscale membership and has broader bootstrap authority than running nodes need. Adaetum never writes it to platform.yaml, the local .env, or GitHub secrets. If you approve secure resume storage, the one-day token is kept only in your OS credential store until it expires or is rejected."
   first_run_message "${ADAETUM_UI_MUTED}" "Instead, after tag preparation Adaetum uses this token's OAuth Keys permission to create a narrowly scoped OAuth client for repeatable node enrollment."
   first_run_heading "About the node auth key"
-  first_run_message "${ADAETUM_UI_MUTED}" "You do not need to create or paste an auth key here. Setup mints a non-reusable auth key with a 1-day expiration, saves it in the gitignored local .env for the installer build, and syncs it to the fork's Prod GitHub environment. The key becomes unusable after the first successful node enrollment."
+  first_run_message "${ADAETUM_UI_MUTED}" "You do not need to create or paste an auth key here. Setup mints a non-reusable auth key with a 1-day expiration, saves it in the gitignored local .env for the installer build, and syncs it to the private recovery repository's Prod GitHub environment. The key becomes unusable after the first successful node enrollment."
   if [ "${dry_run}" != 1 ]; then
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
@@ -479,7 +594,7 @@ first_run_capture_tailscale_oauth() {
   adaetum_ui_key_value "Scopes → Devices → Core" "Read"
   adaetum_ui_key_value "Scopes → Devices → Posture Attributes" "Read"
   adaetum_ui_key_value "Tags" "tag:rocky10, tag:server, tag:cluster"
-  first_run_message "${ADAETUM_UI_MUTED}" "These labels mirror Tailscale's Trust credentials topics. Adaetum creates the client through Tailscale's supported keys API, captures its one-time secret from that response, validates it, and later saves the client and generated auth key in the gitignored local .env and the fork's Prod GitHub environment."
+  first_run_message "${ADAETUM_UI_MUTED}" "These labels mirror Tailscale's Trust credentials topics. Adaetum creates the client through Tailscale's supported keys API, captures its one-time secret from that response, validates it, and later saves the client and generated auth key in the gitignored local .env and the private recovery repository's Prod GitHub environment."
   if [ "${dry_run}" != 1 ]; then
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
@@ -532,7 +647,7 @@ first_run_capture_tailscale_oauth() {
 first_run_profile() {
   local proposal="$1" bootstrap_url=""
   first_run_heading "Configure your cluster"
-  first_run_message "${ADAETUM_UI_MUTED}" "Adaetum will save these public settings in your fork. Provider credentials stay in memory for this setup and are never written to platform.yaml."
+  first_run_message "${ADAETUM_UI_MUTED}" "Adaetum will save these public settings in your private recovery repository. Provider credentials stay in memory for this setup and are never written to platform.yaml."
   first_run_prompt_context \
     "Public cluster domain" \
     "Selected from the authorized Cloudflare zones above. Adaetum will create bootstrap and service DNS records beneath ${first_run_domain}."
@@ -555,12 +670,12 @@ first_run_profile() {
 }
 
 first_run_review_profile() {
-  local proposal="$1" hook_runner=""
+  local proposal="$1" hook_runner="" hook_log=""
   first_run_heading "Review public cluster configuration"
   adaetum_ui_key_value "Public domain" "${first_run_domain}"
   adaetum_ui_key_value "Tailscale tailnet" "${first_run_overlay_domain}"
   first_run_message 245 "Using Adaetum standard defaults for local DNS, node tagging, the initial Gitea repository, bootstrap delivery, and R2 storage."
-  adaetum_ui_confirm "Apply this public configuration to your fork?" y || exit 0
+  adaetum_ui_confirm "Apply this public configuration to your private recovery repository?" y || exit 0
   if [ "${dry_run}" = 1 ]; then
     export ADAETUM_PLATFORM_PROFILE="${proposal}"
     export ADAETUM_PLATFORM_PROFILE_TEMP="${proposal}"
@@ -571,31 +686,50 @@ first_run_review_profile() {
   task platform:render
   if ! git diff --quiet HEAD -- platform.yaml; then
     git add platform.yaml
-    if ! git diff --quiet HEAD -- .pre-commit-config.yaml; then
-      first_run_status info "The hook configuration has uncommitted development changes; validating platform.yaml explicitly before the profile-only commit."
-      if command -v prek >/dev/null 2>&1; then
-        hook_runner="prek"
-      elif command -v pre-commit >/dev/null 2>&1; then
-        hook_runner="pre-commit"
-      else
-        die "The hook configuration is modified and neither prek nor pre-commit is available for explicit profile validation."
-      fi
-      "${hook_runner}" run --config .pre-commit-config.yaml --files platform.yaml
-      git commit --no-verify -m "Configure Adaetum platform profile" -- platform.yaml
+    if command -v prek >/dev/null 2>&1; then
+      hook_runner="prek"
+    elif command -v pre-commit >/dev/null 2>&1; then
+      hook_runner="pre-commit"
     else
-      git commit -m "Configure Adaetum platform profile" -- platform.yaml
+      die "Neither prek nor pre-commit is available for profile commit validation."
     fi
+    hook_log="$(mktemp)"
+    if "${hook_runner}" run --config .pre-commit-config.yaml --files platform.yaml >"${hook_log}" 2>&1; then
+      rm -f "${hook_log}"
+      first_run_status success "Profile commit checks passed."
+    else
+      first_run_heading "Profile commit checks failed"
+      cat "${hook_log}"
+      rm -f "${hook_log}"
+      die "Fix the reported profile validation failure, then rerun task init."
+    fi
+    # The exact staged file was validated above. Avoid invoking the repository
+    # hook again, which would only repeat the same result plus skipped hooks.
+    git commit --no-verify -m "Configure Adaetum platform profile" -- platform.yaml
     git push origin "$(git rev-parse --abbrev-ref HEAD)"
   fi
 }
 
 first_run_installer_media() {
-  local helper="${repo_root}/tasks/scripts/manage-rocky-installer-iso.sh" report path version architecture size selected preferred_arch=x86_64
+  local helper="${repo_root}/tasks/scripts/manage-rocky-installer-iso.sh" report path version architecture image_type size selected preferred_arch=x86_64
+  local other_arch=aarch64 release_choice="" selected_release=10.2 type_choice="" selected_type=minimal arch_choice="" selected_arch="" download_size=""
   first_run_heading "Rocky Linux installer media"
   report="$(${helper} list 2>/dev/null || true)"
   if [ -n "${report}" ]; then
-    while IFS=$'\t' read -r path version architecture size; do printf '  %s — %s, %s, %s\n' "$(basename "${path}")" "${version}" "${architecture}" "${size}"; done <<< "${report}"
-    selected="$(printf '%s\n' "${report}" | cut -f1 | head -n1)"
+    local media_options=() media_paths=() media_label="" media_index=""
+    while IFS=$'\t' read -r path version architecture image_type size; do
+      media_label="$(basename "${path}") — ${version}, ${architecture}, ${image_type}, ${size}"
+      media_options+=("${media_label}")
+      media_paths+=("${path}")
+    done <<< "${report}"
+    media_label="$(first_run_choose "Choose discovered Rocky Linux installer media" "${media_options[@]}")"
+    for media_index in "${!media_options[@]}"; do
+      if [ "${media_options[${media_index}]}" = "${media_label}" ]; then
+        selected="${media_paths[${media_index}]}"
+        break
+      fi
+    done
+    [ -n "${selected}" ] || die "Rocky installer selection did not resolve a local ISO."
     if [ "$(dirname "${selected}")" != "${repo_root}" ]; then
       adaetum_ui_confirm "Use this installer ISO and copy it into the Adaetum checkout?" y || exit 1
       if [ "${dry_run}" = 1 ]; then
@@ -607,14 +741,47 @@ first_run_installer_media() {
     fi
     return
   fi
-  case "$(uname -m)" in arm64|aarch64) preferred_arch=aarch64 ;; esac
-  first_run_message "${ADAETUM_UI_MUTED}" "No supported Rocky 10 Minimal ISO was found locally. Adaetum can download and SHA-256 verify Rocky Linux 10.2 Minimal for ${preferred_arch}."
+  case "$(uname -m)" in
+    arm64|aarch64) preferred_arch=aarch64; other_arch=x86_64 ;;
+  esac
+  first_run_message "${ADAETUM_UI_MUTED}" "No supported Rocky 10 Minimal or DVD ISO was found locally. Choose media for the machine that will run Adaetum; it may differ from this computer."
+  release_choice="$(first_run_choose "Rocky Linux release" "Rocky Linux 10.2 — latest supported (recommended)")"
+  case "${release_choice}" in
+    "Rocky Linux 10.2"*) selected_release=10.2 ;;
+    *) die "Unsupported Rocky Linux release selection." ;;
+  esac
+  type_choice="$(first_run_choose "Installer image type" \
+    "Minimal (offline installer) — recommended, smaller download with Adaetum's required packages" \
+    "DVD (offline installer) — complete package repository, much larger download")"
+  case "${type_choice}" in
+    Minimal*) selected_type=minimal ;;
+    DVD*) selected_type=dvd ;;
+    *) die "Unsupported Rocky installer image selection." ;;
+  esac
+  arch_choice="$(first_run_choose "Target machine architecture" \
+    "${preferred_arch} — detected on this computer (recommended)" \
+    "${other_arch} — build for a different target machine")"
+  selected_arch="${arch_choice%% *}"
+  case "${selected_arch}" in x86_64|aarch64) ;; *) die "Unsupported target architecture selection." ;; esac
+  case "${selected_arch}:${selected_type}" in
+    x86_64:minimal) download_size="about 1.93 GiB" ;;
+    aarch64:minimal) download_size="about 2.23 GiB" ;;
+    x86_64:dvd) download_size="about 9.52 GiB" ;;
+    aarch64:dvd) download_size="about 9.00 GiB" ;;
+  esac
+  first_run_heading "Installer download"
+  adaetum_ui_key_value "Release" "Rocky Linux ${selected_release} (latest supported)"
+  adaetum_ui_key_value "Image" "${selected_type}"
+  adaetum_ui_key_value "Target architecture" "${selected_arch}"
+  adaetum_ui_key_value "Download size" "${download_size}"
+  first_run_message "${ADAETUM_UI_MUTED}" "Rocky's separate Boot ISO (online installer) is not offered because it downloads packages during installation. The selected Minimal ISO is a bootable offline installer and includes the local package repository Adaetum expects."
   adaetum_ui_confirm "Download the official installer now?" y || exit 1
   if [ "${dry_run}" = 1 ]; then
     export ADAETUM_INSTALLER_MEDIA_READY=1
-    first_run_status info "Dry run would download and verify Rocky Linux 10.2 Minimal (${preferred_arch})."
+    export ADAETUM_DRY_RUN_ISO_NAME="Rocky-${selected_release}-${selected_arch}-$([ "${selected_type}" = dvd ] && printf dvd1 || printf minimal).iso"
+    first_run_status info "Dry run would download and verify Rocky Linux ${selected_release} ${selected_type} (${selected_arch})."
   else
-    bash "${helper}" download "${preferred_arch}"
+    bash "${helper}" download "${selected_arch}" "${selected_type}" "${selected_release}"
   fi
 }
 
@@ -624,10 +791,11 @@ adaetum_first_run_prepare() {
   command -v git >/dev/null 2>&1 || die "git is required to continue."
   [ "${dry_run}" = 1 ] || command -v gh >/dev/null 2>&1 || die "GitHub CLI is required. Rerun task init so it can install gh."
 
-  first_run_phase 1 "Fork" "Create or verify the GitHub recovery fork used to rebuild the cluster."
-  first_run_configure_fork
+  first_run_phase 1 "Repository" "Create or verify the private GitHub recovery repository used to rebuild the cluster."
+  first_run_configure_recovery_repository
   first_run_ensure_github_login
-  first_run_status success "Section 1 complete — recovery fork ready."
+  first_run_ensure_github_actions
+  first_run_status success "Section 1 complete — private recovery repository ready."
 
   first_run_phase 2 "Providers" "Authorize Cloudflare and Tailscale once, then reuse those credentials throughout setup."
   first_run_load_profile

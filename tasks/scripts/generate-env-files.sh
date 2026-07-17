@@ -404,11 +404,13 @@ cloudflare_bootstrap_from_pat() {
   local rancher_http_host_header="${10}"
   local existing_rancher_tunnel_token="${11}"
   local rancher_tunnel_name="${12}"
-  local registry_public_domain="${13}"
-  local ingress_public_domains="${14}"
-  local ingress_public_domains_cleanup="${15}"
-  local ingress_origin_url="${16}"
-  local ingress_origin_no_tls_verify="${17}"
+  # The first call provisions core R2 delivery with 12 inputs. Later calls add
+  # the optional ingress settings after public hostnames have been derived.
+  local registry_public_domain="${13:-}"
+  local ingress_public_domains="${14:-}"
+  local ingress_public_domains_cleanup="${15:-}"
+  local ingress_origin_url="${16:-}"
+  local ingress_origin_no_tls_verify="${17:-}"
   local output=""
   local err_output=""
   local key=""
@@ -718,12 +720,16 @@ confirm_overwrite() {
   fi
 }
 
-write_env_file() {
+write_env_file() (
   local target="$1"
   local profile_local_iso="$2"
   local profile_vm_start="$3"
+  local target_tmp=""
 
-  cat > "${target}" <<EOF
+  umask 077
+  target_tmp="$(mktemp "${target}.tmp.XXXXXX")"
+  trap 'rm -f "${target_tmp}"' EXIT
+  cat > "${target_tmp}" <<EOF
 # ---------------------------------------------------------------------------
 # Required (setup.md Section 5) - fill these first
 # ---------------------------------------------------------------------------
@@ -857,13 +863,13 @@ BOOTSTRAP_BUNDLE_URL=\${KS_BASE_URL}/iso/firstboot-payload/ansible-runner-bundle
 BOOTSTRAP_BUNDLE_TOKEN=\${KS_SHARED_TOKEN}
 BOOTSTRAP_BUNDLE_FORCE=1
 BOOTSTRAP_OPENBAO_AUTO_UNSEAL=1
-BOOTSTRAP_BACKUP_PASSPHRASE_B64=
+BOOTSTRAP_BACKUP_PASSPHRASE_B64=${BOOTSTRAP_BACKUP_PASSPHRASE_B64}
 BOOTSTRAP_BACKUP_TO_R2=1
 BOOTSTRAP_BACKUP_URL=\${KS_BASE_URL}/backup
 BOOTSTRAP_BACKUP_FORMAT=both
 BOOTSTRAP_BACKUP_FILE_OPENSSL=bootstrap-emergency-kit.tar.gz.enc
 BOOTSTRAP_BACKUP_FILE_7Z=bootstrap-emergency-kit.7z
-BOOTSTRAP_BACKUP_PASSPHRASE=
+BOOTSTRAP_BACKUP_PASSPHRASE=${BOOTSTRAP_BACKUP_PASSPHRASE}
 
 # Runner behavior
 ANSIBLE_RUNNER_UPDATE_FROM_REPO=1
@@ -904,7 +910,10 @@ VM_HEADLESS=1
 # Hook runner selection (auto chooses pre-commit on Windows/non-brew hosts)
 HOOKS_RUNNER=auto
 EOF
-}
+  chmod 600 "${target_tmp}"
+  mv "${target_tmp}" "${target}"
+  trap - EXIT
+)
 
 confirm_overwrite "${out_file}"
 if [ "${write_vm_env}" = "1" ] && [ -n "${vm_out_file}" ] && [ "${vm_out_file}" != "${out_file}" ]; then
@@ -1046,6 +1055,8 @@ if [ -z "${default_upload}" ]; then
 fi
 KS_SHARED_TOKEN="${default_shared}"
 KS_UPLOAD_TOKEN="${default_upload}"
+BOOTSTRAP_BACKUP_PASSPHRASE="$(existing_value BOOTSTRAP_BACKUP_PASSPHRASE)"
+BOOTSTRAP_BACKUP_PASSPHRASE_B64="$(existing_value BOOTSTRAP_BACKUP_PASSPHRASE_B64)"
 
 # Tailscale
 tailscale_mode_default="oauth"
@@ -1180,7 +1191,7 @@ if [ -n "${CLOUDFLARE_API_TOKEN}" ] && [ -n "${RANCHER_PUBLIC_DOMAIN}" ]; then
     echo "Auto-generated/validated Rancher cloudflared tunnel settings from CLOUDFLARE_API_TOKEN."
   else
     echo "Warning: could not auto-generate Rancher cloudflared tunnel token from CLOUDFLARE_API_TOKEN."
-    echo "If this persists, verify Cloudflare token scopes include Cloudflare Tunnel Edit + Zone DNS Edit."
+    echo "If this persists, verify the token includes Cloudflare Tunnel Write, Connectivity Directory Read/Bind/Admin, and Zone DNS Read/Write."
   fi
 fi
 
@@ -1215,7 +1226,7 @@ RANCHER_CLOUDFLARED_TUNNEL_TOKEN="$(prompt_value RANCHER_CLOUDFLARED_TUNNEL_TOKE
 if [ -z "${RANCHER_CLOUDFLARED_TUNNEL_TOKEN}" ]; then
   echo "Missing required RANCHER_CLOUDFLARED_TUNNEL_TOKEN for break-glass bootstrap."
   echo "Setup should auto-generate this from CLOUDFLARE_API_TOKEN."
-  echo "Required Cloudflare scopes: Account Cloudflare Tunnel Edit, Zone DNS Edit."
+  echo "Required Cloudflare scopes include Account Cloudflare Tunnel Write and Connectivity Directory Read/Bind/Admin, plus Zone DNS Read/Write."
   exit 1
 fi
 
@@ -1345,10 +1356,14 @@ else
   [ -n "${GITEA_PUSH_MIRROR_TOKEN}" ] || GITEA_PUSH_MIRROR_TOKEN="${GITEA_SEED_SOURCE_TOKEN:-${ARGOCD_GITHUB_TOKEN}}"
 fi
 
-write_env_file "${out_file}" "Rocky-10.1-x86_64-minimal.iso" "0"
+selected_local_iso="${ADAETUM_LOCAL_ISO_PATH:-$(existing_value LOCAL_ISO_PATH)}"
+if [ -z "${selected_local_iso}" ]; then
+  selected_local_iso="Rocky-10.2-x86_64-minimal.iso"
+fi
+write_env_file "${out_file}" "${selected_local_iso}" "0"
 echo "Wrote ${out_file}"
 if [ "${write_vm_env}" = "1" ] && [ -n "${vm_out_file}" ] && [ "${vm_out_file}" != "${out_file}" ]; then
-  write_env_file "${vm_out_file}" "Rocky-10.1-aarch64-minimal.iso" "1"
+  write_env_file "${vm_out_file}" "${selected_local_iso}" "1"
   echo "Wrote ${vm_out_file}"
 fi
 

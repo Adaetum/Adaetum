@@ -71,7 +71,7 @@ tasks:
         printf '  %stask validate-pods-contract%s Run the full pods contract validator suite\n' "${c_task}" "${c_reset}"
         printf '  %stask platform:validate%s Validate platform.yaml\n' "${c_task}" "${c_reset}"
         printf '  %stask platform:render%s   Render platform.yaml into generated manifests\n' "${c_task}" "${c_reset}"
-        printf '  %stask platform:setup%s    Run setup from the fork-owned platform profile\n' "${c_task}" "${c_reset}"
+        printf '  %stask platform:setup%s    Run setup from the recovery repository profile\n' "${c_task}" "${c_reset}"
         printf '  %stask setup:preflight%s  Check non-secret setup readiness without changing anything\n' "${c_task}" "${c_reset}"
         printf '  %stask list%s          Show this command list\n' "${c_task}" "${c_reset}"
 
@@ -96,11 +96,11 @@ tasks:
       - task: env:init:dryrun
 
   iso:download:
-    desc: Download and SHA-256 verify Rocky 10.2 Minimal installer media (set ROCKY_ARCH)
+    desc: Download and verify Rocky installer media (set ROCKY_ARCH, ROCKY_IMAGE_TYPE, ROCKY_RELEASE)
     cmds:
-      - cmd: bash ./tasks/scripts/manage-rocky-installer-iso.sh download '{{default "x86_64" .ROCKY_ARCH}}'
+      - cmd: bash ./tasks/scripts/manage-rocky-installer-iso.sh download '{{default "x86_64" .ROCKY_ARCH}}' '{{default "minimal" .ROCKY_IMAGE_TYPE}}' '{{default "10.2" .ROCKY_RELEASE}}'
         platforms: [linux, darwin]
-      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/manage-rocky-installer-iso.sh download '{{default "x86_64" .ROCKY_ARCH}}'
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/manage-rocky-installer-iso.sh download '{{default "x86_64" .ROCKY_ARCH}}' '{{default "minimal" .ROCKY_IMAGE_TYPE}}' '{{default "10.2" .ROCKY_RELEASE}}'
         platforms: [windows]
 
   clean:

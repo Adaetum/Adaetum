@@ -49,7 +49,7 @@ def load_profile(path: Path) -> dict:
 
 
 def config_from_profile(profile: dict) -> dict[str, str]:
-    """Derive every public runtime value from the one fork-owned profile.
+    """Derive every public runtime value from the recovery repository profile.
 
     Keep host naming here rather than scattered through manifests or setup
     scripts. The returned mapping is deliberately flat because its consumers

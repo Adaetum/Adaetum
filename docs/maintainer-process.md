@@ -26,10 +26,10 @@ need real-world evidence.
 
 Reviewers check that a change preserves these authorities:
 
-- `platform.yaml` owns public fork configuration.
+- `platform.yaml` owns public recovery repository configuration.
 - `.env` and runtime payloads carry secrets only.
 - `pods/` owns the in-cluster product definitions.
-- The private fork is recovery/out-of-band configuration; in-cluster Gitea and
+- The standalone private repository is recovery/out-of-band configuration; in-cluster Gitea and
   Argo CD own day-2 reconciliation.
 
 Changes to bootstrap phases, secret authority, external integrations, recovery,
@@ -42,7 +42,7 @@ architecture note as described in [GOVERNANCE.md](../GOVERNANCE.md).
 2. Link the required evidence from [release evidence](release-evidence.md).
 3. Verify the support matrix and known limitations against the actual release
    scope; do not promote an experimental path through wording alone.
-4. Write release notes that identify public contract changes, fork actions,
+4. Write release notes that identify public contract changes, repository actions,
    recovery/rebuild guidance, and any deferred validation.
 5. Apply the tag specified by the [versioning policy](versioning.md), publish
    the GitHub Release, and link the completed release issue.
