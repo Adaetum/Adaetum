@@ -473,7 +473,7 @@ tasks:
         }
 
         # Default to a role selector at boot:
-        # - server (default after timeout)
+        # - server with Tailscale-backed start/join detection (default after timeout)
         # - agent (manual selection)
         # - breakglass/server (manual selection)
         role_selector="${ISO_ROLE_SELECTOR:-1}"
@@ -505,7 +505,7 @@ tasks:
         fi
         # Always append explicit role flags after any URL rewrites. This keeps
         # GRUB role selection deterministic when selector URL mode is enabled.
-        server_ks_args="${server_ks_args} ks_role=server ks_breakglass=0"
+        server_ks_args="${server_ks_args} ks_role=server ks_breakglass=auto"
         agent_ks_args="${agent_ks_args} ks_role=agent ks_breakglass=0"
         breakglass_ks_args="${breakglass_ks_args} ks_role=server ks_breakglass=1"
         selector_default_index="0"
@@ -562,15 +562,15 @@ tasks:
                 : > "${selector_file}"
               fi
               {
-                echo 'menuentry "Install Rocky Linux (Server default)" {'
+                echo 'menuentry "Install Rocky Linux (Server - auto start/join, default)" {'
                 printf '%s\n' "${server_linux}"
                 printf '%s\n' "${initrd_line}"
                 echo '}'
-                echo 'menuentry "Install Rocky Linux (Agent join)" {'
+                echo 'menuentry "Install Rocky Linux (Agent - join as worker)" {'
                 printf '%s\n' "${agent_linux}"
                 printf '%s\n' "${initrd_line}"
                 echo '}'
-                echo 'menuentry "Install Rocky Linux (Breakglass bootstrap)" {'
+                echo 'menuentry "Install Rocky Linux (Breakglass - force new primary)" {'
                 printf '%s\n' "${breakglass_linux}"
                 printf '%s\n' "${initrd_line}"
                 echo '}'
@@ -634,9 +634,9 @@ tasks:
           mv "${cfg_path}.tmp" "${cfg_path}"
 
           if [ "${selector_enabled}" = "1" ]; then
-            if ! grep -q 'Install Rocky Linux (Server default)' "${cfg_path}" \
-              || ! grep -q 'Install Rocky Linux (Agent join)' "${cfg_path}" \
-              || ! grep -q 'Install Rocky Linux (Breakglass bootstrap)' "${cfg_path}"; then
+            if ! grep -q 'Install Rocky Linux (Server - auto start/join, default)' "${cfg_path}" \
+              || ! grep -q 'Install Rocky Linux (Agent - join as worker)' "${cfg_path}" \
+              || ! grep -q 'Install Rocky Linux (Breakglass - force new primary)' "${cfg_path}"; then
               echo "ERROR: selector menu validation failed for ${cfg_path}"
               return 1
             fi

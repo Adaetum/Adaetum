@@ -72,6 +72,12 @@ repos:
           - --self-test
         pass_filenames: false
         files: ^(ks-src/|tasks/scripts/compile-kickstarts\.py|tasks/ks\.yml|Taskfile\.yml)
+      - id: validate-bootstrap-mode
+        name: Validate Tailscale bootstrap mode detection
+        entry: python3 .validator/validate-bootstrap-mode.py
+        language: python
+        pass_filenames: false
+        files: ^(ansible/ansible-scripts/detect-cluster-bootstrap-mode\.py|\.validator/validate-bootstrap-mode\.py|ks-src/fragments/shared/portable/12-tailscale-firstboot-flow\.shfrag|ks-src/fragments/installers/kickstart/rocky10/75-firstboot-install-handoff\.ksfrag|tasks/iso\.yml|tasks/scripts/generate-env-files\.sh)$
       - id: render-pods-config-check
         name: Validate rendered pods config
         entry: python3 tasks/scripts/render-pods-config.py

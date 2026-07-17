@@ -682,10 +682,14 @@ boot fetches the runtime secret payload from the bootstrap Worker, so outbound
 network access to `KS_BASE_URL` is required before secret-dependent bootstrap
 steps can complete.
 
-> [!IMPORTANT]
-> The installer menu defaults to `Install Rocky Linux (Server default)`, but
-> for the first node you should select `Install Rocky Linux (Breakglass bootstrap)`
-> so that node performs the initial cluster bootstrap.
+The installer menu defaults to
+`Install Rocky Linux (Server - auto start/join, default)`. After the node
+enrolls in Tailscale, Adaetum checks every other peer for both the configured
+cluster tag and `tag:server`. If none exists, this node creates the cluster
+primary. If any matching server exists—even when it is offline or
+unreachable—this node enters strict join mode and fails rather than creating a
+second cluster. `Install Rocky Linux (Breakglass - force new primary)` remains
+the manual recovery override for deliberately creating a replacement primary.
 
 ### Validate the UI and routing baseline
 
@@ -727,12 +731,13 @@ credential.
 
 After the first node is up:
 
-- Use `Install Rocky Linux (Server default)` to add another server node that
-  participates in cluster failover.
-- Use `Install Rocky Linux (Agent join)` to add a capacity node that runs
-  workloads but does not participate in cluster failover. This is usually the
-  right choice when you are adding a seventh node or addressing other
-  high-traffic bottlenecks in internal server communication.
+- Use `Install Rocky Linux (Server - auto start/join, default)` to start the
+  first server when the cluster is empty or add another server when one is
+  detected. Server nodes participate in cluster failover.
+- Use `Install Rocky Linux (Agent - join as worker)` to add a capacity node
+  that runs workloads but does not participate in cluster failover. This is
+  usually the right choice when you are adding a seventh node or addressing
+  other high-traffic bottlenecks in internal server communication.
 
 For broader platform behavior and recovery/runbook details, see
 [README.md](README.md), the [architecture audit](docs/audit.md), and the

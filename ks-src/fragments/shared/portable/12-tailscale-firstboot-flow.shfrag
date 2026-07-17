@@ -997,6 +997,41 @@ if ! tailscale ip -4 >/dev/null 2>&1; then
   fail_firstboot "tailscale IP missing"
 fi
 
+resolve_automatic_bootstrap_mode() {
+  mode_detector="/opt/ansible-runner/ansible/ansible-scripts/detect-cluster-bootstrap-mode.py"
+  status_file="$(mktemp)"
+  if ! tailscale status --json >"${status_file}"; then
+    rm -f "${status_file}"
+    fail_firstboot "cannot inspect Tailscale peers for automatic start/join selection"
+  fi
+  if [ ! -f "${mode_detector}" ]; then
+    rm -f "${status_file}"
+    fail_firstboot "automatic start/join detector is missing from the bootstrap bundle"
+  fi
+  detected_mode="$(python3 "${mode_detector}" --cluster-tag "${TAILSCALE_CLUSTER_TAG}" <"${status_file}")" || {
+    rm -f "${status_file}"
+    fail_firstboot "automatic start/join detection failed"
+  }
+  rm -f "${status_file}"
+  case "${detected_mode}" in
+    start)
+      KS_BREAKGLASS="1"
+      echo "[BOOTSTRAP] No other peer has both ${TAILSCALE_CLUSTER_TAG} and tag:server; this node will create the cluster primary"
+      ;;
+    join)
+      KS_BREAKGLASS="0"
+      echo "[BOOTSTRAP] An existing peer has both ${TAILSCALE_CLUSTER_TAG} and tag:server; this node will join even if that peer is currently offline"
+      ;;
+    *)
+      fail_firstboot "automatic start/join detector returned an unsupported mode: ${detected_mode}"
+      ;;
+  esac
+}
+
+case "$(printf '%s' "${KS_BREAKGLASS}" | tr '[:upper:]' '[:lower:]')" in
+  auto) resolve_automatic_bootstrap_mode ;;
+esac
+
 disable_node_key_expiry() {
   local strict_key_expiry
   strict_key_expiry="$(printf '%s' "${TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR:-0}" | tr '[:upper:]' '[:lower:]')"
