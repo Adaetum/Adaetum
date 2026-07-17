@@ -26,6 +26,16 @@ adaetum_normalize_github_url() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#^git@github\.com:#github.com/#; s#^ssh://git@github\.com/#github.com/#; s#^https?://github\.com/#github.com/#; s#\.git/?$##'
 }
 
+adaetum_github_repository_from_url() {
+  local normalized=""
+  normalized="$(adaetum_normalize_github_url "$1")"
+  normalized="${normalized#github.com/}"
+  case "${normalized}" in
+    */*) printf '%s' "${normalized}" ;;
+    *) return 1 ;;
+  esac
+}
+
 adaetum_origin_is_upstream() {
   local normalized_origin=""
   normalized_origin="$(adaetum_normalize_github_url "$1")"

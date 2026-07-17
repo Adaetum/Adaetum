@@ -78,6 +78,9 @@ Canonical Adaetum is retained as the public `upstream` remote and the selected
 private repository becomes `origin`. GitHub requires forks of public
 repositories to remain public, so setup never uses a public fork as the cluster
 recovery store.
+Setup publishes `main` as the default workflow branch because Adaetum's Actions
+triggers target `main`. If setup is launched from another branch, that development
+branch is also published and remains checked out locally.
 If an older Adaetum setup already synchronized environment secrets to a public
 fork, remove those secrets and rotate the provider credentials after the private
 repository is ready; GitHub does not permit reading the old secret values back.
@@ -112,8 +115,11 @@ platform, install Gum from its official instructions and rerun `task init`.
 Docker is optional and is only needed for the local `task build-iso` path.
 
 Adaetum accepts Rocky 10 Minimal and DVD media at this boundary. `task init`
-finds matching media in the checkout and common download locations. If none is
-present, it asks for the release, image type, and target architecture. The
+finds matching media in the checkout and common download locations. A single
+supported ISO already in the checkout is verified and reused automatically,
+without showing the download questions. Multiple discovered ISOs produce one
+selection menu; media outside the checkout requires confirmation before it is
+copied. If none is present, setup asks for the release, image type, and target architecture. The
 newest supported release, Minimal image, and detected host architecture are
 the first/default choices. The menu labels Minimal and DVD as offline
 installers; choose DVD when the target needs the complete package repository.
@@ -130,6 +136,17 @@ task iso:download                 # x86_64 (default)
 ROCKY_ARCH=aarch64 task iso:download
 ROCKY_IMAGE_TYPE=dvd task iso:download
 ```
+
+### Replace saved setup values
+
+Use `task init:clean` when testing with different provider credentials or when
+the saved setup state should be replaced. It follows the normal guided flow but
+does not read Adaetum credentials from the OS credential store or runtime values
+from the existing `.env`. Newly validated values replace the protected local
+entries, generated `.env`, and GitHub environment secrets. It deliberately
+retains the GitHub CLI login, private recovery repository, and verified Rocky
+installer media because those are setup infrastructure rather than saved
+provider values.
 
 ### Terminal experience
 

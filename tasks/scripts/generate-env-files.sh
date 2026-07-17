@@ -63,7 +63,7 @@ existing_value() {
   # run-opinionated-setup passes a temp "existing" file that may omit previously
   # generated Cloudflare/R2 credentials. Fall back to current .env values so
   # reruns reuse existing R2 API credentials instead of creating new tokens.
-  if [ -z "${value}" ] && [ "${out_file}" != "${existing_file}" ] && [ -f "${out_file}" ]; then
+  if [ "${ADAETUM_IGNORE_EXISTING_ENV:-0}" != 1 ] && [ -z "${value}" ] && [ "${out_file}" != "${existing_file}" ] && [ -f "${out_file}" ]; then
     value="$(awk -F= -v k="${key}" '$1==k {print substr($0, index($0, "=")+1); exit}' "${out_file}")"
   fi
   sanitize_env_value "${value}"

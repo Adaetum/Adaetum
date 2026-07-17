@@ -21,6 +21,8 @@ unavailable.
 Canonical Adaetum remains the public `upstream` remote. GitHub does not permit
 private forks of a public repository, so the recovery repository is deliberately
 standalone rather than a GitHub fork.
+`task init` establishes `main` as the private repository's default workflow
+branch while preserving and publishing the operator's current development branch.
 Adaetum does not promise an in-place upgrade API between major designs:
 upstream breaking changes are adopted deliberately in your recovery repository.
 
@@ -79,6 +81,18 @@ task init:dryrun
 It remains interactive and follows the same decision order as `task init`.
 It substitutes fixture credentials and no-op action adapters while preserving
 the same decision order and review screens.
+
+To deliberately replace saved Adaetum provider credentials and generated
+runtime values, run:
+
+```bash
+task init:clean
+```
+
+This keeps the authenticated GitHub session, private recovery repository, and
+verified Rocky installer media. It collects new Cloudflare and Tailscale
+credentials, overwrites their OS credential-store entries after validation,
+rebuilds `.env`, and replaces the corresponding GitHub secrets.
 
 Gum is an optional presentation layer outside `task init`: credential prompts,
 recovery pickers, and confirmations use it when available, but retain plain

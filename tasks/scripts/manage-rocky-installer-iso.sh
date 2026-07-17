@@ -27,6 +27,24 @@ sha256_file() {
   fi
 }
 
+published_sha256() {
+  local checksum_url="$1"
+  local checksum_file=""
+  local expected=""
+  checksum_file="$(mktemp "${TMPDIR:-/tmp}/rocky-checksum.XXXXXX")"
+  if ! curl --fail --location --silent --show-error --output "${checksum_file}" "${checksum_url}"; then
+    rm -f "${checksum_file}"
+    return 1
+  fi
+  expected="$(awk '$1 == "SHA256" && $3 == "=" { print tolower($4); exit }' "${checksum_file}" | tr -d '\r\n')"
+  rm -f "${checksum_file}"
+  if [[ ! "${expected}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Official checksum file did not contain a SHA-256 digest." >&2
+    return 1
+  fi
+  printf '%s' "${expected}"
+}
+
 list() {
   local iso=""
   local base=""
@@ -81,6 +99,27 @@ adopt() {
   echo "Copied installer ISO to: ${destination}"
 }
 
+verify() {
+  local path="$1"
+  local base="$(basename "${path}")"
+  local arch="" expected="" actual="" checksum_url=""
+  if [[ ! "${base}" =~ ^Rocky-10(\.[0-9]+)?-(x86_64|aarch64)-(minimal|dvd1|dvd)\.iso$ ]]; then
+    echo "Unsupported Rocky installer ISO: ${path}" >&2
+    exit 1
+  fi
+  [ -f "${path}" ] || { echo "Installer ISO does not exist: ${path}" >&2; exit 1; }
+  command -v curl >/dev/null 2>&1 || { echo "curl is required to verify installer media." >&2; exit 1; }
+  arch="${BASH_REMATCH[2]}"
+  checksum_url="https://download.rockylinux.org/pub/rocky/10/isos/${arch}/${base}.CHECKSUM"
+  expected="$(published_sha256 "${checksum_url}")"
+  actual="$(sha256_file "${path}")"
+  if [ "${actual}" != "${expected}" ]; then
+    echo "Installer ISO does not match Rocky's published SHA-256: ${path}" >&2
+    exit 1
+  fi
+  echo "Verified existing installer ISO: ${path}"
+}
+
 download() {
   local arch="$1"
   local image_type="${2:-minimal}"
@@ -92,7 +131,6 @@ download() {
   local checksum_url="${url}.CHECKSUM"
   local output="${repo_root}/${base}"
   local partial="${output}.partial"
-  local checksum_file="${partial}.CHECKSUM"
   local expected=""
   local actual=""
 
@@ -110,15 +148,7 @@ download() {
   }
   local display_type="Minimal"
   [ "${image_type}" = dvd ] && display_type="DVD"
-  trap 'rm -f "${checksum_file}"' EXIT
-  curl --fail --location --silent --show-error --output "${checksum_file}" "${checksum_url}"
-  # Rocky publishes BSD-style checksum files:
-  # SHA256 (Rocky-10.2-x86_64-minimal.iso) = <digest>
-  expected="$(awk '$1 == "SHA256" && $3 == "=" { print tolower($4); exit }' "${checksum_file}" | tr -d '\r\n')"
-  if [[ ! "${expected}" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "Official checksum file did not contain a SHA-256 digest." >&2
-    exit 1
-  fi
+  expected="$(published_sha256 "${checksum_url}")"
 
   if [ -f "${output}" ]; then
     actual="$(sha256_file "${output}")"
@@ -126,8 +156,6 @@ download() {
       echo "Existing installer ISO does not match Rocky's published SHA-256: ${output}" >&2
       exit 1
     fi
-    rm -f "${checksum_file}"
-    trap - EXIT
     echo "Reusing verified installer ISO: ${output}"
     return 0
   fi
@@ -136,8 +164,6 @@ download() {
     actual="$(sha256_file "${partial}")"
     if [ "${actual}" = "${expected}" ]; then
       mv "${partial}" "${output}"
-      rm -f "${checksum_file}"
-      trap - EXIT
       echo "Reusing completed download and verified installer ISO: ${output}"
       return 0
     fi
@@ -153,14 +179,13 @@ download() {
     exit 1
   fi
   mv "${partial}" "${output}"
-  rm -f "${checksum_file}"
-  trap - EXIT
   echo "Verified installer ISO: ${output}"
 }
 
 case "${1:-list}" in
   list) list ;;
   adopt) adopt "${2:?usage: manage-rocky-installer-iso.sh adopt <path>}" ;;
+  verify) verify "${2:?usage: manage-rocky-installer-iso.sh verify <path>}" ;;
   download) download "${2:?usage: manage-rocky-installer-iso.sh download <x86_64|aarch64> [minimal|dvd] [release]}" "${3:-minimal}" "${4:-${release}}" ;;
-  *) echo "usage: manage-rocky-installer-iso.sh [list|adopt <path>|download <x86_64|aarch64> [minimal|dvd] [release]]" >&2; exit 2 ;;
+  *) echo "usage: manage-rocky-installer-iso.sh [list|adopt <path>|verify <path>|download <x86_64|aarch64> [minimal|dvd] [release]]" >&2; exit 2 ;;
 esac

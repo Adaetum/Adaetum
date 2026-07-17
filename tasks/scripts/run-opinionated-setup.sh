@@ -10,6 +10,7 @@ cd "${repo_root}"
 # shellcheck source=tasks/scripts/gum-ui.sh
 . "${repo_root}/tasks/scripts/gum-ui.sh"
 dry_run="${ADAETUM_INIT_DRY_RUN:-0}"
+clean_run="${ADAETUM_INIT_CLEAN:-0}"
 first_run="${ADAETUM_FIRST_RUN:-0}"
 platform_profile="${ADAETUM_PLATFORM_PROFILE:-${repo_root}/platform.yaml}"
 supports_color=0
@@ -200,6 +201,9 @@ prepare_tailscale_oauth_client() {
 existing_env_value() {
   local file="$1"
   local key="$2"
+  if [ "${clean_run}" = 1 ]; then
+    return 0
+  fi
   if [ -f "${file}" ]; then
     awk -F= -v k="${key}" '$1==k {print substr($0, index($0, "=")+1); exit}' "${file}" | tr -d '\r\n'
   fi
@@ -506,6 +510,10 @@ fi
 banner
 
 if [ "${first_run}" = "1" ]; then
+  if [ "${clean_run}" = 1 ]; then
+    adaetum_ui_panel "Clean initialization"
+    adaetum_ui_message "${ADAETUM_UI_MUTED}" "Saved Adaetum provider credentials and prior runtime values will be ignored. Newly validated values will replace them. The GitHub login, private recovery repository, and verified installer media remain reusable."
+  fi
   adaetum_first_run_prepare
   # Dry-run first-run preparation creates a temporary reviewed profile. Resolve
   # the profile only after that shared preparation has completed so every later
@@ -1104,6 +1112,7 @@ EOF
     GITHUB_SYNC=1 \
     GITHUB_SYNC_REQUIRED=1 \
     GITHUB_ENVIRONMENT="${GITHUB_ENVIRONMENT:-Prod}" \
+    ADAETUM_IGNORE_EXISTING_ENV="${clean_run}" \
     bash ./tasks/scripts/generate-env-files.sh .env "${tmp_existing}" >>"${setup_detail_log}" 2>&1; then
     die "Environment rendering failed. Details: ${setup_detail_log}"
   fi
@@ -1204,7 +1213,7 @@ if step_enabled "3"; then
     wizard_rc=$?
   fi
   if [ "${wizard_rc}" -ne 0 ]; then
-    die "Setup failed: bootstrap automation flow exited with status ${wizard_rc}."
+    die "Setup failed: bootstrap automation flow exited with status ${wizard_rc}. Details: ${setup_detail_log}"
   fi
   require_local_root_iso_for_golden_upload
   if [ "${dry_run}" = "1" ]; then

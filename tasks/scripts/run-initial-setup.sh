@@ -647,11 +647,20 @@ upload_golden_isos() {
   file_name=""
   matched=0
 
+  if command -v uv >/dev/null 2>&1; then
+    uv run --with jinja2 python ./tasks/scripts/compile-kickstarts.py --sync --self-test >/dev/null
+  elif python3 -c 'import jinja2' >/dev/null 2>&1; then
+    python3 ./tasks/scripts/compile-kickstarts.py --sync --self-test >/dev/null
+  else
+    echo "Kickstart compilation requires uv or the Python jinja2 package."
+    return 1
+  fi
+
   while IFS= read -r line; do
     [ -n "${line}" ] || continue
     golden_keys+=("${line}")
   done <<EOF
-$(python3 ./tasks/scripts/compile-kickstarts.py >/dev/null 2>&1 || true; awk '/^# GOLDEN_ISO_KEY=/{sub("^# GOLDEN_ISO_KEY=",""); print}' dist/ks-templates/*.ks 2>/dev/null | sed '/^$/d' | sort -u)
+$(awk '/^# GOLDEN_ISO_KEY=/{sub("^# GOLDEN_ISO_KEY=",""); print}' dist/ks-templates/*.ks 2>/dev/null | sed '/^$/d' | sort -u)
 EOF
 
   while IFS= read -r line; do
@@ -671,20 +680,25 @@ EOF
     file_name="$(basename "${iso_path}")"
     matched=0
 
-    for key in "${golden_keys[@]}"; do
-      if [ "$(basename "${key}")" != "${file_name}" ]; then
-        continue
-      fi
-      matched=1
-      if upload_iso_if_needed "${iso_path}" "${key}"; then
-        case "${UPLOAD_RESULT}" in
-          skipped) skipped=$((skipped + 1)) ;;
-          uploaded) uploaded=$((uploaded + 1)) ;;
-        esac
-      else
-        missing=$((missing + 1))
-      fi
-    done
+    # Bash 3.2 on macOS treats expansion of an empty array as an unbound
+    # variable under `set -u`. With no rendered GOLDEN_ISO_KEY entries, use the
+    # stable filename-derived key below instead of expanding the empty array.
+    if [ "${#golden_keys[@]}" -gt 0 ]; then
+      for key in "${golden_keys[@]}"; do
+        if [ "$(basename "${key}")" != "${file_name}" ]; then
+          continue
+        fi
+        matched=1
+        if upload_iso_if_needed "${iso_path}" "${key}"; then
+          case "${UPLOAD_RESULT}" in
+            skipped) skipped=$((skipped + 1)) ;;
+            uploaded) uploaded=$((uploaded + 1)) ;;
+          esac
+        else
+          missing=$((missing + 1))
+        fi
+      done
+    fi
 
     if [ "${matched}" -eq 0 ]; then
       key="$(default_iso_key_for_file "${file_name}")"

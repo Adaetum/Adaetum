@@ -122,10 +122,9 @@ first_run_ensure_github_login() {
 
 first_run_ensure_github_actions() {
   local origin="" repository="" workflow_count="" attempt=1 is_fork="false"
+  local default_branch="" workflow_file_count="" actions_enabled="" current_branch=""
   origin="$(adaetum_origin_url || true)"
-  repository="$(adaetum_normalize_github_url "${origin}")"
-  repository="${repository#https://github.com/}"
-  repository="${repository%.git}"
+  repository="$(adaetum_github_repository_from_url "${origin}" || true)"
   [ -n "${repository}" ] || die "Unable to determine the recovery repository for GitHub Actions setup."
 
   if [ "${dry_run}" = 1 ]; then
@@ -133,7 +132,9 @@ first_run_ensure_github_actions() {
     return 0
   fi
 
-  while [ "${attempt}" -le 10 ]; do
+  first_run_heading "GitHub workflow readiness"
+  first_run_status info "Waiting for GitHub to register workflows in ${repository}..."
+  while [ "${attempt}" -le 5 ]; do
     workflow_count="$(gh api "repos/${repository}/actions/workflows" --jq '.total_count // 0' 2>/dev/null || printf '0')"
     if [ "${workflow_count}" -gt 0 ] 2>/dev/null; then
       first_run_status success "GitHub Actions is enabled with ${workflow_count} registered workflow(s)."
@@ -143,6 +144,34 @@ first_run_ensure_github_actions() {
     attempt=$((attempt + 1))
   done
 
+  default_branch="$(gh api "repos/${repository}" --jq '.default_branch // empty' 2>/dev/null || true)"
+  actions_enabled="$(gh api "repos/${repository}/actions/permissions" --jq '.enabled // false' 2>/dev/null || printf 'false')"
+  workflow_file_count="$(gh api "repos/${repository}/contents/.github/workflows?ref=${default_branch}" --jq 'length' 2>/dev/null || printf '0')"
+
+  if [ "${default_branch}" != main ] && [ "${actions_enabled}" = true ]; then
+    current_branch="$(git branch --show-current)"
+    first_run_heading "Initialize the workflow branch"
+    first_run_message "${ADAETUM_UI_MUTED}" "Adaetum's workflow triggers use main, but this new repository currently defaults to ${default_branch}. Adaetum will publish the current commit to main and make main the repository's workflow branch. Your ${current_branch} development branch remains unchanged and available."
+    adaetum_ui_confirm "Create and select the main workflow branch now?" y || exit 0
+    if ! gh api "repos/${repository}/branches/main" >/dev/null 2>&1; then
+      gum spin --title "Publishing the main workflow branch..." -- git push origin HEAD:refs/heads/main
+    fi
+    gum spin --title "Selecting main as the default workflow branch..." -- gh repo edit "${repository}" --default-branch main
+    first_run_status info "Main is ready. Waiting for GitHub workflow registration..."
+    attempt=1
+    while [ "${attempt}" -le 10 ]; do
+      workflow_count="$(gh api "repos/${repository}/actions/workflows" --jq '.total_count // 0' 2>/dev/null || printf '0')"
+      if [ "${workflow_count}" -gt 0 ] 2>/dev/null; then
+        first_run_status success "GitHub Actions is enabled with ${workflow_count} registered workflow(s)."
+        return 0
+      fi
+      sleep 2
+      attempt=$((attempt + 1))
+    done
+    default_branch="main"
+    workflow_file_count="$(gh api "repos/${repository}/contents/.github/workflows?ref=main" --jq 'length' 2>/dev/null || printf '0')"
+  fi
+
   is_fork="$(gh api "repos/${repository}" --jq '.fork // false' 2>/dev/null || printf 'false')"
   if [ "${is_fork}" = true ]; then
     first_run_heading "Enable GitHub Actions"
@@ -150,7 +179,13 @@ first_run_ensure_github_actions() {
     adaetum_open_url "https://github.com/${repository}/actions" || true
     die "GitHub Actions requires one-time consent on the current public fork."
   fi
-  die "GitHub has not registered the workflows in ${repository}. Confirm the current branch is the repository's default branch, then rerun task init."
+  if [ "${actions_enabled}" != true ]; then
+    die "GitHub Actions is disabled for ${repository}. Enable it in Settings → Actions → General, then rerun task init."
+  fi
+  if [ "${workflow_file_count}" -eq 0 ] 2>/dev/null; then
+    die "No workflow files are visible on ${repository}'s default branch (${default_branch})."
+  fi
+  die "GitHub can see ${workflow_file_count} workflow file(s) on ${default_branch}, but has not indexed them. Check the repository's Actions tab or GitHub status, then rerun task init."
 }
 
 first_run_set_recovery_origin() {
@@ -249,14 +284,12 @@ first_run_find_available_recovery_destination() {
 
 first_run_configure_recovery_repository() {
   local origin="$(adaetum_origin_url || true)" login="" repository="" recovery_url=""
-  local visibility="" can_admin="" is_fork="" owner="" name="" suggested="" current_repository="" repository_size="" created=0
+  local visibility="" can_admin="" is_fork="" owner="" name="" suggested="" current_repository="" repository_size="" created=0 current_branch=""
 
   first_run_ensure_github_login
   login="${first_run_github_login}"
   if [ -n "${origin}" ] && ! adaetum_origin_is_upstream "${origin}"; then
-    current_repository="$(adaetum_normalize_github_url "${origin}")"
-    current_repository="${current_repository#https://github.com/}"
-    current_repository="${current_repository%.git}"
+    current_repository="$(adaetum_github_repository_from_url "${origin}" || true)"
     if [ "${dry_run}" != 1 ]; then
       visibility="$(gh api "repos/${current_repository}" --jq '.visibility // empty' 2>/dev/null || true)"
       can_admin="$(gh api "repos/${current_repository}" --jq '.permissions.admin // false' 2>/dev/null || true)"
@@ -323,9 +356,15 @@ first_run_configure_recovery_repository() {
     fi
     first_run_move_resume_credentials "${origin}" "${recovery_url}"
     first_run_set_recovery_origin "${recovery_url}"
-    gum spin --title "Publishing the current Adaetum branch..." -- git push --set-upstream origin HEAD
+    current_branch="$(git branch --show-current)"
     if [ "${created}" = 1 ]; then
-      gh repo edit "${repository}" --default-branch "$(git branch --show-current)"
+      gum spin --title "Publishing the main workflow branch..." -- git push origin HEAD:refs/heads/main
+      gum spin --title "Selecting main as the default workflow branch..." -- gh repo edit "${repository}" --default-branch main
+    fi
+    if [ "${current_branch}" = main ]; then
+      git branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
+    else
+      gum spin --title "Publishing the current development branch..." -- git push --set-upstream origin HEAD
     fi
     break
   done
@@ -375,7 +414,7 @@ first_run_select_cloudflare_domain() {
   if [ "${dry_run}" != 1 ]; then
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
-    if [ -n "${credential_backend}" ]; then
+    if [ "${clean_run}" != 1 ] && [ -n "${credential_backend}" ]; then
       stored_token="$(bash "${credential_store}" get "${credential_namespace}" cloudflare-api-token 2>/dev/null || true)"
     fi
     if [ -n "${stored_token}" ]; then
@@ -407,9 +446,9 @@ first_run_select_cloudflare_domain() {
       first_run_status info "Validating Cloudflare access and loading each available zone with its owning account..."
       zone_rows="$(printf '%s' "${first_run_cloudflare_token}" | python3 ./tasks/scripts/list-cloudflare-zones.py --token-stdin --details)" || die "Unable to list Cloudflare zones and accounts."
       first_run_status success "Cloudflare access validated."
-      if [ -n "${credential_backend}" ] && adaetum_ui_confirm "Save this token in ${credential_backend} so a cancelled setup can resume?" y; then
+      if [ -n "${credential_backend}" ] && { [ "${clean_run}" = 1 ] || adaetum_ui_confirm "Save this token in ${credential_backend} so a cancelled setup can resume?" y; }; then
         printf '%s\n' "${first_run_cloudflare_token}" | bash "${credential_store}" set "${credential_namespace}" cloudflare-api-token
-        first_run_status success "Cloudflare setup token saved in ${credential_backend}; no plaintext cache was created."
+        first_run_status success "Cloudflare setup token saved in ${credential_backend}; any previous value was replaced and no plaintext cache was created."
       fi
     fi
   else
@@ -511,7 +550,7 @@ first_run_select_tailscale_domain() {
   if [ "${dry_run}" != 1 ]; then
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
-    if [ -n "${credential_backend}" ]; then
+    if [ "${clean_run}" != 1 ] && [ -n "${credential_backend}" ]; then
       stored_token="$(bash "${credential_store}" get "${credential_namespace}" tailscale-api-token 2>/dev/null || true)"
     fi
     if [ -n "${stored_token}" ]; then
@@ -534,9 +573,9 @@ first_run_select_tailscale_domain() {
       first_run_status info "Validating Tailscale access and loading available tailnets..."
       tailnets="$(printf '%s' "${first_run_tailscale_token}" | python3 ./tasks/scripts/list-tailscale-tailnets.py --token-stdin)" || die "Unable to validate Tailscale access. Check the token and required permissions shown above."
       first_run_status success "Tailscale access validated."
-      if [ -n "${credential_backend}" ] && adaetum_ui_confirm "Save this one-day token in ${credential_backend} so a cancelled setup can resume?" y; then
+      if [ -n "${credential_backend}" ] && { [ "${clean_run}" = 1 ] || adaetum_ui_confirm "Save this one-day token in ${credential_backend} so a cancelled setup can resume?" y; }; then
         printf '%s\n' "${first_run_tailscale_token}" | bash "${credential_store}" set "${credential_namespace}" tailscale-api-token
-        first_run_status success "Tailscale setup token saved in ${credential_backend}; no plaintext cache was created."
+        first_run_status success "Tailscale setup token saved in ${credential_backend}; any previous value was replaced and no plaintext cache was created."
       fi
     fi
   else
@@ -598,7 +637,7 @@ first_run_capture_tailscale_oauth() {
   if [ "${dry_run}" != 1 ]; then
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
-    if [ -n "${credential_backend}" ]; then
+    if [ "${clean_run}" != 1 ] && [ -n "${credential_backend}" ]; then
       stored_id="$(bash "${credential_store}" get "${credential_namespace}" tailscale-oauth-client-id 2>/dev/null || true)"
       stored_secret="$(bash "${credential_store}" get "${credential_namespace}" tailscale-oauth-client-secret 2>/dev/null || true)"
     fi
@@ -629,10 +668,10 @@ first_run_capture_tailscale_oauth() {
       done <<< "${oauth_output}"
       [ -n "${first_run_tailscale_oauth_client_id:-}" ] && [ -n "${first_run_tailscale_oauth_client_secret:-}" ] || die "Tailscale created the OAuth client without returning both credentials."
       first_run_status success "Tailscale OAuth client created."
-      if [ -n "${credential_backend}" ] && adaetum_ui_confirm "Save this OAuth client in ${credential_backend} so a cancelled setup can resume?" y; then
+      if [ -n "${credential_backend}" ] && { [ "${clean_run}" = 1 ] || adaetum_ui_confirm "Save this OAuth client in ${credential_backend} so a cancelled setup can resume?" y; }; then
         printf '%s\n' "${first_run_tailscale_oauth_client_id}" | bash "${credential_store}" set "${credential_namespace}" tailscale-oauth-client-id
         printf '%s\n' "${first_run_tailscale_oauth_client_secret}" | bash "${credential_store}" set "${credential_namespace}" tailscale-oauth-client-secret
-        first_run_status success "Tailscale OAuth client saved in ${credential_backend}; no plaintext cache was created."
+        first_run_status success "Tailscale OAuth client saved in ${credential_backend}; any previous values were replaced and no plaintext cache was created."
       fi
     fi
   else
@@ -714,7 +753,7 @@ first_run_installer_media() {
   local helper="${repo_root}/tasks/scripts/manage-rocky-installer-iso.sh" report path version architecture image_type size selected preferred_arch=x86_64
   local other_arch=aarch64 release_choice="" selected_release=10.2 type_choice="" selected_type=minimal arch_choice="" selected_arch="" download_size=""
   first_run_heading "Rocky Linux installer media"
-  report="$(${helper} list 2>/dev/null || true)"
+  report="$(bash "${helper}" list 2>/dev/null || true)"
   if [ -n "${report}" ]; then
     local media_options=() media_paths=() media_label="" media_index=""
     while IFS=$'\t' read -r path version architecture image_type size; do
@@ -722,18 +761,30 @@ first_run_installer_media() {
       media_options+=("${media_label}")
       media_paths+=("${path}")
     done <<< "${report}"
-    media_label="$(first_run_choose "Choose discovered Rocky Linux installer media" "${media_options[@]}")"
-    for media_index in "${!media_options[@]}"; do
-      if [ "${media_options[${media_index}]}" = "${media_label}" ]; then
-        selected="${media_paths[${media_index}]}"
-        break
-      fi
-    done
+    if [ "${#media_options[@]}" -eq 1 ]; then
+      selected="${media_paths[0]}"
+      first_run_status info "Found supported installer media: ${media_options[0]}"
+    else
+      media_label="$(first_run_choose "Choose discovered Rocky Linux installer media" "${media_options[@]}")"
+      for media_index in "${!media_options[@]}"; do
+        if [ "${media_options[${media_index}]}" = "${media_label}" ]; then
+          selected="${media_paths[${media_index}]}"
+          break
+        fi
+      done
+    fi
     [ -n "${selected}" ] || die "Rocky installer selection did not resolve a local ISO."
+    if [ "${dry_run}" = 1 ]; then
+      export ADAETUM_INSTALLER_MEDIA_READY=1
+      first_run_status success "Dry run would reuse the discovered installer ISO without downloading another copy."
+    else
+      first_run_status info "Verifying the existing ISO against Rocky's published SHA-256..."
+      bash "${helper}" verify "${selected}" >/dev/null || die "The discovered Rocky installer ISO failed verification: ${selected}"
+      first_run_status success "Existing Rocky installer ISO verified. No download is needed."
+    fi
     if [ "$(dirname "${selected}")" != "${repo_root}" ]; then
       adaetum_ui_confirm "Use this installer ISO and copy it into the Adaetum checkout?" y || exit 1
       if [ "${dry_run}" = 1 ]; then
-        export ADAETUM_INSTALLER_MEDIA_READY=1
         first_run_status info "Dry run would copy $(basename "${selected}") into the checkout."
       else
         bash "${helper}" adopt "${selected}"

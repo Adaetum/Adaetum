@@ -54,6 +54,7 @@ tasks:
         fi
         printf '%sSupported tasks:%s\n' "${c_title}" "${c_reset}"
         printf '  %stask init%s          Install setup tools and launch the guided first-run walkthrough\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:clean%s    Run first-run setup with new provider and runtime values\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun%s   Walk through first-run setup without changing local or external state\n' "${c_task}" "${c_reset}"
         printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
         printf '  %stask initialize%s    Run or rerun the opinionated setup workflow\n' "${c_task}" "${c_reset}"
@@ -94,6 +95,15 @@ tasks:
     desc: Rehearse first-run setup with validations and simulated provider actions only
     cmds:
       - task: env:init:dryrun
+
+  init:clean:
+    desc: Run first-run setup while replacing saved provider and runtime values
+    cmds:
+      - task: hooks:ensure
+      - task: env:install:prerequisites
+      - task: env:install:gum
+      - task: env:install:github-cli
+      - task: env:init:clean
 
   iso:download:
     desc: Download and verify Rocky installer media (set ROCKY_ARCH, ROCKY_IMAGE_TYPE, ROCKY_RELEASE)

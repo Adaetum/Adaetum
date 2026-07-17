@@ -30,6 +30,8 @@ WINDOWS_CREDENTIAL_STORE = ROOT / "tasks" / "scripts" / "setup-credential-store-
 CLEAN_PUBLIC_CONFIG = ROOT / "tasks" / "scripts" / "clean-public-safe-config.py"
 WORKER = ROOT / ".github" / "workflows" / "ks-worker.yml"
 ROCKY_HEADER = ROOT / "ks-src" / "fragments" / "installers" / "kickstart" / "rocky10" / "00-header.ksfrag"
+TASKFILE = ROOT / "Taskfile.yml"
+ENV_TASKS = ROOT / "tasks" / "env.yml"
 
 
 def fail(message: str) -> None:
@@ -49,6 +51,8 @@ def main() -> int:
     clean_public_config = CLEAN_PUBLIC_CONFIG.read_text(encoding="utf-8")
     worker = WORKER.read_text(encoding="utf-8")
     rocky_header = ROCKY_HEADER.read_text(encoding="utf-8")
+    taskfile = TASKFILE.read_text(encoding="utf-8")
+    env_tasks = ENV_TASKS.read_text(encoding="utf-8")
     if "ADAETUM_FIRST_RUN=1" not in wizard:
         fail("first-run launcher does not enter the shared setup program")
     if "I have updated platform.yaml" in first_run or "placed the Rocky Linux" in first_run:
@@ -289,8 +293,22 @@ def main() -> int:
         fail("first-run exposes detailed bootstrap command output by default")
     if ".adaetum/logs/task-init-details.log" not in setup or "dist/logs" in setup:
         fail("first-run detail logs are stored under disposable build output")
+    if 'if [ "${#golden_keys[@]}" -gt 0 ]; then' not in initial_setup:
+        fail("golden ISO upload expands an empty array under macOS Bash 3.2 nounset")
+    if "uv run --with jinja2 python ./tasks/scripts/compile-kickstarts.py --sync --self-test" not in initial_setup:
+        fail("golden ISO upload bypasses the managed kickstart compiler dependency")
+    if "compile-kickstarts.py >/dev/null 2>&1 || true" in initial_setup:
+        fail("golden ISO upload silently ignores kickstart compiler failures")
+    if "Details: ${setup_detail_log}" not in setup:
+        fail("bootstrap failures omit the retained detail-log path")
     if "first_run_ensure_github_actions" not in first_run or "GitHub Actions registration simulated for the private recovery repository" not in first_run:
         fail("private recovery repositories do not validate GitHub Actions registration")
+    if "adaetum_github_repository_from_url" not in first_run:
+        fail("GitHub API calls can retain the github.com URL prefix")
+    if "Initialize the workflow branch" not in first_run or "HEAD:refs/heads/main" not in first_run:
+        fail("new private repositories do not establish the main workflow branch")
+    if '--default-branch main' not in first_run:
+        fail("new private repositories can use an incompatible development branch as their default")
     secret_sync_block = initial_setup.split("done <<'EOF'", 1)[1].split("EOF", 1)[0]
     if "GITHUB_SYNC_TOKEN" in secret_sync_block:
         fail("bootstrap tries to create a GitHub secret with the reserved GITHUB_ prefix")
@@ -337,8 +355,21 @@ def main() -> int:
             fail(f"shared console UI did not render {expected!r}")
     if "${HOME}/Downloads" not in iso or "adopt)" not in iso:
         fail("installer discovery/adoption contract is incomplete")
+    if 'report="$(bash "${helper}" list' not in first_run:
+        fail("installer discovery depends on an executable helper file mode")
+    if 'if [ "${#media_options[@]}" -eq 1 ]; then' not in first_run or 'verify "${selected}"' not in first_run:
+        fail("one discovered installer ISO is not automatically verified and reused")
+    if "init:clean:" not in taskfile or "ADAETUM_INIT_CLEAN" not in env_tasks:
+        fail("fresh-input first-run mode is not exposed as task init:clean")
+    if '[ "${clean_run}" != 1 ]' not in first_run or "ADAETUM_IGNORE_EXISTING_ENV" not in setup:
+        fail("clean initialization can reuse saved provider or runtime values")
+    if "ADAETUM_IGNORE_EXISTING_ENV" not in env_renderer:
+        fail("environment rendering can fall back to the previous .env during clean initialization")
     if 'const allowed = [".iso",' not in worker or "application/x-iso9660-image" not in worker:
         fail("bootstrap delivery worker does not serve ISO artifacts")
+    for secret_name in ("R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"):
+        if f"{secret_name}: ${{{{ secrets.{secret_name} }}}}" not in worker:
+            fail(f"KS Worker cannot fall back to direct R2 upload without {secret_name}")
     if "GOLDEN_ISO_KEY=rocky10/Rocky-10.2-aarch64-minimal.iso" not in rocky_header:
         fail("kickstart golden ISO key does not match the supported Rocky release")
 
