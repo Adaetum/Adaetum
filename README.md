@@ -66,10 +66,10 @@ After one successful interactive setup, the same machine can replay the saved
 choices without questions:
 
 ```bash
-task init:auto
+task init:silent
 ```
 
-Automatic replay validates and reuses the private recovery repository,
+Silent replay validates and reuses the private recovery repository,
 `platform.yaml`, OS-protected provider credentials, generated runtime values,
 and verified installer media. It fails closed when required saved state is
 missing or expired; it never creates a plaintext answer file or bypasses

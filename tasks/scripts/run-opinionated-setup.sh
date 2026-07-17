@@ -11,7 +11,7 @@ cd "${repo_root}"
 . "${repo_root}/tasks/scripts/gum-ui.sh"
 dry_run="${ADAETUM_INIT_DRY_RUN:-0}"
 clean_run="${ADAETUM_INIT_CLEAN:-0}"
-auto_run="${ADAETUM_INIT_AUTO:-0}"
+silent_run="${ADAETUM_INIT_SILENT:-0}"
 first_run="${ADAETUM_FIRST_RUN:-0}"
 platform_profile="${ADAETUM_PLATFORM_PROFILE:-${repo_root}/platform.yaml}"
 supports_color=0

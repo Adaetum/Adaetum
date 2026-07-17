@@ -378,16 +378,22 @@ def main() -> int:
         fail("one discovered installer ISO is not automatically verified and reused")
     if "init:clean:" not in taskfile or "ADAETUM_INIT_CLEAN" not in env_tasks:
         fail("fresh-input first-run mode is not exposed as task init:clean")
-    if "init:auto:" not in taskfile or "ADAETUM_INIT_AUTO" not in env_tasks:
-        fail("saved-state first-run replay is not exposed as task init:auto")
-    if "adaetum_ui_auto_enabled" not in gum_ui or "Automatic replay" not in gum_ui:
+    if "init:silent:" not in taskfile or "ADAETUM_INIT_SILENT" not in env_tasks:
+        fail("saved-state first-run replay is not exposed as task init:silent")
+    if "adaetum_ui_silent_enabled" not in gum_ui or "Silent replay" not in gum_ui:
         fail("first-run questions cannot replay saved/default decisions")
-    if "Automatic replay could not load a valid saved Cloudflare token" not in first_run:
-        fail("automatic replay can fall through to interactive Cloudflare credential capture")
+    if "Silent replay could not load a valid saved Cloudflare token" not in first_run:
+        fail("silent replay can fall through to interactive Cloudflare credential capture")
+    if "Reusing saved Cloudflare zone" not in first_run or "from platform.yaml" not in first_run:
+        fail("normal first-run reruns forget the saved Cloudflare zone")
+    if "Reusing saved Tailscale DNS name" not in first_run:
+        fail("normal first-run reruns forget the saved Tailscale DNS name")
+    if "Tailscale returned no discoverable device DNS names; reusing saved DNS name" not in first_run:
+        fail("an empty Tailscale device list discards the saved DNS name")
     if "durable saved OAuth client replaces the expired temporary Tailscale setup token" not in first_run:
         fail("automatic replay still depends on the one-day Tailscale setup token")
-    if "Automatic saved-state replay" not in first_run or "No plaintext answer file is used" not in first_run:
-        fail("automatic replay does not explain its saved-state ownership boundary")
+    if "Silent saved-state replay" not in first_run or "No plaintext answer file is used" not in first_run:
+        fail("silent replay does not explain its saved-state ownership boundary")
     if '[ "${clean_run}" != 1 ]' not in first_run or "ADAETUM_IGNORE_EXISTING_ENV" not in setup:
         fail("clean initialization can reuse saved provider or runtime values")
     if "ADAETUM_IGNORE_EXISTING_ENV" not in env_renderer:

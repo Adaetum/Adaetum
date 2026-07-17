@@ -153,7 +153,7 @@ provider values.
 
 ### Replay saved setup state
 
-After completing `task init` interactively once, use `task init:auto` for an
+After completing `task init` interactively once, use `task init:silent` for an
 unattended rerun on the same workstation. This is the supported path for an
 automation agent iterating on setup: normal default-Yes actions are accepted,
 while the selected recovery repository, public profile, provider credentials,
@@ -164,7 +164,7 @@ remains in `platform.yaml`; Git owns the recovery destination; Cloudflare and
 Tailscale credentials remain in the OS credential store; `.env` remains a
 gitignored runtime output; and the verified local ISO records installer media
 selection. If any required value is missing, expired, or no longer authorized,
-automatic replay stops and asks you to run `task init` interactively rather
+silent replay stops and asks you to run `task init` interactively rather
 than opening a browser or guessing a replacement.
 
 ### Terminal experience

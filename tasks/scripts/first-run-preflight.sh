@@ -108,7 +108,7 @@ first_run_ensure_github_login() {
   fi
 
   if ! gh auth token --hostname github.com >/dev/null 2>&1; then
-    [ "${auto_run}" != 1 ] || die "Automatic replay requires an existing GitHub CLI login. Run task init interactively once."
+    [ "${silent_run}" != 1 ] || die "Silent replay requires an existing GitHub CLI login. Run task init interactively once."
     adaetum_ui_confirm "Sign in to GitHub in your browser now?" y || exit 0
     gh auth login --hostname github.com --web --git-protocol https --scopes repo,workflow
     authentication_action="signed in"
@@ -120,7 +120,7 @@ first_run_ensure_github_login() {
     validation_rc=$?
   fi
   if [ "${validation_rc}" = 2 ]; then
-    [ "${auto_run}" != 1 ] || die "The saved GitHub credential was rejected. Run task init interactively to refresh it."
+    [ "${silent_run}" != 1 ] || die "The saved GitHub credential was rejected. Run task init interactively to refresh it."
     adaetum_ui_confirm "The stored GitHub credential was rejected. Refresh it in your browser now?" y || exit 0
     gh auth refresh --hostname github.com --scopes repo,workflow
     authentication_action="refreshed"
@@ -384,9 +384,9 @@ first_run_configure_recovery_repository() {
   else
     first_run_find_preferred_recovery_destination "${login}"
     suggested="${first_run_available_recovery_destination}"
-    if [ "${auto_run}" = 1 ]; then
+    if [ "${silent_run}" = 1 ]; then
       first_run_lookup_repository "${suggested}"
-      [ "${first_run_repository_state}" = exists ] || die "Automatic replay requires an existing private recovery repository. Run task init interactively once."
+      [ "${first_run_repository_state}" = exists ] || die "Silent replay requires an existing private recovery repository. Run task init interactively once."
     fi
   fi
 
@@ -493,7 +493,7 @@ first_run_select_cloudflare_domain() {
       fi
     fi
     if [ -z "${first_run_cloudflare_token:-}" ]; then
-      [ "${auto_run}" != 1 ] || die "Automatic replay could not load a valid saved Cloudflare token. Run task init interactively to replace it."
+      [ "${silent_run}" != 1 ] || die "Silent replay could not load a valid saved Cloudflare token. Run task init interactively to replace it."
       if adaetum_ui_confirm "Open Cloudflare's token page now?" y; then
         adaetum_open_url "https://dash.cloudflare.com/profile/api-tokens" || first_run_message 11 "Open Cloudflare My Profile → API Tokens, then follow the Account API Tokens link for the target account."
       fi
@@ -535,16 +535,22 @@ first_run_select_cloudflare_domain() {
   [ "${#zone_options[@]}" -gt 0 ] || die "Cloudflare returned no active zones with an owning account."
 
   selected_label=""
-  if [ "${auto_run}" = 1 ] && [ "${dry_run}" != 1 ] && [ -n "${first_run_domain:-}" ]; then
+  if [ "${clean_run}" != 1 ] && [ "${dry_run}" != 1 ] && [ -n "${first_run_domain:-}" ]; then
     for index in "${!zone_options[@]}"; do
       if [ "${zone_names[${index}]}" = "${first_run_domain}" ]; then
         selected_label="${zone_options[${index}]}"
-        first_run_status info "Automatic replay selected saved Cloudflare zone ${first_run_domain}."
+        first_run_status success "Reusing saved Cloudflare zone ${first_run_domain} from platform.yaml."
         break
       fi
     done
-    [ -n "${selected_label}" ] || die "Saved Cloudflare zone ${first_run_domain} is not available to the saved token. Run task init interactively to select another zone."
-  else
+    if [ -z "${selected_label}" ]; then
+      if [ "${silent_run}" = 1 ]; then
+        die "Saved Cloudflare zone ${first_run_domain} is not available to the saved token. Run task init interactively to select another zone."
+      fi
+      first_run_status warning "Saved Cloudflare zone ${first_run_domain} is no longer available to this token; choose another zone."
+    fi
+  fi
+  if [ -z "${selected_label}" ]; then
     selected_label="$(first_run_choose "Choose the public DNS zone and owning Cloudflare account" "${zone_options[@]}")"
   fi
   for index in "${!zone_options[@]}"; do
@@ -563,7 +569,7 @@ first_run_select_cloudflare_domain() {
       --account-id "${first_run_cloudflare_account_id}" \
       --zone-domain "${first_run_domain}" \
       --validate-access-only >/dev/null 2>&1; then
-    [ "${auto_run}" != 1 ] || die "The saved Cloudflare token no longer has the required access. Run task init interactively to replace it."
+    [ "${silent_run}" != 1 ] || die "The saved Cloudflare token no longer has the required access. Run task init interactively to replace it."
     local replacement_token="" replacement_rows="" replacement_zone="" replacement_account_id="" replacement_account_name=""
     local replacement_has_zone=0
     first_run_heading "Cloudflare permission required"
@@ -637,7 +643,7 @@ first_run_load_saved_tailscale_oauth() {
 
 first_run_select_tailscale_domain() {
   local tailnets="" credential_store="${repo_root}/tasks/scripts/setup-credential-store.sh"
-  local credential_namespace="" credential_backend="" stored_token="" tailnet_input=""
+  local credential_namespace="" credential_backend="" stored_token="" tailnet_input="" tailnet_candidate="" saved_tailnet_available=0
   first_run_heading "Tailscale"
   first_run_message "${ADAETUM_UI_MUTED}" "Adaetum uses Tailscale for node enrollment, MagicDNS discovery, and private service access."
   first_run_heading "Temporary setup token"
@@ -675,7 +681,7 @@ first_run_select_tailscale_domain() {
         tailnets="${first_run_overlay_domain}"
         first_run_status success "The durable saved OAuth client replaces the expired temporary Tailscale setup token for this rerun."
       else
-        [ "${auto_run}" != 1 ] || die "Automatic replay could not load durable Tailscale OAuth credentials and a saved tailnet. Run task init interactively once."
+        [ "${silent_run}" != 1 ] || die "Silent replay could not load durable Tailscale OAuth credentials and a saved tailnet. Run task init interactively once."
         if adaetum_ui_confirm "Open Tailscale's access-token page now?" y; then
           adaetum_open_url "https://login.tailscale.com/admin/settings/keys" || first_run_message 11 "Open Tailscale's API key page in your browser."
         fi
@@ -699,12 +705,24 @@ first_run_select_tailscale_domain() {
   export SETUP_TAILSCALE_USER_API_TOKEN="${first_run_tailscale_token}"
   export ADAETUM_TAILSCALE_AUTHORIZED=1
   if [ -n "${tailnets}" ]; then
-    if [ "${auto_run}" = 1 ] && [ "${dry_run}" != 1 ] && [ -n "${first_run_overlay_domain:-}" ]; then
-      printf '%s\n' ${tailnets} | grep -Fxq "${first_run_overlay_domain}" || die "Saved Tailscale tailnet ${first_run_overlay_domain} is not available to the saved credentials. Run task init interactively to select another tailnet."
-      first_run_status info "Automatic replay selected saved Tailscale tailnet ${first_run_overlay_domain}."
-    else
+    if [ "${clean_run}" != 1 ] && [ "${dry_run}" != 1 ] && [ -n "${first_run_overlay_domain:-}" ]; then
+      while IFS= read -r tailnet_candidate; do
+        [ "${tailnet_candidate}" = "${first_run_overlay_domain}" ] && saved_tailnet_available=1
+      done <<< "${tailnets}"
+      if [ "${saved_tailnet_available}" = 1 ]; then
+        first_run_status success "Reusing saved Tailscale DNS name ${first_run_overlay_domain} from platform.yaml."
+      elif [ "${silent_run}" = 1 ]; then
+        die "Saved Tailscale tailnet ${first_run_overlay_domain} is not available to the saved credentials. Run task init interactively to select another tailnet."
+      else
+        first_run_status warning "Saved Tailscale DNS name ${first_run_overlay_domain} is no longer available; choose another tailnet."
+        first_run_overlay_domain=""
+      fi
+    fi
+    if [ -z "${first_run_overlay_domain:-}" ] || [ "${clean_run}" = 1 ] || [ "${dry_run}" = 1 ]; then
       first_run_overlay_domain="$(first_run_choose "Choose the Tailscale tailnet for this cluster" ${tailnets})"
     fi
+  elif [ "${clean_run}" != 1 ] && [ "${dry_run}" != 1 ] && [ -n "${first_run_overlay_domain:-}" ]; then
+    first_run_status success "Tailscale returned no discoverable device DNS names; reusing saved DNS name ${first_run_overlay_domain} from platform.yaml."
   else
     first_run_heading "New or empty tailnet"
     first_run_message "${ADAETUM_UI_MUTED}" "Tailscale validated the token, but this tailnet has no device DNS names to discover yet. This is normal for a new or emptied tailnet."
@@ -765,7 +783,7 @@ first_run_capture_tailscale_oauth() {
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
     first_run_load_saved_tailscale_oauth "${credential_store}" "${credential_namespace}" "${credential_backend}" || true
     if [ -z "${first_run_tailscale_oauth_client_id:-}" ] || [ -z "${first_run_tailscale_oauth_client_secret:-}" ]; then
-      [ "${auto_run}" != 1 ] || die "Automatic replay could not load a valid saved Tailscale OAuth client. Run task init interactively once."
+      [ "${silent_run}" != 1 ] || die "Silent replay could not load a valid saved Tailscale OAuth client. Run task init interactively once."
       first_run_status info "Creating the scoped Tailscale OAuth client automatically..."
       oauth_output="$(printf '%s' "${first_run_tailscale_token}" | python3 ./tasks/scripts/bootstrap-tailscale.py \
         --user-token-stdin \
@@ -874,7 +892,7 @@ first_run_installer_media() {
       media_options+=("${media_label}")
       media_paths+=("${path}")
     done <<< "${report}"
-    if [ "${auto_run}" = 1 ] && [ "${dry_run}" != 1 ] && [ -f .env ]; then
+    if [ "${silent_run}" = 1 ] && [ "${dry_run}" != 1 ] && [ -f .env ]; then
       saved_media="$(awk -F= '$1 == "LOCAL_ISO_PATH" {print substr($0, index($0, "=") + 1); exit}' .env | tr -d '\r\n')"
       case "${saved_media}" in
         "") ;;
@@ -886,7 +904,7 @@ first_run_installer_media() {
       for media_index in "${!media_paths[@]}"; do
         if [ "${media_paths[${media_index}]}" = "${saved_media}" ]; then
           selected="${media_paths[${media_index}]}"
-          first_run_status info "Automatic replay selected saved installer media: $(basename "${selected}")."
+          first_run_status info "Silent replay selected saved installer media: $(basename "${selected}")."
           break
         fi
       done
@@ -967,10 +985,10 @@ first_run_installer_media() {
 }
 
 adaetum_first_run_prepare() {
-  if [ "${auto_run}" != 1 ]; then
-    [ -t 0 ] && [ -t 1 ] || die "task init needs an interactive terminal. Use task init:auto only after one successful interactive setup."
+  if [ "${silent_run}" != 1 ]; then
+    [ -t 0 ] && [ -t 1 ] || die "task init needs an interactive terminal. Use task init:silent only after one successful interactive setup."
   else
-    first_run_heading "Automatic saved-state replay"
+    first_run_heading "Silent saved-state replay"
     first_run_message "${ADAETUM_UI_MUTED}" "Adaetum will reuse the validated recovery repository, platform profile, protected provider credentials, runtime values, and installer media saved by an earlier interactive setup. No plaintext answer file is used."
   fi
   command -v task >/dev/null 2>&1 || die "Task is required to continue."

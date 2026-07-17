@@ -37,8 +37,8 @@ adaetum_gum_enabled() {
   [ "${ADAETUM_GUM_UI:-1}" != "0" ] && [ -t 0 ] && command -v gum >/dev/null 2>&1
 }
 
-adaetum_ui_auto_enabled() {
-  case "${ADAETUM_INIT_AUTO:-0}" in
+adaetum_ui_silent_enabled() {
+  case "${ADAETUM_INIT_SILENT:-0}" in
     1|true|yes) return 0 ;;
     *) return 1 ;;
   esac
@@ -229,8 +229,8 @@ adaetum_ui_message() {
 
 adaetum_ui_confirm() {
   local label="$1" default="${2:-y}" answer=""
-  if adaetum_ui_auto_enabled; then
-    adaetum_ui_status info "Automatic replay: ${label} $([ "${default}" = y ] && printf Yes || printf No)"
+  if adaetum_ui_silent_enabled; then
+    adaetum_ui_status info "Silent replay: ${label} $([ "${default}" = y ] && printf Yes || printf No)"
     [ "${default}" = y ]
     return
   fi
@@ -241,12 +241,12 @@ adaetum_ui_confirm() {
 
 adaetum_ui_input() {
   local label="$1" default="$2" secret="${3:-0}" value=""
-  if adaetum_ui_auto_enabled; then
+  if adaetum_ui_silent_enabled; then
     if [ -z "${default}" ]; then
-      printf '[ERROR] Automatic replay has no saved value for %s. Run task init interactively once.\n' "${label}" >&2
+      printf '[ERROR] Silent replay has no saved value for %s. Run task init interactively once.\n' "${label}" >&2
       return 1
     fi
-    printf '[INFO] Automatic replay: using the saved/default value for %s.\n' "${label}" >&2
+    printf '[INFO] Silent replay: using the saved/default value for %s.\n' "${label}" >&2
     printf '%s' "${default}"
     return 0
   fi
@@ -263,9 +263,9 @@ adaetum_ui_input() {
 adaetum_ui_choose() {
   local label="$1" option="" index=1 selection=""
   shift
-  if adaetum_ui_auto_enabled; then
+  if adaetum_ui_silent_enabled; then
     [ "$#" -gt 0 ] || return 1
-    printf '[INFO] Automatic replay: selected the saved/default choice for %s.\n' "${label}" >&2
+    printf '[INFO] Silent replay: selected the saved/default choice for %s.\n' "${label}" >&2
     printf '%s' "$1"
     return 0
   fi
