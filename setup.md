@@ -638,6 +638,8 @@ After a successful run, expect these results:
 - GitHub secrets synced from non-empty `.env` values
 - Bootstrap workflows triggered
 - Local install ISO built when enabled and Docker is available
+- First-run handoff offers to copy the generated machine installer into the
+  operator's Downloads folder
 
 | Output | Result |
 | --- | --- |

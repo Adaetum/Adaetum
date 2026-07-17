@@ -272,6 +272,12 @@ def main() -> int:
         fail("first-run does not present the completed installer")
     if 'adaetum_ui_key_value "ISO file"' not in setup:
         fail("installer handoff omits the generated ISO path")
+    if 'adaetum_ui_panel "Download the machine installer"' not in setup:
+        fail("installer handoff does not offer a Downloads-folder copy")
+    if 'adaetum_ui_confirm "Download the installer ISO now?" y' not in setup:
+        fail("installer download is not an explicit default-yes operator choice")
+    if 'if [ "${dry_run}" = "1" ]; then' not in setup or "Dry run would save the generated machine installer" not in setup:
+        fail("installer download does not preserve the no-mutation dry-run contract")
     if "attach this ISO to the target physical host or VM" not in setup:
         fail("installer handoff omits the next physical-host action")
     if 'Rocky-10.2-${dry_run_arch}-minimal.iso' not in setup:

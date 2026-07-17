@@ -448,6 +448,60 @@ derived_local_iso_output_path() {
   printf '%s/dist/%s-ks.iso' "${repo_root}" "${iso_base%.iso}"
 }
 
+installer_download_directory() {
+  # Keep the handoff predictable across macOS, Linux, and the Bash environment
+  # used by Windows setup. An explicit override supports unusual home layouts
+  # without adding a second destination-selection UI.
+  printf '%s' "${ADAETUM_INSTALLER_DOWNLOAD_DIR:-${HOME}/Downloads}"
+}
+
+offer_installer_download() {
+  local installer_iso="$1"
+  local download_dir="" download_path="" partial_path=""
+
+  download_dir="$(installer_download_directory)"
+  download_path="${download_dir}/$(basename "${installer_iso}")"
+
+  adaetum_ui_panel "Download the machine installer"
+  adaetum_ui_message "${ADAETUM_UI_MUTED}" "Save a convenient copy in your Downloads folder for attaching to a physical host, VM, or remote-management console. The verified build under dist remains unchanged."
+  adaetum_ui_key_value "Download location" "${download_path}"
+  if ! adaetum_ui_confirm "Download the installer ISO now?" y; then
+    adaetum_ui_status info "Installer remains available at ${installer_iso}."
+    return 0
+  fi
+
+  if [ "${dry_run}" = "1" ]; then
+    adaetum_ui_status success "Dry run would save the generated machine installer to ${download_path}."
+    return 0
+  fi
+
+  if [ -f "${download_path}" ]; then
+    if cmp -s "${installer_iso}" "${download_path}"; then
+      adaetum_ui_status success "The current machine installer is already in Downloads."
+      adaetum_ui_key_value "Downloaded ISO" "${download_path}"
+      return 0
+    fi
+    if ! adaetum_ui_confirm "Replace the older ISO already at this download location?" n; then
+      adaetum_ui_status info "Existing download left unchanged; use ${installer_iso} for this installation."
+      return 0
+    fi
+  fi
+
+  mkdir -p "${download_dir}" || die "Unable to create the installer download directory: ${download_dir}"
+  partial_path="${download_path}.partial.$$"
+  rm -f "${partial_path}"
+  if ! cp "${installer_iso}" "${partial_path}"; then
+    rm -f "${partial_path}"
+    die "Unable to copy the installer ISO to ${download_dir}."
+  fi
+  if ! mv -f "${partial_path}" "${download_path}"; then
+    rm -f "${partial_path}"
+    die "Unable to finalize the downloaded installer ISO: ${download_path}"
+  fi
+  adaetum_ui_status success "Machine installer saved to Downloads."
+  adaetum_ui_key_value "Downloaded ISO" "${download_path}"
+}
+
 show_installer_handoff() {
   local installer_iso=""
   installer_iso="$(derived_local_iso_output_path "${setup_local_iso_path}")"
@@ -463,6 +517,9 @@ show_installer_handoff() {
   fi
   adaetum_ui_key_value "ISO file" "${installer_iso}"
   adaetum_ui_message "${ADAETUM_UI_MUTED}" "Next: attach this ISO to the target physical host or VM and boot from it once. The Rocky Linux installation runs unattended. Detach or eject the ISO when the installer reboots so the machine starts from disk. First-boot cluster preparation then continues automatically; allow roughly 30 minutes for the initial node."
+  if [ "${first_run}" = "1" ]; then
+    offer_installer_download "${installer_iso}"
+  fi
 }
 
 assert_fresh_local_iso_output() {

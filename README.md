@@ -59,6 +59,7 @@ then starts setup. The console carries one
 five-section journey throughout: Repository, Providers, Profile, Installer, and
 Bootstrap. At completion it prints the exact generated ISO path and tells you
 how to attach it to the first physical host or VM for the unattended install.
+It also offers to place a ready-to-use copy in your Downloads folder.
 Use `task initialize` only to rerun the setup workflow after the first run.
 
 If the checkout still points at Adaetum upstream, `task init` installs GitHub
