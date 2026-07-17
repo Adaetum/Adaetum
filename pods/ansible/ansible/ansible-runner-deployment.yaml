@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: ansible-runner
   namespace: ansible
+  annotations:
+    secret.reloader.stakater.com/reload: gitea-registry-creds,tailscale-user-sync
 spec:
   replicas: 1
   selector:
@@ -25,20 +27,28 @@ spec:
             - name: CRON_SCHEDULE
               value: "*/10 * * * *"
             - name: ANSIBLE_PLAYBOOK
-              value: "playbooks/bootstrap.yml"
+              value: "playbooks/day2.yml"
             - name: ANSIBLE_INVENTORY
               value: "node-inventory.yml"
             - name: ANSIBLE_EXTRA_ARGS
               value: ""
             - name: TAILSCALE_DOMAIN
               value: "armadillo-peacock.ts.net"
+            - name: TAILSCALE_TAILNET
+              value: "armadillo-peacock.ts.net"
             - name: TAILSCALE_CLUSTER_TAG
               value: "tag:cluster"
           volumeMounts:
             - name: ansible-data
               mountPath: /ansible
+            - name: day2-secrets
+              mountPath: /run/secrets/adaetum
+              readOnly: true
       volumes:
         - name: ansible-data
           hostPath:
             path: /opt/ansible-runner
             type: Directory
+        - name: day2-secrets
+          secret:
+            secretName: tailscale-user-sync

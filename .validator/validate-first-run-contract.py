@@ -32,6 +32,7 @@ WORKER = ROOT / ".github" / "workflows" / "ks-worker.yml"
 ROCKY_HEADER = ROOT / "ks-src" / "fragments" / "installers" / "kickstart" / "rocky10" / "00-header.ksfrag"
 TASKFILE = ROOT / "Taskfile.yml"
 ENV_TASKS = ROOT / "tasks" / "env.yml"
+PLATFORM_BOOTSTRAP = ROOT / "ansible" / "playbooks" / "platform-bootstrap.yml"
 
 
 def fail(message: str) -> None:
@@ -53,6 +54,7 @@ def main() -> int:
     rocky_header = ROCKY_HEADER.read_text(encoding="utf-8")
     taskfile = TASKFILE.read_text(encoding="utf-8")
     env_tasks = ENV_TASKS.read_text(encoding="utf-8")
+    platform_bootstrap = PLATFORM_BOOTSTRAP.read_text(encoding="utf-8")
     gum_ui = (ROOT / "tasks" / "scripts" / "gum-ui.sh").read_text(encoding="utf-8")
     if "ADAETUM_FIRST_RUN=1" not in wizard:
         fail("first-run launcher does not enter the shared setup program")
@@ -254,6 +256,10 @@ def main() -> int:
         fail("temporary Tailscale API access is not used to prepare OAuth tag ownership")
     if "tag:rocky10, tag:server, tag:cluster" not in first_run:
         fail("Tailscale OAuth guidance does not name the prepared node tags")
+    if 'tailscale_retag_platform_tag: "tag:rocky10"' not in platform_bootstrap:
+        fail("platform bootstrap does not retag nodes with the OAuth-authorized Rocky tag")
+    if "tag:rke2" in platform_bootstrap:
+        fail("platform bootstrap still requests the retired, unauthorized tag:rke2")
     if 'Using the Cloudflare token authorized during provider setup.' not in setup:
         fail("setup re-prompts for the Cloudflare token captured during first run")
     if 'Using the GitHub credential authorized during repository setup.' not in setup:

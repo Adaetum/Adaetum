@@ -1,0 +1,182 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-viewer-rotation
+  namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grafana-viewer-rotation
+  namespace: homepage
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["homepage-grafana"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grafana-viewer-rotation
+  namespace: homepage
+subjects:
+  - kind: ServiceAccount
+    name: grafana-viewer-rotation
+    namespace: observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grafana-viewer-rotation
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: grafana-viewer-rotation
+  namespace: observability
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          serviceAccountName: grafana-viewer-rotation
+          restartPolicy: Never
+          containers:
+            - name: reconcile-viewer
+              image: bitnami/kubectl:latest@sha256:558420daf32bbc382e3e9af4537f4073085b336ddd47399a3b70e70087115978
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/bash", "-ec"]
+              args:
+                - |
+                  grafana_url="http://grafana.observability.svc.cluster.local"
+                  desired_username="$(cat /var/run/desired/username)"
+
+                  authenticate() {
+                    local username_file="${1:?username file is required}"
+                    local password_file="${2:?password file is required}"
+                    curl --silent --show-error --fail \
+                      --user "$(cat "${username_file}"):$(cat "${password_file}")" \
+                      --output /dev/null \
+                      "${grafana_url}/api/user"
+                  }
+
+                  admin_curl() {
+                    curl --silent --show-error --fail \
+                      --user "$(cat /var/run/admin/username):$(cat /var/run/admin/password)" \
+                      --header 'Content-Type: application/json' \
+                      "$@"
+                  }
+
+                  promote_delivery_copy() {
+                    local payload=""
+                    payload="$(
+                      jq -n \
+                        --rawfile username /var/run/desired/username \
+                        --rawfile password /var/run/desired/password \
+                        '{stringData: {
+                          HOMEPAGE_GRAFANA_USERNAME: $username,
+                          HOMEPAGE_GRAFANA_PASSWORD: $password
+                        }}'
+                    )"
+                    kubectl -n homepage patch secret homepage-grafana --type=merge -p "${payload}"
+                  }
+
+                  desired_valid=false
+                  if authenticate /var/run/desired/username /var/run/desired/password; then
+                    desired_valid=true
+                  fi
+
+                  lookup_status="$(
+                    admin_curl \
+                      --get \
+                      --data-urlencode "loginOrEmail=${desired_username}" \
+                      --output /work/user.json \
+                      --write-out '%{http_code}' \
+                      "${grafana_url}/api/users/lookup" || true
+                  )"
+                  if [[ "${lookup_status}" == "404" ]]; then
+                    create_payload="$(
+                      jq -n \
+                        --rawfile username /var/run/desired/username \
+                        --rawfile password /var/run/desired/password \
+                        '{
+                          name: "Adaetum Homepage",
+                          email: "homepage@adaetum.invalid",
+                          login: $username,
+                          password: $password,
+                          OrgId: 1
+                        }'
+                    )"
+                    admin_curl \
+                      --request POST \
+                      --data "${create_payload}" \
+                      --output /work/user.json \
+                      "${grafana_url}/api/admin/users"
+                    user_id="$(jq -er '.id' /work/user.json)"
+                  elif [[ "${lookup_status}" == "200" ]]; then
+                    user_id="$(jq -er '.id' /work/user.json)"
+                    if [[ "${desired_valid}" != "true" ]]; then
+                      password_payload="$(
+                        jq -n --rawfile password /var/run/desired/password \
+                          '{password: $password}'
+                      )"
+                      admin_curl \
+                        --request PUT \
+                        --data "${password_payload}" \
+                        --output /dev/null \
+                        "${grafana_url}/api/admin/users/${user_id}/password"
+                    fi
+                  else
+                    echo "Grafana user lookup failed with HTTP ${lookup_status:-unknown}." >&2
+                    exit 1
+                  fi
+
+                  # Basic Viewer is sufficient for Homepage's read-only Grafana
+                  # widget and is available in Grafana OSS.
+                  admin_curl \
+                    --request PATCH \
+                    --data '{"role":"Viewer"}' \
+                    --output /dev/null \
+                    "${grafana_url}/api/orgs/1/users/${user_id}"
+
+                  if ! authenticate /var/run/desired/username /var/run/desired/password; then
+                    echo "Grafana rejected the desired Homepage Viewer credential." >&2
+                    echo "The active delivery Secret was not changed." >&2
+                    exit 1
+                  fi
+                  promote_delivery_copy
+                  echo "Homepage Grafana Viewer reconciled from OpenBao."
+              volumeMounts:
+                - name: desired-credential
+                  mountPath: /var/run/desired
+                  readOnly: true
+                - name: grafana-admin
+                  mountPath: /var/run/admin
+                  readOnly: true
+                - name: work
+                  mountPath: /work
+          volumes:
+            - name: desired-credential
+              secret:
+                secretName: homepage-grafana-desired
+                items:
+                  - key: username
+                    path: username
+                  - key: password
+                    path: password
+            - name: grafana-admin
+              secret:
+                secretName: grafana-admin
+                items:
+                  - key: admin-user
+                    path: username
+                  - key: admin-password
+                    path: password
+            - name: work
+              emptyDir: {}

@@ -4,9 +4,17 @@ Adaetum uses established external services during bootstrap. These integrations
 are explicit setup dependencies, not pluggable modules and not replacements for
 the product stack in `pods/`.
 
-`platform.yaml` supplies public routing and delivery values. Runtime
-credentials are collected into `.env`, used only during setup/bootstrap, and
-must never be committed.
+`platform.yaml` supplies public routing and delivery values. Setup collects
+runtime credentials into the gitignored `.env` delivery file and synchronizes
+the recovery credentials required by GitHub workflows to the private
+repository's environment Secrets. Supported OS credential stores may retain
+first-run resume credentials. None of these values may be committed.
+
+After Phase 40, application-consumed credentials are selected from OpenBao and
+continuously delivered through External Secrets. Recovery-plane credentials
+remain outside OpenBao when they must publish or retrieve installers and
+recovery artifacts while the cluster is unavailable. This is a deliberate
+availability boundary, not a second source for workload configuration.
 
 ## Cloudflare
 
@@ -23,14 +31,15 @@ The bootstrap logic reuses compatible existing resources where possible.
 
 **Failure/recovery:** verify token scope, account access, the public domain,
 and the Cloudflare API response before rerunning setup. Preserve the private
-private recovery repository and recovery kit; do not paste generated token values into issues or
-logs. Rerunning setup is the supported reconciliation path for incomplete
-bootstrap resources.
+recovery repository and recovery kit; do not paste generated token values into
+issues or logs. Rerunning setup is the supported reconciliation path for
+incomplete bootstrap resources.
 
 ## GitHub
 
-**Purpose:** seed the recovery repository into the cluster, retain an out-of-band mirror,
-store bootstrap environment values, and dispatch build/publish workflows.
+**Purpose:** seed the recovery repository into the cluster, retain an
+out-of-band mirror, store workflow delivery copies of recovery credentials, and
+dispatch build/publish workflows.
 
 **Inputs:** `GITHUB_SYNC_TOKEN` is the canonical credential for the
 opinionated flow. It needs access to the private repository and must be able to read, clone,
@@ -58,8 +67,10 @@ credential validation and auth-key minting. The tailnet and cluster tag come
 from `platform.yaml`.
 
 **State it may change:** the tailnet ACL/tag-owner policy and short-lived or
-time-bounded auth keys used by bootstrap. It does not store Tailscale
-credentials in `platform.yaml`.
+time-bounded auth keys used by bootstrap. The one-day, non-reusable node auth
+key is disposable installer state. The longer-lived OAuth client is copied to
+`secret/apps/ansible/tailscale` for the day-two runner to mint replacements. No
+Tailscale credential is stored in `platform.yaml`.
 
 **Failure/recovery:** confirm the tailnet name, OAuth scopes, user-token
 access, and permission to update tag owners. Rerun setup after correcting the

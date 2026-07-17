@@ -5,7 +5,7 @@ source_target_revision: HEAD
 source_path: pods/ingress/ingress-vip
 ignore_differences:
   - group: ""
-    kind: Secret
+    kind: ConfigMap
     name: ingress-vip-config
     namespace: ingress
     jsonPointers:

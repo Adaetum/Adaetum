@@ -95,8 +95,8 @@
           version: 2
           alerts: grafana
           url: http://grafana.observability.svc.cluster.local
-          username: admin
-          password: __HOMEPAGE_GRAFANA_ADMIN_PASSWORD__
+          username: __HOMEPAGE_GRAFANA_USERNAME__
+          password: __HOMEPAGE_GRAFANA_PASSWORD__
           fields:
             - dashboards
             - datasources

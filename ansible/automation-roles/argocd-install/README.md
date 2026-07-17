@@ -6,7 +6,9 @@ points Argo CD at your GitOps repository.
 ## What it does
 
 - Installs Helm (if missing) and adds the Argo Helm repository.
-- Deploys Argo CD in the `argocd` namespace.
+- Deploys the pinned Argo CD chart in the `argocd` namespace.
+- Seeds the Redis cache password before Helm; Phase 40 promotes it to OpenBao,
+  and External Secrets plus Reloader own steady-state rotation.
 - Optionally creates an Application pointing at your repo and path.
 
 ## Defaults
@@ -15,8 +17,10 @@ Key settings in `defaults/main.yml`:
 
 - `argocd_enabled`: toggle the role on/off.
 - `argocd_namespace`: namespace to install into.
-- `argocd_chart_version`: optional chart version pin.
+- `argocd_chart_version`: chart contract pin (`10.1.4`).
 - `argocd_admin_password`: admin password override.
+- `argocd_redis_password`: required initial value, normally supplied by Phase
+  20 through `ARGOCD_REDIS_PASSWORD` rather than set by an operator.
 - `argocd_bootstrap_enabled`: create the bootstrap Application.
 - `argocd_bootstrap_repo_url`: Git repository URL (Gitea preferred; falls back to GitHub envs).
 - `argocd_bootstrap_repo_path`: path in the repo to sync.

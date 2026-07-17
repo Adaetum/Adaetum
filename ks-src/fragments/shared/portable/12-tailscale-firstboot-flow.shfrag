@@ -821,11 +821,6 @@ append_tag() {
 	os_tag="$(bootstrap_platform_os_tag 2>/dev/null || true)"
 	append_tag "${os_tag}"
 
-	# Tag the platform distribution for inventory/ACLs (rke2 only).
-	case "${PLATFORM_DISTRIBUTION}" in
-	  rke2|RKE2) append_tag "tag:rke2" ;;
-	esac
-
 	if [ -n "${TAILSCALE_ADVERTISE_TAGS}" ]; then
 	  tags_norm="$(printf '%s' "${TAILSCALE_ADVERTISE_TAGS}" | tr ' ' ',' | tr -s ',' | sed 's/^,//;s/,$//')"
 	  IFS=',' read -r -a tag_arr <<EOF
@@ -1145,6 +1140,45 @@ fi
 ui_stop_phase_monitor
 step_end 0
 
+# The rendered first-boot scripts and installed setup configuration can
+# contain the shared bootstrap delivery token even after the downloaded runtime
+# env is removed. They are resume artifacts only: retain them after failure,
+# but destroy them after the node has completed the entire bootstrap flow.
+remove_installed_bootstrap_artifacts() {
+  local path=""
+  for path in \
+    "${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}" \
+    /etc/ansible-bundle-bootstrap.env \
+    /etc/tailscale-firstboot.env \
+    /usr/local/sbin/ansible-bundle-bootstrap.sh \
+    /usr/local/sbin/tailscale-firstboot.sh \
+    /root/*-ks.cfg; do
+    if [ ! -e "${path}" ]; then
+      continue
+    fi
+    case "${path}" in
+      /usr/local/sbin/*.sh)
+        # Unlink executable files without overwriting their open inode: this
+        # function is itself running from tailscale-firstboot.sh.
+        rm -f -- "${path}"
+        ;;
+      *)
+        if command -v shred >/dev/null 2>&1; then
+          shred -u -- "${path}" 2>/dev/null || rm -f -- "${path}"
+        else
+          rm -f -- "${path}"
+        fi
+        ;;
+    esac
+    if [ -e "${path}" ]; then
+      echo "[BOOTSTRAP] failed to remove installed bootstrap credential artifact: ${path}" >&2
+      return 1
+    fi
+    echo "[BOOTSTRAP] removed installed bootstrap credential artifact: ${path}"
+  done
+}
+
+remove_installed_bootstrap_artifacts
 touch "${done_file}"
 bootstrap_service_disable "${firstboot_service_name}" || true
 stop_log_stream

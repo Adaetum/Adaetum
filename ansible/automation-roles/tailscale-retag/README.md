@@ -21,7 +21,7 @@ Key settings in `defaults/main.yml`:
 - `tailscale_retag_enabled`: master toggle (default `true`).
 - `tailscale_retag_force`: force retag even if tags appear correct.
 - `tailscale_retag_role_tag`: role tag (e.g. `tag:server` or `tag:agent`).
-- `tailscale_retag_platform_tag`: platform tag (e.g. `tag:rke2`).
+- `tailscale_retag_platform_tag`: platform tag (e.g. `tag:rocky10`).
 - `tailscale_key_expiry_fail_on_error`: fail if key-expiry disable is skipped/fails (default `false`).
 
 ## Example overrides
@@ -29,6 +29,6 @@ Key settings in `defaults/main.yml`:
 ```yaml
 tailscale_retag_enabled: true
 tailscale_retag_role_tag: "tag:server"
-tailscale_retag_platform_tag: "tag:rke2"
+tailscale_retag_platform_tag: "tag:rocky10"
 tailscale_cluster_tag: "tag:cluster-main"
 ```

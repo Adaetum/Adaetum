@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-admin-rotation
+  namespace: argocd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-admin-rotation
+  namespace: argocd
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["argocd-admin-desired", "argocd-secret"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["argocd-secret"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-admin-rotation
+  namespace: argocd
+subjects:
+  - kind: ServiceAccount
+    name: argocd-admin-rotation
+    namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argocd-admin-rotation
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: argocd-admin-rotation
+  namespace: argocd
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          serviceAccountName: argocd-admin-rotation
+          restartPolicy: Never
+          initContainers:
+            - name: detect-change
+              # Pinned because this pod can mutate Argo CD's credential state.
+              image: bitnami/kubectl:latest@sha256:558420daf32bbc382e3e9af4537f4073085b336ddd47399a3b70e70087115978
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/bash", "-ec"]
+              args:
+                - |
+                  desired_digest="$(sha256sum /var/run/adaetum/password | awk '{print $1}')"
+                  applied_digest="$(
+                    kubectl -n argocd get secret argocd-secret \
+                      -o 'jsonpath={.metadata.annotations.adaetum\.io/admin-password-sha256}' \
+                      2>/dev/null || true
+                  )"
+                  if [[ "${desired_digest}" == "${applied_digest}" ]]; then
+                    echo "Argo CD administrator already matches OpenBao."
+                    exit 0
+                  fi
+                  printf '%s' "${desired_digest}" >/work/desired-digest
+              volumeMounts:
+                - name: desired-password
+                  mountPath: /var/run/adaetum
+                  readOnly: true
+                - name: work
+                  mountPath: /work
+            - name: hash-password
+              # htpasswd is used only for the bcrypt operation Argo CD requires.
+              image: httpd:2.4.65-alpine@sha256:07b2fabb7029a0b8aeb2e0fd02651c28fe22c21c5b5a59d6ff5b022791fcd89e
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  if [ ! -s /work/desired-digest ]; then
+                    exit 0
+                  fi
+                  htpasswd -niBC 10 admin </var/run/adaetum/password \
+                    | sed 's/^admin://' \
+                    | tr -d '\n' >/work/password.bcrypt
+                  test -s /work/password.bcrypt
+              volumeMounts:
+                - name: desired-password
+                  mountPath: /var/run/adaetum
+                  readOnly: true
+                - name: work
+                  mountPath: /work
+          containers:
+            - name: apply-password
+              image: bitnami/kubectl:latest@sha256:558420daf32bbc382e3e9af4537f4073085b336ddd47399a3b70e70087115978
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/bash", "-ec"]
+              args:
+                - |
+                  if [[ ! -s /work/password.bcrypt ]]; then
+                    exit 0
+                  fi
+                  digest="$(cat /work/desired-digest)"
+                  password_hash="$(cat /work/password.bcrypt)"
+                  modified_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  kubectl -n argocd patch secret argocd-secret --type=merge -p "$(
+                    printf '%s' \
+                      '{"metadata":{"annotations":{"adaetum.io/admin-password-sha256":"' \
+                      "${digest}" \
+                      '"}},"stringData":{"admin.password":"' \
+                      "${password_hash}" \
+                      '","admin.passwordMtime":"' \
+                      "${modified_at}" \
+                      '"}}'
+                  )"
+                  echo "Argo CD administrator reconciled from OpenBao."
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+          volumes:
+            - name: desired-password
+              secret:
+                secretName: argocd-admin-desired
+                items:
+                  - key: password
+                    path: password
+            - name: work
+              emptyDir: {}

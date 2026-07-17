@@ -168,6 +168,11 @@ ENV_KEYS = (
     "EXTERNAL_DNS_DOMAIN_FILTER",
 )
 
+# Gitea maps environment variables into app.ini with
+# GITEA__SECTION__KEY names. These double underscores are application syntax,
+# not Adaetum profile placeholders.
+LITERAL_DOUBLE_UNDERSCORE_TOKENS = {"DATABASE"}
+
 
 def parse_env_file(path: Path) -> dict[str, str]:
     """Read the generated flat config without treating it as user input syntax."""
@@ -228,6 +233,8 @@ def render_templates(config: dict[str, str], check: bool) -> list[str]:
 
         def replace(match: re.Match[str]) -> str:
             key = match.group(1)
+            if key in LITERAL_DOUBLE_UNDERSCORE_TOKENS:
+                return match.group(0)
             if key not in derived:
                 failures.append(f"{template_rel}: missing token value for {key}")
                 return match.group(0)

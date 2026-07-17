@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Shared helpers for the Phase 50/60 GitOps control pair.
-# Keep phase-specific policy in its entrypoint; this file owns the mechanics
-# that must behave identically in both phases, including cluster interactions.
+# Shared mechanics for the phase-based bootstrap entrypoints.
+# Keep phase-specific policy and logging in each entrypoint; this file owns
+# reusable cluster and credential operations that must behave identically.
 
 bootstrap_control_pair_resolve_kubectl() {
   if command -v kubectl >/dev/null 2>&1; then
@@ -79,6 +79,13 @@ read_secret_key_plain() {
     return 0
   fi
   printf '%s' "${raw}" | base64 -d 2>/dev/null | tr -d '\r\n' || true
+}
+read_configmap_key_plain() {
+  local namespace="$1"
+  local configmap_name="$2"
+  local key="$3"
+  "${kubectl_bin}" -n "${namespace}" get configmap "${configmap_name}" \
+    -o "jsonpath={.data.${key}}" 2>/dev/null | tr -d '\r\n' || true
 }
 base64url() {
   openssl base64 -A | tr '+/' '-_' | tr -d '='
@@ -224,30 +231,186 @@ PY
   fi
   return 1
 }
-patch_openbao_widget_fields_nonempty() {
-  local openbao_token="${1:-}"
-  shift || true
-  local pair=""
-  local patch_args=()
+persist_openbao_homepage_field() {
+  local field="${1:-}"
+  local value="${2:-}"
+  local openbao_token="${3:-}"
+  local secret_key=""
 
-  if [[ -z "${openbao_token}" || -z "${kubectl_bin}" ]]; then
+  if [[ -z "${field}" || -z "${value}" || -z "${openbao_token}" || -z "${kubectl_bin:-}" ]]; then
+    return 0
+  fi
+
+  case "${field}" in
+    homepage_argocd_widget_key) secret_key="HOMEPAGE_ARGOCD_WIDGET_KEY" ;;
+    homepage_gitea_widget_auth) secret_key="HOMEPAGE_GITEA_WIDGET_AUTH" ;;
+    *) return 0 ;;
+  esac
+
+  retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
+    bao kv patch secret/apps/homepage/widgets "${secret_key}=${value}" >/dev/null 2>&1 || \
+  retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
+    bao kv put secret/apps/homepage/widgets "${secret_key}=${value}" >/dev/null
+}
+
+read_openbao_app_field() {
+  local path="${1:-}"
+  local field="${2:-}"
+  local openbao_token="${3:-}"
+
+  if [[ -z "${path}" || -z "${field}" || -z "${openbao_token}" || -z "${kubectl_bin:-}" ]]; then
+    return 0
+  fi
+  "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
+    bao kv get -field="${field}" "secret/apps/${path}" 2>/dev/null | tr -d '\r\n' || true
+}
+
+# Gitea access tokens are application-issued credentials, not arbitrary KV
+# strings. These helpers let late bootstrap prove the selected Homepage token
+# has only the intended read scopes and revoke superseded system-owned tokens
+# after the replacement has been promoted to OpenBao and Kubernetes.
+gitea_widget_token_has_required_scopes() {
+  local base_url="${1:-}"
+  local username="${2:-}"
+  local password="${3:-}"
+  local token="${4:-}"
+  local inventory=""
+
+  if [[ -z "${base_url}" || -z "${username}" || -z "${password}" || -z "${token}" ]]; then
+    return 1
+  fi
+  inventory="$(
+    curl --silent --show-error --fail --max-time 20 \
+      --user "${username}:${password}" \
+      "${base_url}/api/v1/users/${username}/tokens?limit=100" 2>/dev/null || true
+  )"
+  [[ -n "${inventory}" ]] || return 1
+
+  GITEA_TOKEN_INVENTORY="${inventory}" python3 - "${token}" <<'PY'
+import json
+import os
+import sys
+
+token = sys.argv[1]
+required = {"read:notification", "read:repository", "read:issue"}
+try:
+    tokens = json.loads(os.environ["GITEA_TOKEN_INVENTORY"])
+except (TypeError, ValueError):
+    raise SystemExit(1)
+
+suffix = token[-8:]
+for entry in tokens:
+    if entry.get("token_last_eight") == suffix:
+        raise SystemExit(0 if set(entry.get("scopes") or []) == required else 1)
+raise SystemExit(1)
+PY
+}
+
+revoke_stale_gitea_widget_tokens() {
+  local base_url="${1:-}"
+  local username="${2:-}"
+  local password="${3:-}"
+  local keep_token="${4:-}"
+  local inventory=""
+  local stale_ids=""
+  local token_id=""
+
+  if [[ -z "${base_url}" || -z "${username}" || -z "${password}" || -z "${keep_token}" ]]; then
+    return 1
+  fi
+  inventory="$(
+    curl --silent --show-error --fail --max-time 20 \
+      --user "${username}:${password}" \
+      "${base_url}/api/v1/users/${username}/tokens?limit=100" 2>/dev/null || true
+  )"
+  [[ -n "${inventory}" ]] || return 1
+
+  stale_ids="$(GITEA_TOKEN_INVENTORY="${inventory}" python3 - "${keep_token}" <<'PY'
+import json
+import os
+import sys
+
+keep_suffix = sys.argv[1][-8:]
+try:
+    tokens = json.loads(os.environ["GITEA_TOKEN_INVENTORY"])
+except (TypeError, ValueError):
+    raise SystemExit(1)
+
+for entry in tokens:
+    name = str(entry.get("name") or "")
+    if name.startswith("homepage-widget") and entry.get("token_last_eight") != keep_suffix:
+        token_id = entry.get("id")
+        if isinstance(token_id, int):
+            print(token_id)
+PY
+  )" || return 1
+
+  for token_id in ${stale_ids}; do
+    curl --silent --show-error --fail --max-time 20 \
+      --user "${username}:${password}" \
+      --request DELETE \
+      --output /dev/null \
+      "${base_url}/api/v1/users/${username}/tokens/${token_id}" || return 1
+  done
+
+  # Re-read the registry so a successful return proves both least privilege
+  # and revocation rather than merely proving that DELETE returned no output.
+  gitea_widget_token_has_required_scopes \
+    "${base_url}" "${username}" "${password}" "${keep_token}" || return 1
+  inventory="$(
+    curl --silent --show-error --fail --max-time 20 \
+      --user "${username}:${password}" \
+      "${base_url}/api/v1/users/${username}/tokens?limit=100" 2>/dev/null || true
+  )"
+  GITEA_TOKEN_INVENTORY="${inventory}" python3 - "${keep_token}" <<'PY'
+import json
+import os
+import sys
+
+keep_suffix = sys.argv[1][-8:]
+tokens = json.loads(os.environ["GITEA_TOKEN_INVENTORY"])
+stale = [
+    entry for entry in tokens
+    if str(entry.get("name") or "").startswith("homepage-widget")
+    and entry.get("token_last_eight") != keep_suffix
+]
+raise SystemExit(1 if stale else 0)
+PY
+}
+
+seed_openbao_app_fields() {
+  local path="${1:-}"
+  local openbao_token="${2:-}"
+  shift 2 || true
+  local pair=""
+  local field=""
+  local existing=""
+  local -a missing=()
+
+  if [[ -z "${path}" || -z "${openbao_token}" || -z "${kubectl_bin:-}" || "$#" -eq 0 ]]; then
     return 0
   fi
 
   for pair in "$@"; do
-    [[ "${pair}" == *=* ]] || continue
-    if [[ -n "${pair#*=}" ]]; then
-      patch_args+=("${pair}")
+    field="${pair%%=*}"
+    existing="$(read_openbao_app_field "${path}" "${field}" "${openbao_token}")"
+    if [[ -z "${existing}" ]]; then
+      missing+=("${pair}")
     fi
   done
-
-  if (( ${#patch_args[@]} == 0 )); then
+  if [[ "${#missing[@]}" -eq 0 ]]; then
     return 0
   fi
 
   retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
     env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-    bao kv patch secret/bootstrap/platform "${patch_args[@]}" >/dev/null 2>&1 || true
+    bao kv patch "secret/apps/${path}" "${missing[@]}" >/dev/null 2>&1 || \
+    retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+      env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
+      bao kv put "secret/apps/${path}" "${missing[@]}" >/dev/null
 }
 # Ansible-runner image and registry helpers
 
@@ -514,6 +677,13 @@ PY
 }
 gitea_registry_token_effective() {
   local token=""
+  token="$(read_openbao_app_field gitea/registry token "${openbao_token:-}" || true)"
+  if [[ -n "${token}" ]]; then
+    write_secret_file gitea_registry_token "${token}"
+    printf '%s' "${token}"
+    return 0
+  fi
+
   token="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_registry_token")"
   if [[ -n "${token}" ]]; then
     printf '%s' "${token}"
@@ -562,6 +732,13 @@ gitea_registry_token_effective() {
 }
 gitea_git_token_effective() {
   local token=""
+  token="$(read_openbao_app_field argocd/repository password "${openbao_token:-}" || true)"
+  if [[ -n "${token}" ]]; then
+    write_secret_file gitea_git_token "${token}"
+    printf '%s' "${token}"
+    return 0
+  fi
+
   token="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_git_token")"
   if [[ -n "${token}" ]]; then
     printf '%s' "${token}"
@@ -917,6 +1094,177 @@ wait_for_gitea_application() {
   done
 
   return 1
+}
+
+# Install the recovery-mirror hook without persisting its credential on Gitea's
+# repository PVC. The hook reads the projected delivery Secret on every push,
+# so an External Secrets refresh takes effect without rewriting application
+# state or restarting Gitea.
+configure_gitea_push_mirror_from_openbao() {
+  local phase_label="${1:?phase label}"
+  local target_owner="${2:?owner}"
+  local target_repo="${3:?repo}"
+  local mirror_repo_url="${4:-}"
+  local mirror_username="${5:-}"
+  local mirror_token="${6:-}"
+  local openbao_repo_url=""
+  local openbao_username=""
+  local openbao_token_value=""
+  local expected_token_sha256=""
+  local pod=""
+
+  # On a rerun, OpenBao is authoritative. Local bootstrap inputs may be stale
+  # after an operator rotates the provider-issued GitHub credential.
+  if [[ -n "${openbao_token:-}" ]]; then
+    openbao_token_value="$(read_openbao_app_field gitea/push-mirror token "${openbao_token}" || true)"
+    if [[ -n "${openbao_token_value}" ]]; then
+      openbao_repo_url="$(read_openbao_app_field gitea/push-mirror remote_url "${openbao_token}" || true)"
+      openbao_username="$(read_openbao_app_field gitea/push-mirror username "${openbao_token}" || true)"
+      mirror_token="${openbao_token_value}"
+      mirror_repo_url="${openbao_repo_url:-${mirror_repo_url}}"
+      mirror_username="${openbao_username:-${mirror_username}}"
+    fi
+  fi
+
+  if [[ -z "${mirror_repo_url}" || -z "${mirror_username}" || -z "${mirror_token}" ]]; then
+    echo "[${phase_label}] Gitea push mirror is not fully configured; skipping" >&2
+    return 0
+  fi
+  if ! repo_url_is_github "${mirror_repo_url}"; then
+    echo "[${phase_label}] Gitea push mirror target is not a GitHub repo; skipping auto mirror setup" >&2
+    return 0
+  fi
+  if ! github_token_looks_like_pat "${mirror_token}"; then
+    echo "[${phase_label}] Gitea push mirror requires a stable GitHub PAT-style token; skipping auto mirror setup" >&2
+    return 0
+  fi
+
+  # Seed only when the app path is absent. Once present, the reads above ensure
+  # a stale node-local value can never replace OpenBao during a rerun.
+  if [[ -z "${openbao_token_value}" && -n "${openbao_token:-}" ]]; then
+    seed_openbao_app_fields gitea/push-mirror "${openbao_token}" \
+      "remote_url=${mirror_repo_url}" \
+      "username=${mirror_username}" \
+      "token=${mirror_token}"
+  fi
+
+  "${kubectl_bin}" create namespace gitea --dry-run=client -o yaml \
+    | "${kubectl_bin}" apply -f - >/dev/null
+  "${kubectl_bin}" -n gitea create secret generic gitea-push-mirror \
+    --from-literal=remote_url="${mirror_repo_url}" \
+    --from-literal=username="${mirror_username}" \
+    --from-literal=token="${mirror_token}" \
+    --dry-run=client -o yaml \
+    | "${kubectl_bin}" -n gitea apply -f - >/dev/null
+
+  pod="$(find_ready_gitea_pod)" || {
+    echo "[${phase_label}] no ready Gitea pod found for push mirror setup" >&2
+    return 1
+  }
+  expected_token_sha256="$(printf '%s' "${mirror_token}" | sha256sum | awk '{print $1}')"
+
+  if ! "${kubectl_bin}" -n gitea exec -i "${pod}" -c gitea -- env \
+    TARGET_OWNER="${target_owner}" \
+    TARGET_REPO="${target_repo}" \
+    EXPECTED_REPO_URL="${mirror_repo_url}" \
+    EXPECTED_USERNAME="${mirror_username}" \
+    EXPECTED_TOKEN_SHA256="${expected_token_sha256}" \
+    sh -s -- <<'EOF'
+set -eu
+
+target_owner="${TARGET_OWNER:?}"
+target_repo="${TARGET_REPO:?}"
+credential_dir="/var/run/adaetum/push-mirror"
+
+# The Secret may have been created after this pod started. Kubelet refreshes
+# projected Secret volumes asynchronously, so wait for the exact reviewed
+# credential without passing the credential itself through pod exec.
+credential_ready=false
+for _ in $(seq 1 90); do
+  if [ -r "${credential_dir}/remote_url" ] \
+    && [ -r "${credential_dir}/username" ] \
+    && [ -r "${credential_dir}/token" ] \
+    && [ "$(cat "${credential_dir}/remote_url")" = "${EXPECTED_REPO_URL}" ] \
+    && [ "$(cat "${credential_dir}/username")" = "${EXPECTED_USERNAME}" ] \
+    && [ "$(sha256sum "${credential_dir}/token" | awk '{print $1}')" = "${EXPECTED_TOKEN_SHA256}" ]; then
+    credential_ready=true
+    break
+  fi
+  sleep 2
+done
+if [ "${credential_ready}" != true ]; then
+  echo "OpenBao delivery did not reach Gitea's projected push-mirror volume" >&2
+  exit 1
+fi
+
+repo_path=""
+for candidate in \
+  "/data/git/repositories/${target_owner}/${target_repo}.git" \
+  "/data/git/gitea-repositories/${target_owner}/${target_repo}.git"
+do
+  if [ -d "${candidate}" ]; then
+    repo_path="${candidate}"
+    break
+  fi
+done
+if [ -z "${repo_path}" ]; then
+  repo_path="$(find /data/git -type d -path "*/${target_owner}/${target_repo}.git" 2>/dev/null | head -n 1 || true)"
+fi
+if [ -z "${repo_path}" ] || [ ! -d "${repo_path}" ]; then
+  echo "missing Gitea repository path for ${target_owner}/${target_repo}" >&2
+  exit 1
+fi
+
+hooks_dir="${repo_path}/hooks"
+mkdir -p "${hooks_dir}"
+
+# Remove credentials written by the legacy hook implementation. They are no
+# longer an authority or recovery copy once the projected Secret is available.
+rm -f \
+  "${hooks_dir}/.github-mirror.username" \
+  "${hooks_dir}/.github-mirror.password" \
+  "${hooks_dir}/.github-mirror.url"
+
+cat >"${hooks_dir}/.github-mirror-askpass.sh" <<'EOF_ASKPASS'
+#!/bin/sh
+credential_dir=/var/run/adaetum/push-mirror
+case "$1" in
+  *sername*) cat "${credential_dir}/username" ;;
+  *) cat "${credential_dir}/token" ;;
+esac
+EOF_ASKPASS
+chmod 0700 "${hooks_dir}/.github-mirror-askpass.sh"
+
+cat >"${hooks_dir}/post-receive" <<'EOF_HOOK'
+#!/bin/sh
+set -eu
+(
+  hooks_dir="$(dirname "$0")"
+  repo_dir="$(dirname "${hooks_dir}")"
+  credential_dir=/var/run/adaetum/push-mirror
+  export GIT_TERMINAL_PROMPT=0
+  export GIT_ASKPASS="${hooks_dir}/.github-mirror-askpass.sh"
+  git -C "${repo_dir}" push --mirror "$(cat "${credential_dir}/remote_url")" \
+    >>"${hooks_dir}/github-mirror.log" 2>&1 || true
+) &
+EOF_HOOK
+chmod 0700 "${hooks_dir}/post-receive"
+
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS="${hooks_dir}/.github-mirror-askpass.sh"
+if ! git -C "${repo_path}" push --mirror "$(cat "${credential_dir}/remote_url")" \
+  >>"${hooks_dir}/github-mirror.log" 2>&1; then
+  echo "initial recovery-mirror push failed" >&2
+  tail -n 20 "${hooks_dir}/github-mirror.log" >&2 || true
+  exit 1
+fi
+EOF
+  then
+    echo "[${phase_label}] failed to configure Gitea push mirror" >&2
+    return 1
+  fi
+
+  echo "[${phase_label}] configured OpenBao-backed Gitea push mirror"
 }
 # Domain and host normalization helpers
 

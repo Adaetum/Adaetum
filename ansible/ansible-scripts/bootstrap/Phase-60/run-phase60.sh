@@ -184,12 +184,12 @@ phase60_log_source_repo_auth() {
 }
 
 rehydrate_ingress_vip_config() {
-  local secret_ns="ingress"
-  local secret_name="ingress-vip-config"
+  local config_ns="ingress"
+  local config_name="ingress-vip-config"
   local internal_vip=""
   local external_vip=""
 
-  if ! "${kubectl_bin}" -n "${secret_ns}" get secret "${secret_name}" >/dev/null 2>&1; then
+  if ! "${kubectl_bin}" -n "${config_ns}" get configmap "${config_name}" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -198,8 +198,8 @@ rehydrate_ingress_vip_config() {
     return 0
   fi
 
-  internal_vip="$(read_secret_key_plain "${secret_ns}" "${secret_name}" ingress_internal_vip)"
-  external_vip="$(read_secret_key_plain "${secret_ns}" "${secret_name}" ingress_external_vip)"
+  internal_vip="$(read_configmap_key_plain "${config_ns}" "${config_name}" ingress_internal_vip)"
+  external_vip="$(read_configmap_key_plain "${config_ns}" "${config_name}" ingress_external_vip)"
 
   if [[ -n "${internal_vip}" ]]; then
     INGRESS_INTERNAL_VIP="${internal_vip}"
@@ -209,7 +209,7 @@ rehydrate_ingress_vip_config() {
   fi
 
   if [[ -n "${INGRESS_INTERNAL_VIP:-}" || -n "${INGRESS_EXTERNAL_VIP:-}" ]]; then
-    echo "[phase60] hydrated ingress VIP config from ${secret_ns}/${secret_name}"
+    echo "[phase60] hydrated ingress VIP config from ${config_ns}/${config_name}"
   fi
 }
 
@@ -253,18 +253,33 @@ ensure_authentik_secret() {
   local bootstrap_password="${3:-}"
   local bootstrap_token="${4:-}"
   if [[ -z "${secret_key}" || -z "${postgresql_password}" || -z "${bootstrap_password}" || -z "${bootstrap_token}" ]]; then
-    echo "[phase60] Authentik bootstrap secret is incomplete; cannot create authentik-secrets" >&2
+    echo "[phase60] Authentik bootstrap credentials are incomplete" >&2
     return 1
   fi
   "${kubectl_bin}" create namespace authentik --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  "${kubectl_bin}" -n authentik create secret generic authentik-secrets \
+  "${kubectl_bin}" -n authentik create secret generic authentik-encryption \
     --from-literal=secret_key="${secret_key}" \
+    --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
+  "${kubectl_bin}" -n authentik create secret generic authentik-postgresql \
     --from-literal=postgresql_password="${postgresql_password}" \
     --from-literal=password="${postgresql_password}" \
     --from-literal=postgres-password="${postgresql_password}" \
+    --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
+  "${kubectl_bin}" -n authentik create secret generic authentik-admin \
+    --from-literal=admin_username=akadmin \
     --from-literal=bootstrap_password="${bootstrap_password}" \
     --from-literal=bootstrap_token="${bootstrap_token}" \
     --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
+  seed_openbao_app_fields authentik/encryption "${openbao_token:-}" \
+    "secret_key=${secret_key}"
+  seed_openbao_app_fields authentik/postgresql "${openbao_token:-}" \
+    "postgresql_password=${postgresql_password}" \
+    "password=${postgresql_password}" \
+    "postgres-password=${postgresql_password}"
+  seed_openbao_app_fields authentik/admin "${openbao_token:-}" \
+    admin_username=akadmin \
+    "bootstrap_password=${bootstrap_password}" \
+    "bootstrap_token=${bootstrap_token}"
 }
 
 ensure_headlamp_admin_token() {
@@ -310,166 +325,6 @@ EOF
   echo "[phase60] failed waiting for Headlamp admin service-account token" >&2
   return 1
 }
-
-
-ensure_homepage_widget_secret() {
-  local grafana_admin_password=""
-  local cloudflare_account_id=""
-  local cloudflare_api_auth=""
-  local cloudflare_tunnel_id=""
-  local tailscale_api_auth=""
-  local tailscale_device_id=""
-  local existing_grafana_admin_password=""
-  local existing_cloudflare_account_id=""
-  local existing_cloudflare_api_auth=""
-  local existing_cloudflare_tunnel_id=""
-  local existing_tailscale_api_auth=""
-  local existing_tailscale_device_id=""
-
-  grafana_admin_password="${HOMEPAGE_GRAFANA_ADMIN_PASSWORD:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/grafana_admin_password")}"
-  cloudflare_account_id="${CLOUDFLARE_ACCOUNT_ID:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/cloudflare_account_id")}"
-  cloudflare_api_auth="${CLOUDFLARE_API_TOKEN:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/cloudflare_api_token")}"
-  cloudflare_tunnel_id="${RANCHER_CLOUDFLARED_TUNNEL_ID:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/rancher_cloudflared_tunnel_id")}"
-  tailscale_api_auth="${HOMEPAGE_TAILSCALE_API_AUTH:-${TAILSCALE_USER_API_TOKEN:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/homepage_tailscale_api_auth")}}"
-  tailscale_device_id="${HOMEPAGE_TAILSCALE_DEVICE_ID:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/homepage_tailscale_device_id")}"
-  if [[ -z "${tailscale_device_id}" ]] && command -v tailscale >/dev/null 2>&1; then
-    tailscale_device_id="$(
-      tailscale status --json 2>/dev/null | python3 - <<'PY'
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print("")
-    raise SystemExit(0)
-self_data = data.get("Self") or {}
-print((self_data.get("ID") or "").strip())
-PY
-    )"
-  fi
-  if [[ -z "${cloudflare_account_id}" && -n "${openbao_token:-}" ]]; then
-    cloudflare_account_id="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-        bao kv get -field=cloudflare_account_id secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  if [[ -z "${cloudflare_api_auth}" && -n "${openbao_token:-}" ]]; then
-    cloudflare_api_auth="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-        bao kv get -field=cloudflare_api_token secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  if [[ -z "${cloudflare_tunnel_id}" && -n "${openbao_token:-}" ]]; then
-    cloudflare_tunnel_id="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-      bao kv get -field=rancher_cloudflared_tunnel_id secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  if [[ -z "${tailscale_api_auth}" && -n "${openbao_token:-}" ]]; then
-    tailscale_api_auth="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-        bao kv get -field=homepage_tailscale_api_auth secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  if [[ -z "${tailscale_device_id}" && -n "${openbao_token:-}" ]]; then
-    tailscale_device_id="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-      bao kv get -field=homepage_tailscale_device_id secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  existing_grafana_admin_password="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GRAFANA_ADMIN_PASSWORD)"
-  existing_cloudflare_account_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_ACCOUNT_ID)"
-  existing_cloudflare_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_API_AUTH)"
-  existing_cloudflare_tunnel_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_TUNNEL_ID)"
-  existing_tailscale_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_API_AUTH)"
-  existing_tailscale_device_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_DEVICE_ID)"
-
-  if [[ -z "${grafana_admin_password}" ]]; then
-    grafana_admin_password="${existing_grafana_admin_password}"
-  fi
-  if [[ -z "${cloudflare_account_id}" ]]; then
-    cloudflare_account_id="${existing_cloudflare_account_id}"
-  fi
-  if [[ -z "${cloudflare_api_auth}" ]]; then
-    cloudflare_api_auth="${existing_cloudflare_api_auth}"
-  fi
-  if [[ -z "${cloudflare_tunnel_id}" ]]; then
-    cloudflare_tunnel_id="${existing_cloudflare_tunnel_id}"
-  fi
-  if [[ -z "${tailscale_api_auth}" ]]; then
-    tailscale_api_auth="${existing_tailscale_api_auth}"
-  fi
-  if [[ -z "${tailscale_device_id}" ]]; then
-    tailscale_device_id="${existing_tailscale_device_id}"
-  fi
-
-  if [[ -z "${cloudflare_account_id}" || -z "${cloudflare_api_auth}" || -z "${cloudflare_tunnel_id}" ]]; then
-    cloudflare_account_id=""
-    cloudflare_api_auth=""
-    cloudflare_tunnel_id=""
-  fi
-
-  if [[ -z "${tailscale_api_auth}" || -z "${tailscale_device_id}" ]]; then
-    tailscale_api_auth=""
-    tailscale_device_id=""
-  fi
-
-  if [[ -n "${grafana_admin_password}" ]]; then
-    write_secret_file grafana_admin_password "${grafana_admin_password}"
-  fi
-  if [[ -n "${cloudflare_account_id}" ]]; then
-    write_secret_file cloudflare_account_id "${cloudflare_account_id}"
-  fi
-  if [[ -n "${cloudflare_api_auth}" ]]; then
-    write_secret_file cloudflare_api_token "${cloudflare_api_auth}"
-  fi
-  if [[ -n "${cloudflare_tunnel_id}" ]]; then
-    write_secret_file rancher_cloudflared_tunnel_id "${cloudflare_tunnel_id}"
-  fi
-  if [[ -n "${tailscale_api_auth}" ]]; then
-    write_secret_file homepage_tailscale_api_auth "${tailscale_api_auth}"
-  fi
-  if [[ -n "${tailscale_device_id}" ]]; then
-    write_secret_file homepage_tailscale_device_id "${tailscale_device_id}"
-  fi
-
-  if [[ -z "${grafana_admin_password}" && -z "${cloudflare_account_id}" && -z "${cloudflare_api_auth}" && -z "${cloudflare_tunnel_id}" && -z "${tailscale_api_auth}" && -z "${tailscale_device_id}" ]]; then
-    echo "[phase60] homepage widget secrets unavailable; skipping homepage-widget-secrets"
-    return 0
-  fi
-
-  "${kubectl_bin}" create namespace homepage --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  "${kubectl_bin}" -n homepage create secret generic homepage-widget-secrets \
-    --from-literal=HOMEPAGE_GRAFANA_ADMIN_PASSWORD="${grafana_admin_password}" \
-    --from-literal=HOMEPAGE_CLOUDFLARE_ACCOUNT_ID="${cloudflare_account_id}" \
-    --from-literal=HOMEPAGE_CLOUDFLARE_TUNNEL_ID="${cloudflare_tunnel_id}" \
-    --from-literal=HOMEPAGE_CLOUDFLARE_API_AUTH="${cloudflare_api_auth}" \
-    --from-literal=HOMEPAGE_TAILSCALE_API_AUTH="${tailscale_api_auth}" \
-    --from-literal=HOMEPAGE_TAILSCALE_DEVICE_ID="${tailscale_device_id}" \
-    --dry-run=client -o yaml | "${kubectl_bin}" -n homepage apply -f - >/dev/null
-
-  patch_openbao_widget_fields_nonempty "${openbao_token:-}" \
-    "grafana_admin_password=${grafana_admin_password}" \
-    "cloudflare_account_id=${cloudflare_account_id}" \
-    "cloudflare_api_token=${cloudflare_api_auth}" \
-    "rancher_cloudflared_tunnel_id=${cloudflare_tunnel_id}" \
-    "homepage_tailscale_api_auth=${tailscale_api_auth}" \
-    "homepage_tailscale_device_id=${tailscale_device_id}"
-}
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -772,6 +627,11 @@ data:
   .dockerconfigjson: $(printf '%s' "${dockerconfigjson}" | base64 | tr -d '\r\n')
 EOF
 
+  seed_openbao_app_fields gitea/registry "${openbao_token:-}" \
+    "host=${registry_host}" \
+    "username=${registry_username}" \
+    "token=${registry_token}"
+
   if [[ "${push_host}" != "${registry_host}" ]]; then
     echo "[phase60] ensured ansible-runner imagePullSecret ${secret_name} for ${registry_host} and internal push host ${push_host}"
   else
@@ -953,7 +813,12 @@ ensure_external_dns_cloudflare_secret() {
   local token=""
   local token_source=""
 
-  if [[ -n "${CLOUDFLARE_ZONE_API_TOKEN:-}" ]]; then
+  token="$(read_openbao_app_field ingress/external-dns api_token "${openbao_token:-}" || true)"
+  if [[ -n "${token}" ]]; then
+    token_source="OpenBao apps/ingress/external-dns"
+  elif token="$(read_k8s_secret_key ingress external-dns-cloudflare api-token)" && [[ -n "${token}" ]]; then
+    token_source="existing OpenBao delivery Secret"
+  elif [[ -n "${CLOUDFLARE_ZONE_API_TOKEN:-}" ]]; then
     token="${CLOUDFLARE_ZONE_API_TOKEN}"
     token_source="CLOUDFLARE_ZONE_API_TOKEN"
   elif [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
@@ -977,6 +842,7 @@ stringData:
   api-token: ${token}
 EOF
 
+  seed_openbao_app_fields ingress/external-dns "${openbao_token:-}" "api_token=${token}"
   write_secret_file external_dns_cloudflare_token_source "${token_source}"
   return 0
 }
@@ -1180,11 +1046,10 @@ ensure_routing_frontdoor_vip() {
 
   cat <<EOF | "${kubectl_bin}" -n ingress apply -f - >/dev/null 2>&1 || true
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
   name: ingress-vip-config
-type: Opaque
-stringData:
+data:
   ingress_internal_vip: "${internal_vip_eff}"
   ingress_external_vip: "${external_vip_eff}"
   ingress_controller_service: "${routing_service_ref}"
@@ -1208,6 +1073,11 @@ reconcile_argocd_bootstrap_repo() {
   echo "[phase60] reconciling Argo CD bootstrap repo -> ${repo_url}"
 
   if [[ -n "${repo_token}" ]]; then
+    seed_openbao_app_fields argocd/repository "${openbao_token:-}" \
+      "url=${repo_url}" \
+      "username=${repo_username}" \
+      "password=${repo_token}" \
+      "branch=${repo_branch}"
     cat <<EOF | "${kubectl_bin}" -n argocd apply -f -
 apiVersion: v1
 kind: Secret
@@ -1411,115 +1281,15 @@ stringData:
   password: ${admin_password}
   email: gitea-admin@example.com
 EOF
+  seed_openbao_app_fields gitea/admin "${openbao_token:-}" \
+    username=gitea-admin \
+    "password=${admin_password}" \
+    email=gitea-admin@example.com
 }
 
 configure_gitea_push_mirror() {
-  local target_owner="${1:?owner}"
-  local target_repo="${2:?repo}"
-  local mirror_repo_url="${3:-}"
-  local mirror_username="${4:-}"
-  local mirror_token="${5:-}"
-  local pod=""
-
-  if [[ -z "${mirror_repo_url}" || -z "${mirror_username}" || -z "${mirror_token}" ]]; then
-    echo "[phase60] Gitea push mirror is not fully configured; skipping" >&2
-    return 0
-  fi
-  if ! repo_url_is_github "${mirror_repo_url}"; then
-    echo "[phase60] Gitea push mirror target is not a GitHub repo; skipping auto push mirror for ${mirror_repo_url}" >&2
-    return 0
-  fi
-  if ! github_token_looks_like_pat "${mirror_token}"; then
-    echo "[phase60] Gitea push mirror requires a stable GitHub PAT-style token; skipping auto mirror setup" >&2
-    return 0
-  fi
-
-  pod="$(find_ready_gitea_pod)" || {
-    echo "[phase60] no ready Gitea pod found for push mirror setup" >&2
-    return 1
-  }
-
-  if ! "${kubectl_bin}" -n gitea exec -i "${pod}" -c gitea -- env \
-    TARGET_OWNER="${target_owner}" \
-    TARGET_REPO="${target_repo}" \
-    MIRROR_REPO_URL="${mirror_repo_url}" \
-    MIRROR_USERNAME="${mirror_username}" \
-    MIRROR_TOKEN="${mirror_token}" \
-    sh -s -- <<'EOF'
-set -eu
-
-target_owner="${TARGET_OWNER:?}"
-target_repo="${TARGET_REPO:?}"
-mirror_repo_url="${MIRROR_REPO_URL:?}"
-mirror_username="${MIRROR_USERNAME:?}"
-mirror_token="${MIRROR_TOKEN:?}"
-
-repo_path=""
-for candidate in \
-  "/data/git/repositories/${target_owner}/${target_repo}.git" \
-  "/data/git/gitea-repositories/${target_owner}/${target_repo}.git"
-do
-  if [ -d "${candidate}" ]; then
-    repo_path="${candidate}"
-    break
-  fi
-done
-if [ -z "${repo_path}" ]; then
-  repo_path="$(find /data/git -type d -path "*/${target_owner}/${target_repo}.git" 2>/dev/null | head -n 1 || true)"
-fi
-if [ -z "${repo_path}" ] || [ ! -d "${repo_path}" ]; then
-  echo "missing repo path ${repo_path}" >&2
-  exit 1
-fi
-
-hooks_dir="${repo_path}/hooks"
-mkdir -p "${hooks_dir}"
-
-printf '%s' "${mirror_username}" >"${hooks_dir}/.github-mirror.username"
-printf '%s' "${mirror_token}" >"${hooks_dir}/.github-mirror.password"
-printf '%s' "${mirror_repo_url}" >"${hooks_dir}/.github-mirror.url"
-chmod 0600 "${hooks_dir}/.github-mirror.username" "${hooks_dir}/.github-mirror.password" "${hooks_dir}/.github-mirror.url"
-
-cat >"${hooks_dir}/.github-mirror-askpass.sh" <<'EOF_ASKPASS'
-#!/bin/sh
-hooks_dir="$(dirname "$0")"
-case "$1" in
-  *sername*) cat "${hooks_dir}/.github-mirror.username" ;;
-  *) cat "${hooks_dir}/.github-mirror.password" ;;
-esac
-EOF_ASKPASS
-chmod 0700 "${hooks_dir}/.github-mirror-askpass.sh"
-
-cat >"${hooks_dir}/post-receive" <<'EOF_HOOK'
-#!/bin/sh
-set -eu
-(
-  hooks_dir="$(dirname "$0")"
-  repo_dir="$(dirname "${hooks_dir}")"
-  export GIT_TERMINAL_PROMPT=0
-  export GIT_ASKPASS="${hooks_dir}/.github-mirror-askpass.sh"
-  git -C "${repo_dir}" push --mirror "$(cat "${hooks_dir}/.github-mirror.url")" >>"${hooks_dir}/github-mirror.log" 2>&1 || true
-) &
-EOF_HOOK
-chmod 0700 "${hooks_dir}/post-receive"
-
-mirror_url="$(cat "${hooks_dir}/.github-mirror.url")"
-export GIT_TERMINAL_PROMPT=0
-export GIT_ASKPASS="${hooks_dir}/.github-mirror-askpass.sh"
-if ! git -C "${repo_path}" push --mirror "${mirror_url}" >>"${hooks_dir}/github-mirror.log" 2>&1; then
-  echo "initial mirror push failed for ${mirror_url}" >&2
-  tail -n 20 "${hooks_dir}/github-mirror.log" >&2 || true
-  exit 1
-fi
-EOF
-  then
-    echo "[phase60] failed to configure Gitea push mirror" >&2
-    return 1
-  fi
-
-  echo "[phase60] configured Gitea push mirror to ${mirror_repo_url}"
+  configure_gitea_push_mirror_from_openbao "phase60" "$@"
 }
-
 ensure_gitea_actions_runner() {
   local runner_token="${1:-}"
   local instance_url="${2:-${GITEA_INTERNAL_URL:-}}"
@@ -1554,6 +1324,8 @@ kind: Deployment
 metadata:
   name: gitea-actions-runner
   namespace: gitea
+  annotations:
+    secret.reloader.stakater.com/reload: gitea-actions-runner
 spec:
   replicas: 1
   selector:
@@ -2751,9 +2523,22 @@ fi
 github_app_refresh_repo_auth
 
 if [[ "${PHASE60_MODE}" != "realize" ]]; then
-argocd_admin_password="${ARGOCD_ADMIN_PASSWORD:-}"
+argocd_admin_password="$(read_openbao_app_field argocd/admin password "${openbao_token}" || true)"
+if [[ -z "${argocd_admin_password}" ]]; then
+  argocd_admin_password="${ARGOCD_ADMIN_PASSWORD:-}"
+fi
 if [[ -z "${argocd_admin_password}" && -n "${BOOTSTRAP_SECRET_DIR:-}" ]]; then
   argocd_admin_password="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_admin_password")"
+fi
+argocd_server_secret_key="$(read_openbao_app_field argocd/runtime server_secret_key "${openbao_token}" || true)"
+argocd_server_secret_key="${argocd_server_secret_key:-${ARGOCD_SERVER_SECRET_KEY:-}}"
+if [[ -z "${argocd_server_secret_key}" && -n "${BOOTSTRAP_SECRET_DIR:-}" ]]; then
+  argocd_server_secret_key="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_server_secret_key")"
+fi
+argocd_redis_password="$(read_openbao_app_field argocd/runtime redis_password "${openbao_token}" || true)"
+argocd_redis_password="${argocd_redis_password:-${ARGOCD_REDIS_PASSWORD:-}}"
+if [[ -z "${argocd_redis_password}" && -n "${BOOTSTRAP_SECRET_DIR:-}" ]]; then
+  argocd_redis_password="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_redis_password")"
 fi
 
 preferred_seed_repo_url="${GITEA_SEED_SOURCE_REPO_URL:-${ARGOCD_GITHUB_REPO_URL:-}}"
@@ -2763,8 +2548,14 @@ bootstrap_seed_repo_url="${preferred_seed_repo_url:-${ARGOCD_REPO_URL:-}}"
 bootstrap_seed_repo_branch="${preferred_seed_repo_branch:-${ARGOCD_REPO_BRANCH:-HEAD}}"
 bootstrap_seed_repo_token="${preferred_seed_repo_token:-}"
 
-gitea_repo_username_effective="$(read_k8s_secret_key gitea gitea-admin-secret username)"
-gitea_repo_password_effective="$(read_k8s_secret_key gitea gitea-admin-secret password)"
+gitea_repo_username_effective="$(read_openbao_app_field gitea/admin username "${openbao_token}" || true)"
+gitea_repo_password_effective="$(read_openbao_app_field gitea/admin password "${openbao_token}" || true)"
+if [[ -z "${gitea_repo_username_effective}" ]]; then
+  gitea_repo_username_effective="$(read_k8s_secret_key gitea gitea-admin-secret username)"
+fi
+if [[ -z "${gitea_repo_password_effective}" ]]; then
+  gitea_repo_password_effective="$(read_k8s_secret_key gitea gitea-admin-secret password)"
+fi
 if [[ -z "${gitea_repo_username_effective}" ]]; then
   gitea_repo_username_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_admin_username")"
 fi
@@ -2793,11 +2584,43 @@ fi
 if [[ -n "${RANCHER_CLOUDFLARED_TUNNEL_ID:-}" ]]; then
   write_secret_file rancher_cloudflared_tunnel_id "${RANCHER_CLOUDFLARED_TUNNEL_ID}"
 fi
-authentik_secret_key_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_secret_key")"
-authentik_postgresql_password_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_postgresql_password")"
-authentik_admin_username_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
-authentik_admin_password_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_password")"
-authentik_bootstrap_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_bootstrap_token")"
+# Database rotation is migration-gated, while Authentik's post-2023.6 signing
+# key and administrator credentials can safely follow OpenBao immediately.
+authentik_secret_key_effective="$(read_openbao_app_field authentik/encryption secret_key "${openbao_token}" || true)"
+authentik_postgresql_password_effective="$(read_k8s_secret_key authentik authentik-postgresql postgresql_password)"
+authentik_admin_username_effective="$(read_openbao_app_field authentik/admin admin_username "${openbao_token}" || true)"
+authentik_admin_password_effective="$(read_openbao_app_field authentik/admin bootstrap_password "${openbao_token}" || true)"
+authentik_bootstrap_token_effective="$(read_openbao_app_field authentik/admin bootstrap_token "${openbao_token}" || true)"
+if [[ -z "${authentik_secret_key_effective}" ]]; then
+  authentik_secret_key_effective="$(read_k8s_secret_key authentik authentik-encryption secret_key)"
+fi
+if [[ -z "${authentik_postgresql_password_effective}" ]]; then
+  authentik_postgresql_password_effective="$(read_openbao_app_field authentik/postgresql postgresql_password "${openbao_token}" || true)"
+fi
+if [[ -z "${authentik_admin_username_effective}" ]]; then
+  authentik_admin_username_effective="$(read_k8s_secret_key authentik authentik-admin admin_username)"
+fi
+if [[ -z "${authentik_admin_password_effective}" ]]; then
+  authentik_admin_password_effective="$(read_k8s_secret_key authentik authentik-admin bootstrap_password)"
+fi
+if [[ -z "${authentik_bootstrap_token_effective}" ]]; then
+  authentik_bootstrap_token_effective="$(read_k8s_secret_key authentik authentik-admin bootstrap_token)"
+fi
+if [[ -z "${authentik_secret_key_effective}" ]]; then
+  authentik_secret_key_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_secret_key")"
+fi
+if [[ -z "${authentik_postgresql_password_effective}" ]]; then
+  authentik_postgresql_password_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_postgresql_password")"
+fi
+if [[ -z "${authentik_admin_username_effective}" ]]; then
+  authentik_admin_username_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
+fi
+if [[ -z "${authentik_admin_password_effective}" ]]; then
+  authentik_admin_password_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_password")"
+fi
+if [[ -z "${authentik_bootstrap_token_effective}" ]]; then
+  authentik_bootstrap_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_bootstrap_token")"
+fi
 headlamp_admin_token_effective=""
 authentik_admin_source="local-backup"
 
@@ -2859,7 +2682,6 @@ if [[ -n "${authentik_secret_key_effective:-}" || -n "${authentik_admin_password
     "${authentik_bootstrap_token_effective}" || true
 fi
 
-ensure_homepage_widget_secret || true
 headlamp_admin_token_effective="$(ensure_headlamp_admin_token || true)"
 
 if [[ -n "${authentik_admin_username_effective:-}" ]]; then
@@ -3162,6 +2984,14 @@ if [[ -n "${argocd_admin_password}" ]]; then
 else
   echo "[phase60] ARGOCD_ADMIN_PASSWORD missing; Argo CD will use chart defaults." >&2
 fi
+if [[ -z "${argocd_server_secret_key}" ]]; then
+  fail_local_requirement "Argo CD server signing key is missing; rerun Phase 20 and Phase 40 before installing the control pair"
+fi
+if [[ -z "${argocd_redis_password}" ]]; then
+  fail_local_requirement "Argo CD Redis password is missing; rerun Phase 20 and Phase 40 before installing the control pair"
+fi
+export ARGOCD_SERVER_SECRET_KEY="${argocd_server_secret_key}"
+export ARGOCD_REDIS_PASSWORD="${argocd_redis_password}"
 
 if [[ "${PHASE60_RECONCILE_ONLY}" == "1" || "${PHASE60_RECONCILE_ONLY}" == "true" ]]; then
   echo "[phase60] reconcile-only mode: skipping Argo CD install playbook"
@@ -3194,7 +3024,10 @@ else
   run_or_fail \
     "failed configuring rke2 registry runtime for ansible-runner pulls" \
     ensure_ansible_runner_registry_runtime
-  gitea_runner_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
+  gitea_runner_token_effective="$(read_openbao_app_field gitea/actions-runner token "${openbao_token}" || true)"
+  if [[ -z "${gitea_runner_token_effective}" ]]; then
+    gitea_runner_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
+  fi
   run_or_fail \
     "failed ensuring Gitea actions runner deployment" \
     ensure_gitea_actions_runner \
@@ -3251,6 +3084,15 @@ else
   gitea_push_mirror_repo_url_effective="${GITEA_PUSH_MIRROR_REPO_URL:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_repo_url")}"
   gitea_push_mirror_username_effective="${GITEA_PUSH_MIRROR_USERNAME:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_username")}"
   gitea_push_mirror_token_effective="${GITEA_PUSH_MIRROR_TOKEN:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_token")}"
+  if [[ -n "${openbao_token}" ]]; then
+    openbao_push_mirror_token="$(read_openbao_app_field gitea/push-mirror token "${openbao_token}" || true)"
+    if [[ -n "${openbao_push_mirror_token}" ]]; then
+      gitea_push_mirror_token_effective="${openbao_push_mirror_token}"
+      gitea_push_mirror_repo_url_effective="$(read_openbao_app_field gitea/push-mirror remote_url "${openbao_token}" || true)"
+      gitea_push_mirror_username_effective="$(read_openbao_app_field gitea/push-mirror username "${openbao_token}" || true)"
+      gitea_push_mirror_enabled_effective="1"
+    fi
+  fi
   if [[ -z "${gitea_push_mirror_repo_url_effective}" ]] && [[ -n "${preferred_seed_repo_url:-}" ]] && repo_url_is_github "${preferred_seed_repo_url}"; then
     gitea_push_mirror_repo_url_effective="${preferred_seed_repo_url}"
   fi
@@ -3273,15 +3115,6 @@ else
       write_secret_file gitea_push_mirror_repo_url "${gitea_push_mirror_repo_url_effective}"
       write_secret_file gitea_push_mirror_username "${gitea_push_mirror_username_effective}"
       write_secret_file gitea_push_mirror_token "${gitea_push_mirror_token_effective}"
-      if [[ -n "${openbao_token}" ]]; then
-        retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-          env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-          bao kv patch secret/bootstrap/platform \
-            "gitea_push_mirror_enabled=1" \
-            "gitea_push_mirror_repo_url=${gitea_push_mirror_repo_url_effective}" \
-            "gitea_push_mirror_username=${gitea_push_mirror_username_effective}" \
-            "gitea_push_mirror_token=${gitea_push_mirror_token_effective}" >/dev/null 2>&1 || true
-      fi
       if ! configure_gitea_push_mirror \
         "${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
         "${GITEA_SEED_TARGET_REPO:-cluster}" \
@@ -3614,14 +3447,13 @@ EOF
     write_secret_file ingress_internal_vip "${internal_vip_eff}"
     write_secret_file ingress_external_vip "${external_vip_eff}"
 
-    # Store ingress VIP settings in-cluster as a normal Secret for audit/recovery export.
+    # Persist discovered network configuration without misclassifying it as a credential.
     cat <<EOF | "${kubectl_bin}" -n ingress apply -f - >/dev/null 2>&1 || true
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
   name: ingress-vip-config
-type: Opaque
-stringData:
+data:
   ingress_internal_vip: "${internal_vip_eff}"
   ingress_external_vip: "${external_vip_eff}"
   ingress_controller_service: "${routing_service_ref}"

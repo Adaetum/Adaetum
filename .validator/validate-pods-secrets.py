@@ -6,9 +6,513 @@ import re
 import sys
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCAN_PATHS = [REPO_ROOT / "pods", REPO_ROOT / "setup.md"]
+
+ROTATION_CONTRACTS = {
+    "ansible/playbooks/day2.yml": (
+        "tailscale-user-sync",
+        "healthcheck",
+    ),
+    "ansible/Dockerfile": (
+        'ENV ANSIBLE_PLAYBOOK="playbooks/day2.yml"',
+    ),
+    "ansible/ansible-scripts/cron-entrypoint": (
+        'playbooks/day2.yml',
+    ),
+    "ansible/ansible-scripts/run-ansible": (
+        'playbooks/day2.yml',
+    ),
+    "pods/ansible/ansible/ansible-runner-deployment.yaml": (
+        'value: "playbooks/day2.yml"',
+        "secret.reloader.stakater.com/reload: gitea-registry-creds,tailscale-user-sync",
+        "secretName: tailscale-user-sync",
+    ),
+    "pods/ansible/ansible/tailscale-external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/ansible/tailscale",
+        "name: tailscale-user-sync",
+    ),
+    "pods/cloudflared/cloudflared/external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/cloudflared/tunnel",
+        "refreshInterval: 1m",
+    ),
+    "pods/ingress/external-dns/external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/ingress/external-dns",
+        "refreshInterval: 1m",
+    ),
+    "pods/cloudflared/cloudflared/deployment.yaml": (
+        'secret.reloader.stakater.com/auto: "true"',
+    ),
+    "pods/ingress/external-dns/deployment.yaml": (
+        'secret.reloader.stakater.com/auto: "true"',
+    ),
+    "pods/portal/homepage/external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/homepage/widgets",
+        "refreshInterval: 1m",
+        "secretKey: HOMEPAGE_ARGOCD_WIDGET_KEY",
+        "secretKey: HOMEPAGE_GITEA_WIDGET_AUTH",
+    ),
+    "pods/portal/homepage/grafana-external-secrets.yaml": (
+        "kind: ExternalSecret",
+        "name: homepage-grafana-active",
+        "key: apps/homepage/grafana",
+        "refreshPolicy: CreatedOnce",
+        "name: homepage-grafana",
+        "secretKey: HOMEPAGE_GRAFANA_USERNAME",
+        "secretKey: HOMEPAGE_GRAFANA_PASSWORD",
+    ),
+    "pods/portal/homepage/deployment.yaml": (
+        'secret.reloader.stakater.com/auto: "true"',
+        "name: homepage-grafana",
+    ),
+    "pods/portal/homepage/config/services.yaml": (
+        "username: __HOMEPAGE_GRAFANA_USERNAME__",
+        "password: __HOMEPAGE_GRAFANA_PASSWORD__",
+    ),
+    "pods/observability/apprise/external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/observability/apprise",
+        "refreshInterval: 1m",
+    ),
+    "pods/observability/apprise/apprise-deployment.yaml": (
+        'secret.reloader.stakater.com/auto: "true"',
+    ),
+    "pods/gitea/gitea-secret-sync/external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/gitea/admin",
+        "key: apps/gitea/encryption",
+        "key: apps/gitea/runtime",
+        "refreshPolicy: OnChange",
+        "refreshInterval: 1m",
+    ),
+    "pods/gitea/gitea-values.yaml": (
+        "secret.reloader.stakater.com/reload: gitea-admin-secret,gitea-postgresql,gitea-encryption,gitea-runtime",
+        "name: GITEA__DATABASE__PASSWD",
+        "name: GITEA__security__SECRET_KEY",
+        "name: GITEA__security__INTERNAL_TOKEN",
+        "name: GITEA__oauth2__JWT_SECRET",
+        "JWT_SIGNING_ALGORITHM: HS256",
+        "passwordMode: keepUpdated",
+        "secretName: gitea-push-mirror",
+        "mountPath: /var/run/adaetum/push-mirror",
+    ),
+    "pods/gitea/gitea-values.yaml.tmpl": (
+        "secret.reloader.stakater.com/reload: gitea-admin-secret,gitea-postgresql,gitea-encryption,gitea-runtime",
+        "name: GITEA__DATABASE__PASSWD",
+        "name: GITEA__security__SECRET_KEY",
+        "name: GITEA__security__INTERNAL_TOKEN",
+        "name: GITEA__oauth2__JWT_SECRET",
+        "JWT_SIGNING_ALGORITHM: HS256",
+        "passwordMode: keepUpdated",
+        "secretName: gitea-push-mirror",
+        "mountPath: /var/run/adaetum/push-mirror",
+    ),
+    "pods/authentik/authentik-secret-sync/external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/authentik/encryption",
+        "key: apps/authentik/postgresql",
+        "key: apps/authentik/admin",
+        "refreshInterval: 1m",
+    ),
+    "pods/authentik/authentik.app.yaml": (
+        'source_target_revision: "2026.5.5"',
+        "secret.reloader.stakater.com/reload: authentik-admin,authentik-postgresql,authentik-encryption",
+        "secret.reloader.stakater.com/reload: authentik-postgresql,authentik-encryption",
+        "name: authentik-encryption",
+        "name: authentik-postgresql",
+        "name: authentik-admin",
+        "user.set_password(password)",
+    ),
+    "pods/authentik/authentik-secret-sync/postgresql-rotation.yaml": (
+        "name: authentik-postgresql-rotation",
+        'resourceNames: ["authentik-postgresql"]',
+        "ALTER ROLE postgres PASSWORD",
+        "ALTER ROLE authentik PASSWORD",
+        "kubectl -n authentik patch secret authentik-postgresql",
+    ),
+    "pods/argocd/secret-sync/external-secrets.yaml": (
+        "name: argocd-repo-https",
+        "name: argocd-repository-bootstrap",
+        "key: apps/argocd/repository",
+    ),
+    "pods/argocd/secret-sync/admin-external-secret.yaml": (
+        "kind: ExternalSecret",
+        "name: argocd-admin-desired",
+        "key: apps/argocd/admin",
+        "name: argocd-runtime",
+        "key: apps/argocd/runtime",
+        "secretKey: server.secretkey",
+        "name: argocd-redis",
+        "secretKey: auth",
+        "property: redis_password",
+        "creationPolicy: Merge",
+    ),
+    "pods/argocd/secret-sync/admin-rotation.yaml": (
+        "name: argocd-admin-rotation",
+        "resourceNames: [\"argocd-secret\"]",
+        "htpasswd -niBC 10 admin",
+        "admin.passwordMtime",
+        "adaetum.io/admin-password-sha256",
+    ),
+    "pods/observability/grafana-secret-sync/external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/observability/grafana",
+        "name: grafana-encryption",
+        "secretKey: GF_SECURITY_SECRET_KEY",
+        "refreshPolicy: OnChange",
+        "refreshInterval: 1m",
+    ),
+    "pods/observability/grafana-secret-sync/homepage-external-secret.yaml": (
+        "kind: ExternalSecret",
+        "name: homepage-grafana-desired",
+        "namespace: observability",
+        "key: apps/homepage/grafana",
+        "refreshInterval: 1m",
+    ),
+    "pods/observability/grafana-secret-sync/homepage-viewer-rotation.yaml": (
+        "name: grafana-viewer-rotation",
+        'resourceNames: ["homepage-grafana"]',
+        'namespace: observability',
+        'namespace: homepage',
+        '"${grafana_url}/api/admin/users"',
+        '"${grafana_url}/api/admin/users/${user_id}/password"',
+        '"${grafana_url}/api/orgs/1/users/${user_id}"',
+        "'{\"role\":\"Viewer\"}'",
+        "authenticate /var/run/desired/username /var/run/desired/password",
+        "patch secret homepage-grafana",
+    ),
+    "pods/observability/grafana.app.yaml": (
+        'source_target_revision: "10.5.15"',
+        "secret.reloader.stakater.com/reload: grafana-admin,grafana-encryption",
+        "envFromSecret: grafana-encryption",
+        'admin reset-admin-password "${GF_SECURITY_ADMIN_PASSWORD}"',
+        "exec /run.sh",
+        "type: Recreate",
+        "storageClassName: longhorn",
+    ),
+    "pods/gitea/gitea-secret-sync/runner-external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/gitea/actions-runner",
+    ),
+    "pods/gitea/gitea-secret-sync/push-mirror-external-secret.yaml": (
+        "kind: ExternalSecret",
+        "name: gitea-push-mirror",
+        "key: apps/gitea/push-mirror",
+        "refreshInterval: 1m",
+        "property: remote_url",
+        "property: username",
+        "property: token",
+    ),
+    "pods/gitea/gitea-secret-sync/postgresql-external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/gitea/postgresql",
+        "name: gitea-postgresql-desired",
+    ),
+    "pods/gitea/gitea-secret-sync/postgresql-rotation.yaml": (
+        "name: gitea-postgresql-rotation",
+        'resourceNames: ["gitea-postgresql"]',
+        "ALTER ROLE postgres PASSWORD",
+        "ALTER ROLE gitea PASSWORD",
+        "kubectl -n gitea patch secret gitea-postgresql",
+    ),
+    "pods/ansible/ansible/registry-external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/gitea/registry",
+        "type: kubernetes.io/dockerconfigjson",
+    ),
+    "pods/secrets/openbao-sync/store.yaml": (
+        "kind: ClusterSecretStore",
+        "role: external-secrets",
+        "namespace: external-secrets",
+        "- openbao",
+    ),
+    "pods/secrets/openbao/policies/external-secrets.hcl": (
+        'path "secret/data/apps/*"',
+        'capabilities = ["read"]',
+    ),
+    "pods/secrets/openbao/policies/config.hcl": (
+        'path "auth/kubernetes/role/*"',
+        'path "sys/policies/acl/*"',
+    ),
+    "pods/secrets/rancher-secret-sync/external-secret.yaml": (
+        "kind: ExternalSecret",
+        "key: apps/rancher/admin",
+        "name: rancher-admin-desired",
+    ),
+    "pods/secrets/rancher-secret-sync/rotation.yaml": (
+        "name: rancher-admin-rotation",
+        'kind: "PasswordChangeRequest"',
+        "currentPassword: $current_password",
+        "newPassword: $new_password",
+        "patch secret bootstrap-secret",
+        "login_with_password /var/run/desired/password",
+    ),
+    "pods/secrets/openbao/config/job.yaml": (
+        "role=openbao-config",
+        "optional: true",
+        "token_policies=external-secrets",
+        "token_policies=openbao-config",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-90/run-phase99.sh": (
+        "discover_openbao_leaf_paths secret/apps",
+        "Refusing to burn local secrets without a complete workload-secret export.",
+        '"${discovered_app_paths[@]}"',
+        "app_export_failed",
+        '"${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"',
+        "/etc/ansible-bundle-bootstrap.env",
+        "/etc/tailscale-firstboot.env",
+        'Failed to remove first-boot credential file:',
+    ),
+    "ansible/ansible-scripts/bundle-bootstrap": (
+        "remove_first_boot_env_files()",
+        '"${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"',
+        "/etc/ansible-bundle-bootstrap.env",
+        "/etc/tailscale-firstboot.env",
+        "failed to remove first-boot credential file:",
+        "remove_first_boot_env_files\nbootstrap_phase_status_write",
+    ),
+    "ks-src/fragments/shared/portable/12-tailscale-firstboot-flow.shfrag": (
+        "remove_installed_bootstrap_artifacts()",
+        "/etc/tailscale-firstboot.env",
+        "/usr/local/sbin/ansible-bundle-bootstrap.sh",
+        "/usr/local/sbin/tailscale-firstboot.sh",
+        "/root/*-ks.cfg",
+        "remove_installed_bootstrap_artifacts\ntouch \"${done_file}\"",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh": (
+        "seed_openbao_app_fields()",
+        "seed_openbao_app_fields argocd/runtime",
+        '"redis_password=${argocd_redis_password_val}"',
+        "seed_openbao_app_fields gitea/encryption",
+        "seed_openbao_app_fields gitea/runtime",
+        "seed_openbao_app_fields gitea/push-mirror",
+        "seed_openbao_app_fields authentik/encryption",
+        "seed_openbao_app_fields authentik/postgresql",
+        "seed_openbao_app_fields authentik/admin",
+        "seed_openbao_app_fields homepage/grafana",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh": (
+        "ARGOCD_SERVER_SECRET_KEY",
+        "read_openbao_app_field argocd/runtime server_secret_key",
+        "ARGOCD_REDIS_PASSWORD",
+        "read_openbao_app_field argocd/runtime redis_password",
+        "create secret generic authentik-encryption",
+        "create secret generic authentik-postgresql",
+        "seed_openbao_app_fields authentik/encryption",
+        "seed_openbao_app_fields authentik/postgresql",
+        "read_openbao_app_field authentik/admin bootstrap_password",
+        "read_openbao_app_field gitea/actions-runner token",
+        "secret.reloader.stakater.com/reload: gitea-actions-runner",
+        'configure_gitea_push_mirror_from_openbao "phase50" "$@"',
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh": (
+        "ARGOCD_SERVER_SECRET_KEY",
+        "read_openbao_app_field argocd/runtime server_secret_key",
+        "ARGOCD_REDIS_PASSWORD",
+        "read_openbao_app_field argocd/runtime redis_password",
+        "create secret generic authentik-encryption",
+        "create secret generic authentik-postgresql",
+        "seed_openbao_app_fields authentik/encryption",
+        "seed_openbao_app_fields authentik/postgresql",
+        "read_openbao_app_field authentik/admin bootstrap_password",
+        "read_openbao_app_field gitea/actions-runner token",
+        "secret.reloader.stakater.com/reload: gitea-actions-runner",
+        'configure_gitea_push_mirror_from_openbao "phase60" "$@"',
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh": (
+        "read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY",
+        "read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH",
+        '--scopes "read:notification,read:repository,read:issue"',
+        "gitea_widget_token_has_required_scopes",
+        "revoke_stale_gitea_widget_tokens",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh": (
+        "read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY",
+        "read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH",
+        '--scopes "read:notification,read:repository,read:issue"',
+        "gitea_widget_token_has_required_scopes",
+        "revoke_stale_gitea_widget_tokens",
+    ),
+    "ansible/ansible-scripts/bootstrap/control-pair-common.sh": (
+        "seed_openbao_app_fields()",
+        'bao kv patch "secret/apps/${path}"',
+        'bao kv put "secret/apps/${path}"',
+        "gitea_widget_token_has_required_scopes()",
+        "revoke_stale_gitea_widget_tokens()",
+        '"read:notification", "read:repository", "read:issue"',
+        'name.startswith("homepage-widget")',
+        'tokens/${token_id}',
+        "configure_gitea_push_mirror_from_openbao()",
+        "read_openbao_app_field gitea/push-mirror token",
+        "seed_openbao_app_fields gitea/push-mirror",
+        "create secret generic gitea-push-mirror",
+        "credential_dir=/var/run/adaetum/push-mirror",
+        "Remove credentials written by the legacy hook implementation",
+    ),
+    "ansible/playbooks/platform-bootstrap.yml": (
+        'rancher_chart_version: "2.14.3"',
+        'argocd_chart_version: "10.1.4"',
+        "--version {{ rancher_chart_version }}",
+        "create secret generic authentik-encryption",
+        "create secret generic authentik-postgresql",
+        "create secret generic gitea-encryption",
+        "create secret generic gitea-runtime",
+        "grafana_secret_key",
+        "argocd_server_secret_key",
+        "argocd_redis_password",
+        "homepage_grafana_password",
+        "redisSecretInit.enabled=false",
+        "global.deploymentAnnotations.secret",
+        "global.statefulsetAnnotations.secret",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-20/run-phase20.sh": (
+        'write_secret "argocd_server_secret_key" 48',
+        'write_secret "argocd_redis_password" 24',
+        'write_secret "gitea_secret_key" 48',
+        'write_secret "gitea_internal_token" 48',
+        'write_secret "gitea_jwt_secret" 48',
+        'write_secret "grafana_secret_key" 48',
+        'write_secret "homepage_grafana_password" 24',
+    ),
+    "ansible/automation-roles/argocd-install/templates/argocd-values.yaml.j2": (
+        "server.secretkey",
+        "deploymentAnnotations:",
+        "statefulsetAnnotations:",
+        "secret.reloader.stakater.com/reload: argocd-redis",
+        "secret.reloader.stakater.com/reload: argocd-secret,argocd-redis",
+        "redisSecretInit:",
+        "enabled: false",
+    ),
+    "ansible/automation-roles/argocd-install/defaults/main.yml": (
+        'argocd_chart_version: "10.1.4"',
+        "ARGOCD_REDIS_PASSWORD",
+    ),
+    "ansible/automation-roles/argocd-install/tasks/main.yml": (
+        "Require the OpenBao-bound Redis bootstrap password",
+        "create secret generic argocd-redis",
+        'ARGOCD_REDIS_PASSWORD: "{{ argocd_redis_password }}"',
+    ),
+}
+
+# These paths run continuously after bootstrap. Reintroducing the installer
+# playbook or its local .env would let stale bootstrap copies overwrite the
+# OpenBao-owned steady state.
+FORBIDDEN_ROTATION_FRAGMENTS = {
+    "ansible/Dockerfile": ("playbooks/bootstrap.yml",),
+    "ansible/ansible-scripts/cron-entrypoint": ("playbooks/bootstrap.yml",),
+    "ansible/ansible-scripts/run-ansible": (
+        "playbooks/bootstrap.yml",
+        "source /ansible/ansible/.env",
+        "source \"/ansible/ansible/.env\"",
+    ),
+    "pods/ansible/ansible/ansible-runner-deployment.yaml": ("playbooks/bootstrap.yml",),
+    "pods/ansible/ansible/ansible-runner-deployment.yaml.tmpl": ("playbooks/bootstrap.yml",),
+    # Homepage exposes Cloudflare and Tailscale as links, not authenticated API
+    # widgets. Provider setup credentials must never be copied into its delivery
+    # Secret by an early bootstrap or late reconciliation phase.
+    "pods/portal/homepage/external-secret.yaml": (
+        "HOMEPAGE_AUTHENTIK_",
+        "HOMEPAGE_CLOUDFLARE_",
+        "HOMEPAGE_TAILSCALE_",
+        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh": (
+        "HOMEPAGE_AUTHENTIK_",
+        "HOMEPAGE_CLOUDFLARE_",
+        "HOMEPAGE_TAILSCALE_",
+        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh": (
+        "HOMEPAGE_AUTHENTIK_",
+        "HOMEPAGE_CLOUDFLARE_",
+        "HOMEPAGE_TAILSCALE_",
+        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh": (
+        "HOMEPAGE_AUTHENTIK_",
+        "HOMEPAGE_CLOUDFLARE_",
+        "HOMEPAGE_TAILSCALE_",
+        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
+        '--scopes "all"',
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh": (
+        "HOMEPAGE_AUTHENTIK_",
+        "HOMEPAGE_CLOUDFLARE_",
+        "HOMEPAGE_TAILSCALE_",
+        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
+        '--scopes "all"',
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh": (
+        "bao kv put secret/apps/",
+    ),
+}
+
+# Ansible normally prints task arguments, registered results, and changed
+# values. These named tasks cross a credential boundary, so suppressing their
+# output is part of the secret-delivery contract rather than a presentation
+# preference. Keeping the inventory explicit makes the owning task obvious
+# when the validator fails.
+NO_LOG_TASK_CONTRACTS = {
+    "ansible/playbooks/platform-bootstrap.yml": (
+        "Load bootstrap secrets",
+        "Read shared rke2 token from primary host",
+        "Use primary rke2 token on every host",
+        "Write rke2 config (server)",
+        "Write rke2 config (joining server)",
+        "Write rke2 config (agent)",
+        "Create Argo CD admin password hash",
+    ),
+    "ansible/automation-roles/argocd-install/tasks/main.yml": (
+        "Build Argo CD admin password bcrypt hash",
+        "Resolve effective Argo CD admin password hash",
+    ),
+    "ansible/automation-roles/tailscale-retag/tasks/main.yml": (
+        "Create Tailscale auth key for retag (curl)",
+        "Normalize auth key response (curl)",
+        "Capture Tailscale retag authkey",
+    ),
+}
+
+# Provider success bodies can contain newly issued credentials, while proxy
+# URLs can contain embedded userinfo. Diagnostics may retain status and request
+# metadata but never these raw values.
+FORBIDDEN_SECRET_LOG_FRAGMENTS = {
+    "ansible/automation-roles/tailscale-retag/tasks/main.yml": (
+        "body={{ tailscale_authkey_response.content",
+        "stderr={{ tailscale_authkey_response.stderr",
+        "stdout={{ tailscale_authkey_response.stdout",
+        "default(tailscale_authkey_response.content",
+        "http_proxy={{ ansible_env.http_proxy",
+        "https_proxy={{ ansible_env.https_proxy",
+    ),
+}
+
+# Kubernetes itself owns this long-lived service-account token. All committed
+# application credential manifests must instead be ExternalSecrets backed by
+# OpenBao; adding another static Secret here is an ownership regression.
+ALLOWED_SECRET_MANIFESTS = {
+    "pods/portal/homepage/secret.yaml": "type: kubernetes.io/service-account-token",
+}
+
+# These delivery Secrets are deliberately not direct ExternalSecret targets.
+# Each has a named controller/coordinator because copying a desired value into
+# the active Secret without first changing product state would break access.
+# Keep this list small: an entry is an exception to the normal OpenBao -> ESO
+# ownership path and therefore needs an operational reason.
+COORDINATED_SECRET_REFERENCES = {
+    "authentik-postgresql": "database-first Authentik PostgreSQL rotation",
+    "bootstrap-secret": "Rancher-native administrator password rotation",
+    "gitea-postgresql": "database-first Gitea PostgreSQL rotation",
+    "homepage-grafana": "Grafana Viewer identity promotion",
+    "openbao-bootstrap-token": "temporary Phase 40 OpenBao configuration credential",
+}
 
 ALLOWED_VALUES = {
     "",
@@ -52,15 +556,23 @@ def is_placeholder(value: str) -> bool:
     lowered = value.strip().lower()
     if lowered in {entry.lower() for entry in ALLOWED_VALUES}:
         return True
-    if lowered.startswith("example.") or lowered.startswith("your-") or lowered.startswith("${"):
+    if lowered.startswith("example.") or lowered.startswith("your-") or lowered.startswith("$"):
         return True
     if value.strip().startswith("__") and value.strip().endswith("__"):
+        return True
+    if value.strip().startswith("{{"):
+        return True
+    # Shell's `${NAME:-}` default-value form is split by the assignment
+    # heuristic at the colon. The captured suffix is syntax, not a value.
+    if value.strip() == "-}":
         return True
     if lowered.startswith("<") and lowered.endswith(">"):
         return True
     if lowered.startswith("`") and lowered.endswith("`"):
         return True
     if lowered.startswith("$("):
+        return True
+    if value.strip().startswith(("os.environ[", "sys.argv[")):
         return True
     if lowered in {"true", "false"}:
         return True
@@ -85,7 +597,11 @@ def validate_file(path: Path) -> list[str]:
         assignment = KEY_ASSIGNMENT_RE.search(line)
         if assignment:
             key, value = assignment.groups()
-            if key.lower().endswith("passwordmode"):
+            # psql's :'name' form safely quotes a runtime variable as an SQL
+            # literal; the identifier is not a committed password value.
+            if "ALTER ROLE" in line and "PASSWORD :'" in line:
+                continue
+            if key.lower().endswith(("passwordmode", "passwordkey", "secretkey")) or key.lower() == "token_policies":
                 continue
             if not is_placeholder(value):
                 failures.append(f"{rel}:{lineno}: suspicious secret-like assignment value: {value}")
@@ -96,10 +612,173 @@ def validate_file(path: Path) -> list[str]:
     return failures
 
 
+def validate_rotation_contracts() -> list[str]:
+    """Protect the continuous OpenBao sync boundary from partial deletion."""
+    failures: list[str] = []
+    for relative_path, required_fragments in ROTATION_CONTRACTS.items():
+        path = REPO_ROOT / relative_path
+        if not path.is_file():
+            failures.append(f"{relative_path}: required OpenBao rotation contract file is missing")
+            continue
+        text = path.read_text(encoding="utf-8")
+        for fragment in required_fragments:
+            if fragment not in text:
+                failures.append(f"{relative_path}: missing rotation contract fragment: {fragment}")
+    for relative_path, forbidden_fragments in FORBIDDEN_ROTATION_FRAGMENTS.items():
+        path = REPO_ROOT / relative_path
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for fragment in forbidden_fragments:
+            if fragment in text:
+                failures.append(f"{relative_path}: recurring automation contains bootstrap authority: {fragment}")
+    return failures
+
+
+def validate_ansible_secret_logging() -> list[str]:
+    """Require redaction exactly where Ansible handles secret values."""
+    failures: list[str] = []
+
+    def named_tasks(value: object) -> list[dict[str, object]]:
+        tasks: list[dict[str, object]] = []
+        if isinstance(value, dict):
+            if isinstance(value.get("name"), str):
+                tasks.append(value)
+            for child in value.values():
+                tasks.extend(named_tasks(child))
+        elif isinstance(value, list):
+            for child in value:
+                tasks.extend(named_tasks(child))
+        return tasks
+
+    for relative_path, required_names in NO_LOG_TASK_CONTRACTS.items():
+        path = REPO_ROOT / relative_path
+        if not path.is_file():
+            failures.append(f"{relative_path}: secret-bearing Ansible file is missing")
+            continue
+        try:
+            documents = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+        except yaml.YAMLError as exc:
+            failures.append(f"{relative_path}: cannot validate Ansible no_log contracts: {exc}")
+            continue
+        tasks = [task for document in documents for task in named_tasks(document)]
+        for required_name in required_names:
+            matches = [task for task in tasks if task.get("name") == required_name]
+            if not matches:
+                failures.append(f"{relative_path}: secret-bearing task is missing: {required_name}")
+            elif any(task.get("no_log") is not True for task in matches):
+                failures.append(f"{relative_path}: secret-bearing task must set no_log: true: {required_name}")
+
+    for relative_path, forbidden_fragments in FORBIDDEN_SECRET_LOG_FRAGMENTS.items():
+        path = REPO_ROOT / relative_path
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for fragment in forbidden_fragments:
+            if fragment in text:
+                failures.append(f"{relative_path}: provider diagnostic can expose a secret: {fragment}")
+    return failures
+
+
+def validate_committed_secret_manifests() -> list[str]:
+    """Reject application credentials committed as ordinary Kubernetes Secrets."""
+    failures: list[str] = []
+    pods_root = REPO_ROOT / "pods"
+    for path in sorted(pods_root.rglob("*.yaml")):
+        text = path.read_text(encoding="utf-8")
+        if not re.search(r"(?m)^kind: Secret\s*$", text):
+            continue
+        relative_path = str(path.relative_to(REPO_ROOT))
+        required_type = ALLOWED_SECRET_MANIFESTS.get(relative_path)
+        if required_type is None:
+            failures.append(
+                f"{relative_path}: committed Kubernetes Secret is not an approved controller-owned identity"
+            )
+        elif required_type not in text:
+            failures.append(f"{relative_path}: approved Secret is missing ownership marker: {required_type}")
+    return failures
+
+
+def validate_secret_reference_ownership() -> list[str]:
+    """Require every native workload Secret reference to have a named owner.
+
+    This complements the known-file rotation contracts above. Those contracts
+    protect the implementation details of current integrations; this inventory
+    catches a newly added secretKeyRef, envFrom Secret, or Secret volume even
+    when nobody remembered to add it to that known-file list.
+    """
+    failures: list[str] = []
+    external_secret_targets: set[str] = set()
+    secret_references: list[tuple[str, str]] = []
+
+    def walk(value: object, relative_path: str, path: tuple[str, ...] = ()) -> None:
+        if isinstance(value, dict):
+            for reference_key in ("secretKeyRef", "secretRef"):
+                reference = value.get(reference_key)
+                if isinstance(reference, dict) and isinstance(reference.get("name"), str):
+                    secret_references.append((relative_path, reference["name"]))
+
+            volume_secret = value.get("secret")
+            if isinstance(volume_secret, dict):
+                secret_name = volume_secret.get("secretName")
+                if isinstance(secret_name, str):
+                    secret_references.append((relative_path, secret_name))
+                # Projected volume sources use `secret.name` rather than
+                # `secret.secretName`.
+                projected_name = volume_secret.get("name")
+                if "sources" in path and isinstance(projected_name, str):
+                    secret_references.append((relative_path, projected_name))
+
+            image_pull_secrets = value.get("imagePullSecrets")
+            if isinstance(image_pull_secrets, list):
+                for reference in image_pull_secrets:
+                    if isinstance(reference, dict) and isinstance(reference.get("name"), str):
+                        secret_references.append((relative_path, reference["name"]))
+
+            for key, child in value.items():
+                walk(child, relative_path, path + (str(key),))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, relative_path, path + (str(index),))
+
+    for path in sorted((REPO_ROOT / "pods").rglob("*.yaml")):
+        relative_path = str(path.relative_to(REPO_ROOT))
+        try:
+            documents = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+        except yaml.YAMLError as exc:
+            failures.append(f"{relative_path}: cannot inventory Secret ownership: {exc}")
+            continue
+
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            if document.get("kind") == "ExternalSecret":
+                metadata = document.get("metadata") or {}
+                spec = document.get("spec") or {}
+                target = spec.get("target") or {}
+                target_name = target.get("name") or metadata.get("name")
+                if isinstance(target_name, str):
+                    external_secret_targets.add(target_name)
+            walk(document, relative_path)
+
+    approved_names = external_secret_targets | set(COORDINATED_SECRET_REFERENCES)
+    for relative_path, secret_name in sorted(set(secret_references)):
+        if secret_name not in approved_names:
+            failures.append(
+                f"{relative_path}: Secret reference {secret_name!r} has no ExternalSecret target "
+                "or approved product-aware owner"
+            )
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
     for path in iter_files():
         failures.extend(validate_file(path))
+    failures.extend(validate_rotation_contracts())
+    failures.extend(validate_ansible_secret_logging())
+    failures.extend(validate_committed_secret_manifests())
+    failures.extend(validate_secret_reference_ownership())
 
     if failures:
         for failure in failures:

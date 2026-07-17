@@ -1,5 +1,7 @@
 resources:
   - ansible-runner-deployment.yaml
+  - registry-external-secret.yaml
+  - tailscale-external-secret.yaml
   - ansible-cluster-config.yaml
 
 replacements:
@@ -23,6 +25,7 @@ replacements:
           name: ansible-runner
         fieldPaths:
           - spec.template.spec.containers.[name=ansible-runner].env.[name=TAILSCALE_DOMAIN].value
+          - spec.template.spec.containers.[name=ansible-runner].env.[name=TAILSCALE_TAILNET].value
   - source:
       kind: ConfigMap
       name: ansible-cluster-config

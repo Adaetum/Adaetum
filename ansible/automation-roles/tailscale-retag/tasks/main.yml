@@ -128,9 +128,9 @@
 - name: Debug proxy environment (sanitized)
   ansible.builtin.debug:
     msg: >-
-      http_proxy={{ ansible_env.http_proxy | default(ansible_env.HTTP_PROXY | default('')) }},
-      https_proxy={{ ansible_env.https_proxy | default(ansible_env.HTTPS_PROXY | default('')) }},
-      no_proxy={{ ansible_env.no_proxy | default(ansible_env.NO_PROXY | default('')) }}
+      http_proxy_set={{ (ansible_env.http_proxy | default(ansible_env.HTTP_PROXY | default('')) | length) > 0 }},
+      https_proxy_set={{ (ansible_env.https_proxy | default(ansible_env.HTTPS_PROXY | default('')) | length) > 0 }},
+      no_proxy_set={{ (ansible_env.no_proxy | default(ansible_env.NO_PROXY | default('')) | length) > 0 }}
   when: tailscale_retag_enabled | bool
 
 - name: Debug PATH environment (sanitized)
@@ -536,6 +536,7 @@
 - name: Normalize auth key response (curl)
   ansible.builtin.set_fact:
     tailscale_authkey_response: "{{ (tailscale_authkey_response_raw.stdout | default('{}') | from_json) }}"
+  no_log: true
   when:
     - tailscale_authkey_response_raw is defined
     - not (tailscale_authkey_response_raw.skipped | default(false))
@@ -550,10 +551,7 @@
       curl_version={{ tailscale_authkey_response.curl_version | default('') }},
       curl_rc={{ tailscale_authkey_response.curl_rc | default('n/a') }},
       request_id={{ (tailscale_authkey_response.headers['x-request-id'] | default(tailscale_authkey_response.headers['X-Request-Id'] | default('n/a'))) if tailscale_authkey_response.headers is defined else 'n/a' }},
-      tags={{ tailscale_retag_tags | join(',') }},
-      body={{ tailscale_authkey_response.content | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }},
-      stderr={{ tailscale_authkey_response.stderr | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }},
-      stdout={{ tailscale_authkey_response.stdout | default('') | regex_replace('[\\r\\n]+', ' ') | truncate(200, True, '…') }}
+      tags={{ tailscale_retag_tags | join(',') }}
   when:
     - tailscale_authkey_response is defined
 
@@ -573,7 +571,8 @@
       Tailscale auth key creation failed (status={{ tailscale_authkey_response.status | default('unknown') }}).
       curl_rc={{ tailscale_authkey_response.curl_rc | default('n/a') }}.
       request_id={{ (tailscale_authkey_response.headers['x-request-id'] | default(tailscale_authkey_response.headers['X-Request-Id'] | default('n/a'))) if tailscale_authkey_response.headers is defined else 'n/a' }}.
-      Check tagOwners and OAuth client scopes. Response={{ tailscale_authkey_response.json.message | default(tailscale_authkey_response.content | default('no message')) }}
+      Check tagOwners and OAuth client scopes. Provider response bodies are omitted because
+      successful responses contain the generated auth key.
   when:
     - tailscale_authkey_response_raw is defined
     - not (tailscale_authkey_response_raw.skipped | default(false))

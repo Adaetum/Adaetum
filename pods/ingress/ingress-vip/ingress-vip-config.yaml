@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ingress-vip-config
+  namespace: ingress
+data:
+  # The ingress "front door" Service to manage. This is the authoritative and
+  # only supported external front door for VIP and DNS ownership.
+  ingress_controller_service: kube-system/rke2-ingress-nginx-controller
+  ingress_service_type: LoadBalancer
+  ingress_internal_vip: ""
+  ingress_external_vip: ""

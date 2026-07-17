@@ -5,13 +5,33 @@ annotations:
 source_type: helm
 source_repo_url: https://charts.goauthentik.io
 source_chart: authentik
-source_target_revision: ">=0.0.0"
+# Rotation relies on this chart's lifecycle and environment-value rendering.
+source_target_revision: "2026.5.5"
 source_helm_values: |
   authentik:
     error_reporting:
       enabled: false
 
   server:
+    podAnnotations:
+      secret.reloader.stakater.com/reload: authentik-admin,authentik-postgresql,authentik-encryption
+    lifecycle:
+      postStart:
+        exec:
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              attempt=0
+              until /ak-root/.venv/bin/python /manage.py shell -c \
+                'import os; from authentik.core.models import User; username=os.environ["AUTHENTIK_BOOTSTRAP_ADMIN_USERNAME"]; password=os.environ["AUTHENTIK_BOOTSTRAP_PASSWORD"]; email=f"{username}@bootstrap.invalid"; user=User.objects.filter(username=username).first(); user=user or User.objects.create_superuser(username=username, email=email, password=password); user.set_password(password); user.is_active=True; user.save(); user.refresh_from_db(); assert user.check_password(password)'; do
+                attempt=$((attempt + 1))
+                if [ "${attempt}" -ge 60 ]; then
+                  echo "failed to reconcile the Authentik administrator from its OpenBao delivery Secret" >&2
+                  exit 1
+                fi
+                sleep 5
+              done
     initContainers:
       - name: wait-for-postgresql
         image: public.ecr.aws/docker/library/busybox:1.36
@@ -24,31 +44,38 @@ source_helm_values: |
               sleep 2
             done
     env:
+      - name: AUTHENTIK_BOOTSTRAP_ADMIN_USERNAME
+        valueFrom:
+          secretKeyRef:
+            name: authentik-admin
+            key: admin_username
       - name: AUTHENTIK_SECRET_KEY
         valueFrom:
           secretKeyRef:
-            name: authentik-secrets
+            name: authentik-encryption
             key: secret_key
       - name: AUTHENTIK_BOOTSTRAP_PASSWORD
         valueFrom:
           secretKeyRef:
-            name: authentik-secrets
+            name: authentik-admin
             key: bootstrap_password
       - name: AUTHENTIK_BOOTSTRAP_TOKEN
         valueFrom:
           secretKeyRef:
-            name: authentik-secrets
+            name: authentik-admin
             key: bootstrap_token
       - name: AUTHENTIK_POSTGRESQL__PASSWORD
         valueFrom:
           secretKeyRef:
-            name: authentik-secrets
+            name: authentik-postgresql
             key: postgresql_password
     ingress:
       # Disabled: routing is handled by nginx Ingress manifests in pods/ingress/nginx-routing.
       enabled: false
 
   worker:
+    podAnnotations:
+      secret.reloader.stakater.com/reload: authentik-postgresql,authentik-encryption
     initContainers:
       - name: wait-for-postgresql
         image: public.ecr.aws/docker/library/busybox:1.36
@@ -64,12 +91,12 @@ source_helm_values: |
       - name: AUTHENTIK_SECRET_KEY
         valueFrom:
           secretKeyRef:
-            name: authentik-secrets
+            name: authentik-encryption
             key: secret_key
       - name: AUTHENTIK_POSTGRESQL__PASSWORD
         valueFrom:
           secretKeyRef:
-            name: authentik-secrets
+            name: authentik-postgresql
             key: postgresql_password
     volumeMounts:
       - name: authentik-blueprints
@@ -83,7 +110,5 @@ source_helm_values: |
   postgresql:
     enabled: true
     auth:
-      existingSecret: authentik-secrets
-  redis:
-    enabled: true
+      existingSecret: authentik-postgresql
 destination_namespace: authentik

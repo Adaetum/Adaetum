@@ -16,7 +16,7 @@ COPY ansible/ansible-scripts/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/run-ansible /usr/local/bin/cron-entrypoint /usr/local/bin/build-inventory
 
 ENV CRON_SCHEDULE="*/10 * * * *"
-ENV ANSIBLE_PLAYBOOK="playbooks/bootstrap.yml"
+ENV ANSIBLE_PLAYBOOK="playbooks/day2.yml"
 ENV ANSIBLE_INVENTORY="node-inventory.yml"
 ENV ANSIBLE_EXTRA_ARGS=""
 

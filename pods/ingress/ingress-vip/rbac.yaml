@@ -13,7 +13,7 @@ rules:
     resources: ["services"]
     verbs: ["get", "list", "patch", "update"]
   - apiGroups: [""]
-    resources: ["secrets"]
+    resources: ["configmaps"]
     verbs: ["get", "list", "create", "patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

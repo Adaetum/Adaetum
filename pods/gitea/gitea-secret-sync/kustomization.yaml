@@ -1,0 +1,6 @@
+resources:
+  - external-secret.yaml
+  - postgresql-external-secret.yaml
+  - postgresql-rotation.yaml
+  - push-mirror-external-secret.yaml
+  - runner-external-secret.yaml

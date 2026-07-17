@@ -27,6 +27,51 @@ An item is complete only when its acceptance criteria and required checks pass.
 - [ ] Add ShellCheck, actionlint, yamllint, ansible-lint, Ruff, Gitleaks, and
   kubeconform to local hooks and CI. **Acceptance:** documented pinned checks
   run on pull requests.
+- [ ] Complete the OpenBao workload-secret handoff. **Current:** External
+  Secrets now reconciles every identified application delivery Secret, and
+  Reloader rolls stateless consumers. Bootstrap still creates temporary copies
+  before OpenBao is available. Successful break-glass and join-node bundle
+  runs now remove all secret-bearing first-boot environment files, rendered
+  scripts, and installed kickstart copies; failed runs retain them only for
+  explicit resume. The GitHub push-mirror hook now reads an
+  OpenBao-backed projected Secret for every push rather than retaining a token
+  on Gitea's repository PVC. **Acceptance:** clean-install evidence proves
+  adoption of temporary copies, every credential remains classified as
+  OpenBao-, provider-, recovery-plane-, application-, RKE2-, or
+  Kubernetes-owned, no workload treats a generated Kubernetes Secret as
+  authority, and live recovery-mirror evidence proves credential replacement
+  converges without replaying bootstrap. RKE2 token evidence must exercise its
+  native rotation procedure rather than treating an OpenBao recovery-copy edit
+  as rotation.
+- [ ] Add coordinated rotation for stateful application credentials.
+  **Dependencies:** the OpenBao workload-secret handoff and stable clean-install
+  evidence. **Current:** Argo CD, Gitea, Grafana, and Authentik admin passwords
+  reconcile through product-native behavior; Gitea/PostgreSQL uses a two-phase
+  database-first rotation for both Gitea and Authentik, and Rancher's native
+  password-change request promotes delivery only after login validation.
+  Gitea and Grafana encryption roots are OpenBao-owned and migration-gated
+  instead of being treated as ordinary restartable passwords. Authentik's
+  post-2023.6 signing key now rotates normally and intentionally revokes
+  sessions without changing persisted identities.
+  Argo CD's ephemeral Redis password is OpenBao-owned and reloads the cache and
+  all clients together.
+  **Acceptance:** recovery tests prove that encryption keys are never blindly
+  replaced and exercise interrupted rotation recovery.
+- [x] Remove unused provider credentials from Homepage. Cloudflare and
+  Tailscale are configured as links rather than API widgets, and Authentik is
+  also link/status-only, so its shared widget Secret now receives only the two
+  tokens its Argo CD and Gitea widgets consume. Validation rejects delivery of
+  those unused credentials through bootstrap phases or External Secrets; new
+  Gitea widget tokens are read-only.
+- [ ] Replace Homepage's Grafana administrator password with a dedicated Viewer
+  identity and migrate any preexisting broad Gitea widget token. **Acceptance:**
+  Homepage can read its configured metrics without holding an administrator
+  password or an `all`-scope Gitea token, and both credentials have tested
+  OpenBao-driven rotation and provider/application revocation paths.
+  **Current:** the dedicated Grafana Viewer and safe desired-to-active
+  coordinator are implemented. Gitea scope inspection, replacement, and
+  post-promotion revocation are also implemented. Live rotation and migration
+  evidence remain.
 
 ## P1 — supported platform alpha
 

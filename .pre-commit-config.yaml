@@ -40,7 +40,7 @@ repos:
         entry: python3 .validator/validate-control-pair-shared-helpers.py
         language: system
         pass_filenames: false
-        files: ^(ansible/ansible-scripts/bootstrap/(control-pair-common\.sh|Phase-(50|60)/run-phase(50|60)\.sh)|\.validator/validate-control-pair-shared-helpers\.py)$
+        files: ^(ansible/ansible-scripts/bootstrap/(control-pair-common\.sh|Phase-(50|60|70|90)/run-phase(50|60|70|90)\.sh)|\.validator/validate-control-pair-shared-helpers\.py)$
       - id: validate-doc-links
         name: Validate repository Markdown links
         entry: python3 .validator/validate-doc-links.py
@@ -141,8 +141,9 @@ repos:
         name: Validate pods secret patterns
         entry: python3 .validator/validate-pods-secrets.py
         language: python
+        additional_dependencies: [pyyaml]
         pass_filenames: false
-        files: ^(pods/.*|setup\.md|\.validator/validate-pods-secrets\.py)
+        files: ^(pods/.*|setup\.md|ansible/(Dockerfile|playbooks/(day2|platform-bootstrap)\.yml|automation-roles/argocd-install/(defaults/main\.yml|tasks/main\.yml|templates/argocd-values\.yaml\.j2)|ansible-scripts/(cron-entrypoint|run-ansible|bootstrap/(control-pair-common\.sh|Phase-(20|40|50|60|70|90)/run-phase(20|40|50|60|70|90|99)\.sh)))|\.validator/validate-pods-secrets\.py)
       - id: validate-pods-consistency
         name: Validate pods consistency
         entry: python3 .validator/validate-pods-consistency.py

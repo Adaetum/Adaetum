@@ -23,7 +23,6 @@ REQUIRED_TAG_OWNERS = {
   "tag:server": ["autogroup:admin", "tag:provisioner"],
   "tag:cluster": ["autogroup:admin", "tag:provisioner"],
   "tag:agent": ["autogroup:admin", "tag:provisioner"],
-  "tag:rke2": ["autogroup:admin", "tag:provisioner"],
   "tag:subnet-router": ["autogroup:admin", "tag:provisioner"],
   "tag:rancher": ["autogroup:admin", "tag:provisioner"],
 }

@@ -111,7 +111,16 @@
   when: os_bootstrap_manage_networkmanager_wired | bool
 
 - name: Discover wired interfaces from NetworkManager
-  ansible.builtin.shell: "nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2==\"ethernet\" {print $1}'"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    while IFS=: read -r device device_type; do
+      [ "${device_type}" = "ethernet" ] || continue
+      # NetworkManager reports Calico veths as ethernet too. Only hardware-
+      # backed interfaces have a sysfs device link and may receive a host
+      # DHCP/autoconnect profile.
+      [ -e "/sys/class/net/${device}/device" ] || continue
+      printf '%s\n' "${device}"
+    done < <(nmcli -t -f DEVICE,TYPE dev status)
   args:
     executable: /bin/bash
   register: os_bootstrap_nmcli_devices
@@ -162,9 +171,18 @@
   when: os_bootstrap_manage_networkmanager_wired | bool
 
 - name: Bring up wired DHCP autoconnect profile
-  ansible.builtin.command: "nmcli con up {{ os_bootstrap_network_connection_prefix }}{{ item }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    con_name="{{ os_bootstrap_network_connection_prefix }}{{ item }}"
+    active_connection="$(nmcli -g GENERAL.CONNECTION dev show "{{ item }}" 2>/dev/null || true)"
+    if [ "${active_connection}" != "${con_name}" ]; then
+      nmcli con up "${con_name}"
+      echo activated
+    fi
+  args:
+    executable: /bin/bash
   loop: "{{ os_bootstrap_wired_ifaces | default([]) }}"
-  changed_when: false
+  changed_when: "'activated' in (stdout | default(''))"
   failed_when: false
   when: os_bootstrap_manage_networkmanager_wired | bool
 

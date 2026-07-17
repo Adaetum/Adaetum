@@ -19,16 +19,21 @@ Notes
   cluster-vantage health rather than true end-user ISP/LAN vantage.
 - `config/bookmarks.yaml` is intentionally empty so Homepage does not render its
   stock Developer/Social/Entertainment bookmark groups.
-- Widget credentials are rendered from the `homepage-widget-secrets` Secret.
-  Phase 50 only seeds best-effort values and operator-provided inputs there.
-  Phase 90 is the authoritative finalization pass: it validates live Argo CD,
-  Authentik, Gitea, and Grafana credentials, rebuilds `homepage-widget-secrets`
-  from those validated values plus stable operator-provided Cloudflare and
-  Tailscale values, and persists the final non-empty results into
-  OpenBao `secret/bootstrap/platform`.
+- Argo CD and Gitea widget tokens are delivered from OpenBao
+  `secret/apps/homepage/widgets` through an ExternalSecret. Late bootstrap
+  validates or mints those app-issued tokens and persists only those two
+  fields. Authentik, Cloudflare, and Tailscale are links only, so their
+  credentials are never delivered to Homepage. Late reconciliation also checks
+  the Gitea token's registered scopes and revokes superseded
+  `homepage-widget*` tokens only after the replacement is active.
+- Grafana uses a separate `homepage` Viewer identity from
+  `secret/apps/homepage/grafana`; Homepage never receives Grafana's
+  administrator password. A scoped reconciler changes the account in Grafana,
+  verifies the desired login, and then promotes the active Homepage delivery
+  Secret. Reloader restarts Homepage only after that promotion succeeds.
 - Route status is intentionally `siteMonitor`-only. The old `ping` checks were
   removed because they produced misleading failures on Authentik-protected or
   non-ICMP-friendly routes.
-- Authentik, Cloudflare, and Tailscale are rendered as link-plus-status cards
+- Cloudflare and Tailscale are rendered as link-plus-status cards
   rather than widgets because that has been materially more reliable in this
   bootstrap flow than forcing those widget integrations.

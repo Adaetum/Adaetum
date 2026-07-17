@@ -215,6 +215,7 @@ persist_widget_field_phase70() {
     return 0
   fi
   write_phase70_bootstrap_field "${field}" "${value}" "${openbao_token}"
+  persist_openbao_homepage_field "${field}" "${value}" "${openbao_token}"
 }
 
 build_homepage_widget_secret_manifest_phase70() {
@@ -302,43 +303,6 @@ validate_gitea_widget_auth_phase70() {
       "http://${service_host}:3000/api/v1/user" 2>/dev/null || true
   )"
   [[ "${status}" == "200" ]]
-}
-
-validate_authentik_widget_key_phase70() {
-  local token="${1:-}"
-  local service_host=""
-  local status=""
-
-  if [[ -z "${token}" ]]; then
-    return 1
-  fi
-  service_host="$(service_cluster_ip_phase70 authentik authentik-server)"
-  if [[ -z "${service_host}" ]]; then
-    return 1
-  fi
-  status="$(
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
-      -H "Authorization: Bearer ${token}" \
-      "http://${service_host}:80/api/v3/core/users/me/" 2>/dev/null || true
-  )"
-  [[ "${status}" == "200" ]]
-}
-
-discover_tailscale_device_id_phase70() {
-  if ! command -v tailscale >/dev/null 2>&1; then
-    return 0
-  fi
-  tailscale status --json 2>/dev/null | python3 - <<'PY'
-import json
-import sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print("", end="")
-    raise SystemExit(0)
-self_data = data.get("Self") or {}
-print((self_data.get("ID") or "").strip(), end="")
-PY
 }
 
 ensure_ansible_runner_pull_secret_phase70() {
@@ -591,6 +555,9 @@ mint_argocd_widget_key_phase70() {
 
   admin_password="${HOMEPAGE_ARGOCD_WIDGET_KEY_PASSWORD:-${ARGOCD_ADMIN_PASSWORD:-}}"
   if [[ -z "${admin_password}" ]]; then
+    admin_password="$(read_openbao_app_field argocd/admin password "${openbao_token}")"
+  fi
+  if [[ -z "${admin_password}" ]]; then
     admin_password="$(read_phase70_bootstrap_field argocd_admin_password "${openbao_token}")"
   fi
   if [[ -z "${admin_password}" ]]; then
@@ -632,58 +599,23 @@ mint_argocd_widget_key_phase70() {
   printf '%s' "${token}"
 }
 
-mint_authentik_widget_key_phase70() {
-  local openbao_token="${1:-}"
-  local admin_username=""
-  local token=""
-
-  if [[ -z "${kubectl_bin}" ]]; then
-    return 1
-  fi
-
-  admin_username="$(read_phase70_bootstrap_field authentik_admin_username "${openbao_token}")"
-  if [[ -z "${admin_username}" ]]; then
-    admin_username="akadmin"
-  fi
-
-  if ! retry_cmd 30 10 \
-    "${kubectl_bin}" -n authentik rollout status deploy/authentik-server --timeout=30s >/dev/null; then
-    echo "[phase70] Authentik widget token mint failed: authentik-server not ready in time" >&2
-    return 1
-  fi
-
-  token="$(
-    "${kubectl_bin}" exec -i -n authentik deploy/authentik-server -- env \
-      HOMEPAGE_AUTHENTIK_WIDGET_USERNAME="${admin_username}" \
-      /ak-root/.venv/bin/python -c \
-      'import os; os.environ.setdefault("DJANGO_SETTINGS_MODULE","authentik.root.settings"); import django; django.setup(); from authentik.core.models import Token, User; username=os.environ["HOMEPAGE_AUTHENTIK_WIDGET_USERNAME"]; user=User.objects.get(username=username); token=Token.objects.filter(identifier="homepage-widget", user=user).first(); token = token or Token(identifier="homepage-widget", user=user, intent="api", description="Homepage widget token"); token.expiring=False; token.expires=None; token.save(); print(token.key, end="")' \
-      2>/dev/null | tr -d "\r\n"
-  )"
-
-  if [[ -z "${token}" ]]; then
-    echo "[phase70] Authentik widget token mint failed: unable to generate API token" >&2
-    return 1
-  fi
-  if ! validate_authentik_widget_key_phase70 "${token}"; then
-    echo "[phase70] Authentik widget token mint failed: minted token did not pass API validation" >&2
-    return 1
-  fi
-
-  printf '%s' "${token}"
-}
-
 mint_gitea_widget_auth_phase70() {
   local openbao_token="${1:-}"
-  local admin_username=""
+  local admin_username="${2:-}"
+  local admin_password="${3:-}"
+  local gitea_base_url="${4:-}"
   local token=""
 
   if [[ -z "${kubectl_bin}" ]]; then
     return 1
   fi
 
-  admin_username="$(read_phase70_bootstrap_field gitea_admin_username "${openbao_token}")"
   if [[ -z "${admin_username}" ]]; then
     admin_username="gitea-admin"
+  fi
+  if [[ -z "${admin_password}" || -z "${gitea_base_url}" ]]; then
+    echo "[phase70] Gitea widget token mint failed: admin validation inputs unavailable" >&2
+    return 1
   fi
 
   if ! retry_cmd 30 10 \
@@ -696,12 +628,12 @@ mint_gitea_widget_auth_phase70() {
     gitea admin user generate-access-token \
       --username "'"${admin_username}"'" \
       --token-name "homepage-widget" \
-      --scopes "all" \
+      --scopes "read:notification,read:repository,read:issue" \
       --raw 2>/dev/null \
     || gitea admin user generate-access-token \
       --username "'"${admin_username}"'" \
       --token-name "homepage-widget-$(date +%s)" \
-      --scopes "all" \
+      --scopes "read:notification,read:repository,read:issue" \
       --raw 2>/dev/null
   ' 2>/dev/null | tr -d '\r\n' || true)"
 
@@ -709,8 +641,10 @@ mint_gitea_widget_auth_phase70() {
     echo "[phase70] Gitea widget token mint failed: unable to generate API token" >&2
     return 1
   fi
-  if ! validate_gitea_widget_auth_phase70 "${token}"; then
-    echo "[phase70] Gitea widget token mint failed: minted token did not pass API validation" >&2
+  if ! validate_gitea_widget_auth_phase70 "${token}" \
+    || ! gitea_widget_token_has_required_scopes \
+      "${gitea_base_url}" "${admin_username}" "${admin_password}" "${token}"; then
+    echo "[phase70] Gitea widget token mint failed: token or read-only scope validation failed" >&2
     return 1
   fi
 
@@ -720,7 +654,7 @@ mint_gitea_widget_auth_phase70() {
 resolve_grafana_admin_password_phase70() {
   local openbao_token="${1:-}"
   local password=""
-  password="${HOMEPAGE_GRAFANA_ADMIN_PASSWORD:-}"
+  password="$(read_openbao_app_field observability/grafana admin_password "${openbao_token}")"
   if [[ -z "${password}" ]]; then
     password="$(read_phase70_bootstrap_field grafana_admin_password "${openbao_token}")"
   fi
@@ -730,7 +664,6 @@ resolve_grafana_admin_password_phase70() {
 ensure_grafana_admin_password_phase70() {
   local openbao_token="${1:-}"
   local desired_password=""
-  local patch_json=""
 
   if [[ -z "${kubectl_bin}" ]]; then
     echo "[phase70] kubectl not available; cannot reconcile Grafana admin password" >&2
@@ -753,15 +686,6 @@ ensure_grafana_admin_password_phase70() {
     TARGET_PW="${desired_password}" \
     /bin/sh -lc '/usr/share/grafana/bin/grafana cli --homepath /usr/share/grafana admin reset-admin-password "$TARGET_PW"' >/dev/null
 
-  patch_json="$(
-    python3 - <<'PY' "${desired_password}"
-import json
-import sys
-print(json.dumps({"stringData": {"admin-password": sys.argv[1], "admin-user": "admin"}}))
-PY
-  )"
-  "${kubectl_bin}" -n observability patch secret grafana --type merge -p "${patch_json}" >/dev/null
-
   if ! validate_grafana_admin_password_phase70 "${desired_password}"; then
     echo "[phase70] Grafana admin password reconcile failed API validation" >&2
     return 1
@@ -773,26 +697,15 @@ PY
 ensure_homepage_widget_secrets_phase70() {
   local openbao_token=""
   local argocd_widget_key=""
-  local authentik_widget_key=""
   local gitea_widget_auth=""
-  local grafana_admin_password=""
-  local cloudflare_account_id=""
-  local cloudflare_tunnel_id=""
-  local cloudflare_api_auth=""
-  local tailscale_api_auth=""
-  local tailscale_device_id=""
   local secret_before=""
   local secret_after=""
-  local live_grafana_admin_password=""
   local existing_argocd_widget_key=""
-  local existing_authentik_widget_key=""
   local existing_gitea_widget_auth=""
-  local existing_grafana_admin_password=""
-  local existing_cloudflare_account_id=""
-  local existing_cloudflare_tunnel_id=""
-  local existing_cloudflare_api_auth=""
-  local existing_tailscale_api_auth=""
-  local existing_tailscale_device_id=""
+  local gitea_admin_username=""
+  local gitea_admin_password=""
+  local gitea_service_host=""
+  local gitea_base_url=""
   local secret_manifest=""
   local failure=0
 
@@ -813,26 +726,33 @@ ensure_homepage_widget_secrets_phase70() {
     )"
   fi
 
-  existing_argocd_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_ARGOCD_WIDGET_KEY)"
-  existing_authentik_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_AUTHENTIK_WIDGET_KEY)"
-  existing_gitea_widget_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GITEA_WIDGET_AUTH)"
-  existing_grafana_admin_password="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GRAFANA_ADMIN_PASSWORD)"
-  existing_cloudflare_account_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_ACCOUNT_ID)"
-  existing_cloudflare_tunnel_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_TUNNEL_ID)"
-  existing_cloudflare_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_API_AUTH)"
-  existing_tailscale_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_API_AUTH)"
-  existing_tailscale_device_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_DEVICE_ID)"
+  gitea_admin_username="$(read_openbao_app_field gitea/admin username "${openbao_token}")"
+  if [[ -z "${gitea_admin_username}" ]]; then
+    gitea_admin_username="$(read_phase70_bootstrap_field gitea_admin_username "${openbao_token}")"
+  fi
+  gitea_admin_username="${gitea_admin_username:-gitea-admin}"
+  gitea_admin_password="$(read_openbao_app_field gitea/admin password "${openbao_token}")"
+  if [[ -z "${gitea_admin_password}" ]]; then
+    gitea_admin_password="$(read_phase70_bootstrap_field gitea_admin_password "${openbao_token}")"
+  fi
+  gitea_service_host="$(service_cluster_ip_phase70 gitea gitea-http)"
+  if [[ -n "${gitea_service_host}" ]]; then
+    gitea_base_url="http://${gitea_service_host}:3000"
+  fi
 
-  argocd_widget_key="$(mint_argocd_widget_key_phase70 "${openbao_token}" || true)"
-  if [[ -n "${argocd_widget_key}" ]]; then
-    log_widget_field_phase70 homepage_argocd_widget_key minted "validated via Argo CD API"
+  existing_argocd_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_ARGOCD_WIDGET_KEY)"
+  existing_gitea_widget_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GITEA_WIDGET_AUTH)"
+
+  argocd_widget_key="$(read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY "${openbao_token}")"
+  if validate_argocd_widget_key_phase70 "${argocd_widget_key}"; then
+    log_widget_field_phase70 homepage_argocd_widget_key reused "validated from OpenBao"
+  elif validate_argocd_widget_key_phase70 "${existing_argocd_widget_key}"; then
+    argocd_widget_key="${existing_argocd_widget_key}"
+    log_widget_field_phase70 homepage_argocd_widget_key reused "validated from existing delivery secret"
   else
-    argocd_widget_key="$(read_phase70_bootstrap_field homepage_argocd_widget_key "${openbao_token}")"
-    if validate_argocd_widget_key_phase70 "${argocd_widget_key}"; then
-      log_widget_field_phase70 homepage_argocd_widget_key reused "validated from backup/OpenBao"
-    elif validate_argocd_widget_key_phase70 "${existing_argocd_widget_key}"; then
-      argocd_widget_key="${existing_argocd_widget_key}"
-      log_widget_field_phase70 homepage_argocd_widget_key reused "validated from existing secret"
+    argocd_widget_key="$(mint_argocd_widget_key_phase70 "${openbao_token}" || true)"
+    if [[ -n "${argocd_widget_key}" ]]; then
+      log_widget_field_phase70 homepage_argocd_widget_key minted "no valid stored credential; validated via Argo CD API"
     else
       argocd_widget_key=""
       log_widget_field_phase70 homepage_argocd_widget_key invalid "no validated token available"
@@ -840,33 +760,21 @@ ensure_homepage_widget_secrets_phase70() {
     fi
   fi
 
-  authentik_widget_key="$(mint_authentik_widget_key_phase70 "${openbao_token}" || true)"
-  if [[ -n "${authentik_widget_key}" ]]; then
-    log_widget_field_phase70 homepage_authentik_widget_key minted "validated via Authentik API"
+  gitea_widget_auth="$(read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH "${openbao_token}")"
+  if validate_gitea_widget_auth_phase70 "${gitea_widget_auth}" \
+    && gitea_widget_token_has_required_scopes \
+      "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_widget_auth}"; then
+    log_widget_field_phase70 homepage_gitea_widget_auth reused "validated read-only token from OpenBao"
+  elif validate_gitea_widget_auth_phase70 "${existing_gitea_widget_auth}" \
+    && gitea_widget_token_has_required_scopes \
+      "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${existing_gitea_widget_auth}"; then
+    gitea_widget_auth="${existing_gitea_widget_auth}"
+    log_widget_field_phase70 homepage_gitea_widget_auth reused "validated read-only token from existing delivery secret"
   else
-    authentik_widget_key="$(read_phase70_bootstrap_field homepage_authentik_widget_key "${openbao_token}")"
-    if validate_authentik_widget_key_phase70 "${authentik_widget_key}"; then
-      log_widget_field_phase70 homepage_authentik_widget_key reused "validated from backup/OpenBao"
-    elif validate_authentik_widget_key_phase70 "${existing_authentik_widget_key}"; then
-      authentik_widget_key="${existing_authentik_widget_key}"
-      log_widget_field_phase70 homepage_authentik_widget_key reused "validated from existing secret"
-    else
-      authentik_widget_key=""
-      log_widget_field_phase70 homepage_authentik_widget_key invalid "no validated token available"
-      failure=1
-    fi
-  fi
-
-  gitea_widget_auth="$(mint_gitea_widget_auth_phase70 "${openbao_token}" || true)"
-  if [[ -n "${gitea_widget_auth}" ]]; then
-    log_widget_field_phase70 homepage_gitea_widget_auth minted "validated via Gitea API"
-  else
-    gitea_widget_auth="$(read_phase70_bootstrap_field homepage_gitea_widget_auth "${openbao_token}")"
-    if validate_gitea_widget_auth_phase70 "${gitea_widget_auth}"; then
-      log_widget_field_phase70 homepage_gitea_widget_auth reused "validated from backup/OpenBao"
-    elif validate_gitea_widget_auth_phase70 "${existing_gitea_widget_auth}"; then
-      gitea_widget_auth="${existing_gitea_widget_auth}"
-      log_widget_field_phase70 homepage_gitea_widget_auth reused "validated from existing secret"
+    gitea_widget_auth="$(mint_gitea_widget_auth_phase70 \
+      "${openbao_token}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_base_url}" || true)"
+    if [[ -n "${gitea_widget_auth}" ]]; then
+      log_widget_field_phase70 homepage_gitea_widget_auth minted "no valid stored credential; validated via Gitea API"
     else
       gitea_widget_auth=""
       log_widget_field_phase70 homepage_gitea_widget_auth invalid "no validated token available"
@@ -874,71 +782,8 @@ ensure_homepage_widget_secrets_phase70() {
     fi
   fi
 
-  grafana_admin_password="$(resolve_grafana_admin_password_phase70 "${openbao_token}")"
-  live_grafana_admin_password="$(read_k8s_secret_key observability grafana admin-password)"
-  if [[ -n "${live_grafana_admin_password}" ]]; then
-    grafana_admin_password="${live_grafana_admin_password}"
-  fi
-  if validate_grafana_admin_password_phase70 "${grafana_admin_password}"; then
-    log_widget_field_phase70 grafana_admin_password reused "validated from live Grafana state"
-  elif validate_grafana_admin_password_phase70 "${existing_grafana_admin_password}"; then
-    grafana_admin_password="${existing_grafana_admin_password}"
-    log_widget_field_phase70 grafana_admin_password reused "validated from existing secret"
-  else
-    grafana_admin_password=""
-    log_widget_field_phase70 grafana_admin_password invalid "no validated password available"
-    failure=1
-  fi
-
-  cloudflare_account_id="$(read_phase70_bootstrap_field cloudflare_account_id "${openbao_token}")"
-  cloudflare_tunnel_id="$(read_phase70_bootstrap_field rancher_cloudflared_tunnel_id "${openbao_token}")"
-  cloudflare_api_auth="$(read_phase70_bootstrap_field cloudflare_api_token "${openbao_token}")"
-  if [[ -z "${cloudflare_account_id}" ]]; then
-    cloudflare_account_id="${existing_cloudflare_account_id}"
-  fi
-  if [[ -z "${cloudflare_tunnel_id}" ]]; then
-    cloudflare_tunnel_id="${existing_cloudflare_tunnel_id}"
-  fi
-  if [[ -z "${cloudflare_api_auth}" ]]; then
-    cloudflare_api_auth="${existing_cloudflare_api_auth}"
-  fi
-  if [[ -n "${cloudflare_account_id}" && -n "${cloudflare_tunnel_id}" && -n "${cloudflare_api_auth}" ]]; then
-    log_widget_field_phase70 cloudflare_widget_fields reused "stable operator-provided values present"
-  else
-    log_widget_field_phase70 cloudflare_widget_fields unavailable "keeping incomplete values out of secret/OpenBao"
-    cloudflare_account_id=""
-    cloudflare_tunnel_id=""
-    cloudflare_api_auth=""
-  fi
-
-  tailscale_api_auth="$(read_phase70_bootstrap_field homepage_tailscale_api_auth "${openbao_token}")"
-  tailscale_device_id="$(read_phase70_bootstrap_field homepage_tailscale_device_id "${openbao_token}")"
-  if [[ -z "${tailscale_api_auth}" ]]; then
-    tailscale_api_auth="${existing_tailscale_api_auth}"
-  fi
-  if [[ -z "${tailscale_device_id}" ]]; then
-    tailscale_device_id="${existing_tailscale_device_id}"
-  fi
-  if [[ -n "${tailscale_api_auth}" && -z "${tailscale_device_id}" ]]; then
-    tailscale_device_id="$(discover_tailscale_device_id_phase70)"
-  fi
-  if [[ -n "${tailscale_api_auth}" && -n "${tailscale_device_id}" ]]; then
-    log_widget_field_phase70 homepage_tailscale_device_id reused "tailscale API auth and device id available"
-  else
-    log_widget_field_phase70 homepage_tailscale_device_id unavailable "keeping incomplete values out of secret/OpenBao"
-    tailscale_api_auth=""
-    tailscale_device_id=""
-  fi
-
   persist_widget_field_phase70 homepage_argocd_widget_key "${argocd_widget_key}" "${openbao_token}"
-  persist_widget_field_phase70 homepage_authentik_widget_key "${authentik_widget_key}" "${openbao_token}"
   persist_widget_field_phase70 homepage_gitea_widget_auth "${gitea_widget_auth}" "${openbao_token}"
-  persist_widget_field_phase70 grafana_admin_password "${grafana_admin_password}" "${openbao_token}"
-  persist_widget_field_phase70 cloudflare_account_id "${cloudflare_account_id}" "${openbao_token}"
-  persist_widget_field_phase70 rancher_cloudflared_tunnel_id "${cloudflare_tunnel_id}" "${openbao_token}"
-  persist_widget_field_phase70 cloudflare_api_token "${cloudflare_api_auth}" "${openbao_token}"
-  persist_widget_field_phase70 homepage_tailscale_api_auth "${tailscale_api_auth}" "${openbao_token}"
-  persist_widget_field_phase70 homepage_tailscale_device_id "${tailscale_device_id}" "${openbao_token}"
 
   secret_before="$("${kubectl_bin}" -n homepage get secret homepage-widget-secrets -o json 2>/dev/null | python3 - <<'PY'
 import json
@@ -952,14 +797,7 @@ PY
 
   secret_manifest="$(build_homepage_widget_secret_manifest_phase70 \
     "HOMEPAGE_ARGOCD_WIDGET_KEY=${argocd_widget_key}" \
-    "HOMEPAGE_AUTHENTIK_WIDGET_KEY=${authentik_widget_key}" \
-    "HOMEPAGE_GITEA_WIDGET_AUTH=${gitea_widget_auth}" \
-    "HOMEPAGE_GRAFANA_ADMIN_PASSWORD=${grafana_admin_password}" \
-    "HOMEPAGE_CLOUDFLARE_ACCOUNT_ID=${cloudflare_account_id}" \
-    "HOMEPAGE_CLOUDFLARE_TUNNEL_ID=${cloudflare_tunnel_id}" \
-    "HOMEPAGE_CLOUDFLARE_API_AUTH=${cloudflare_api_auth}" \
-    "HOMEPAGE_TAILSCALE_API_AUTH=${tailscale_api_auth}" \
-    "HOMEPAGE_TAILSCALE_DEVICE_ID=${tailscale_device_id}")"
+    "HOMEPAGE_GITEA_WIDGET_AUTH=${gitea_widget_auth}")"
   printf '%s\n' "${secret_manifest}" | "${kubectl_bin}" -n homepage apply -f - >/dev/null
 
   secret_after="$("${kubectl_bin}" -n homepage get secret homepage-widget-secrets -o json 2>/dev/null | python3 - <<'PY'
@@ -977,6 +815,16 @@ PY
     retry_cmd 30 10 \
       "${kubectl_bin}" -n homepage rollout status deploy/homepage --timeout=30s >/dev/null || true
     echo "[phase70] restarted Homepage deployment to pick up refreshed widget secrets"
+  fi
+
+  if [[ -n "${gitea_widget_auth}" ]]; then
+    if revoke_stale_gitea_widget_tokens \
+      "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_widget_auth}"; then
+      log_widget_field_phase70 homepage_gitea_widget_auth revoked "removed superseded Homepage tokens"
+    else
+      log_widget_field_phase70 homepage_gitea_widget_auth invalid "could not prove stale-token revocation"
+      failure=1
+    fi
   fi
 
   if (( failure > 0 )); then
@@ -1011,7 +859,13 @@ ensure_authentik_admin_password_phase70() {
   fi
 
   if [[ -z "${admin_username}" && -n "${openbao_token}" ]]; then
+    admin_username="$(read_openbao_app_field authentik/admin admin_username "${openbao_token}")"
+  fi
+  if [[ -z "${admin_username}" && -n "${openbao_token}" ]]; then
     admin_username="$(read_openbao_platform_field authentik_admin_username "${openbao_token}")"
+  fi
+  if [[ -z "${admin_password}" && -n "${openbao_token}" ]]; then
+    admin_password="$(read_openbao_app_field authentik/admin bootstrap_password "${openbao_token}")"
   fi
   if [[ -z "${admin_password}" && -n "${openbao_token}" ]]; then
     admin_password="$(read_openbao_platform_field authentik_admin_password "${openbao_token}")"

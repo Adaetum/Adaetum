@@ -17,18 +17,13 @@ This repo uses that for the nginx ingress controller Service:
 - `kube-system/rke2-ingress-nginx-controller` (annotation is patched by
   [`Phase-50/run-phase50.sh`](../../../ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh))
 
-## Secret (not in git)
+## Secret
 
-Create this Secret in the `ingress` namespace:
-
-- name: `external-dns-cloudflare`
-- key: `api-token`
-
-The token should be scoped to the relevant zone(s) with permissions to edit DNS.
-
-If `external-dns-cloudflare` does not exist, do not sync this app through Argo CD yet.
-The Deployment hard-requires that Secret via `env.valueFrom.secretKeyRef`, and the pod
-will stay in `CreateContainerConfigError` until the Secret is present.
+The zone-scoped, provider-issued token is stored at
+`secret/apps/ingress/external-dns:api_token` in OpenBao. External Secrets
+maintains the `ingress/external-dns-cloudflare` delivery Secret, and Reloader
+restarts external-dns when it changes. Replace or revoke the credential in
+Cloudflare first, then update OpenBao; do not edit the Kubernetes delivery copy.
 
 ## Domain filter
 

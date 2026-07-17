@@ -2,7 +2,7 @@
 set -eu
 
 schedule="${CRON_SCHEDULE:-*/10 * * * *}"
-playbook="${ANSIBLE_PLAYBOOK:-playbooks/bootstrap.yml}"
+playbook="${ANSIBLE_PLAYBOOK:-playbooks/day2.yml}"
 inventory="${ANSIBLE_INVENTORY:-node-inventory.yml}"
 extra_args="${ANSIBLE_EXTRA_ARGS:-}"
 tailnet_domain="${TAILSCALE_DOMAIN:-}"

@@ -483,7 +483,7 @@ management) and then pins it for reuse.
 Read the current VIP:
 
 ```bash
-kubectl -n ingress get secret ingress-vip-config -o jsonpath='{.data.ingress_external_vip}' | base64 -d
+kubectl -n ingress get configmap ingress-vip-config -o jsonpath='{.data.ingress_external_vip}'
 ```
 
 Override/pin the VIP:
@@ -494,20 +494,19 @@ Override/pin the VIP:
   door Service `kube-system/rke2-ingress-nginx-controller` pointed at that IP.
 - If those keys are empty, the controller sets the Service to request a DHCP
   lease (`loadBalancerIP=0.0.0.0`) via kube-vip, then persists the discovered IP
-  back into the Secret so it stays stable.
+  back into the ConfigMap so it stays stable.
 
 Override/pin the VIP (example):
 
 ```bash
 VIP="192.168.1.250"
-VIP_B64="$(printf '%s' "${VIP}" | base64 | tr -d '\r\n')"
-kubectl -n ingress patch secret ingress-vip-config --type merge \
-  -p "{\"data\":{\"ingress_internal_vip\":\"${VIP_B64}\",\"ingress_external_vip\":\"${VIP_B64}\"}}"
+kubectl -n ingress patch configmap ingress-vip-config --type merge \
+  -p "{\"data\":{\"ingress_internal_vip\":\"${VIP}\",\"ingress_external_vip\":\"${VIP}\"}}"
 ```
 
 Optional knobs:
 
-- Set a DHCP lease hostname by updating `ingress_dhcp_hostname` in the same Secret.
+- Set a DHCP lease hostname by updating `ingress_dhcp_hostname` in the same ConfigMap.
 - Disable the VIP flow entirely by setting `ingress_service_type=NodePort`.
 
 </details>

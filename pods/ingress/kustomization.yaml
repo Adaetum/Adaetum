@@ -1,6 +1,7 @@
 resources:
   - ingress-cluster-config.yaml
   - nginx-controller-config.yaml
+  - external-dns/external-secret.yaml
   - external-dns/deployment.yaml
   - external-dns/rbac.yaml
   - nginx-routing/gitea-ingress.yaml

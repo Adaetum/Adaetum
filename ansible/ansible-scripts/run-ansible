@@ -1,14 +1,21 @@
 #!/bin/sh
 set -eu
 
-playbook="${1:-${ANSIBLE_PLAYBOOK:-playbooks/bootstrap.yml}}"
+playbook="${1:-${ANSIBLE_PLAYBOOK:-playbooks/day2.yml}}"
 inventory="${ANSIBLE_INVENTORY:-node-inventory.yml}"
 extra_args="${ANSIBLE_EXTRA_ARGS:-}"
 
-if [ -f /ansible/ansible/.env ]; then
-  set -a
-  . /ansible/ansible/.env
-  set +a
+# Day-two runs must not re-import the bootstrap .env: it is an installer output
+# and may contain superseded values after OpenBao rotates a credential. Read
+# only the scoped delivery files mounted from the OpenBao-backed Secret.
+day2_secret_dir="${ADAETUM_DAY2_SECRET_DIR:-/run/secrets/adaetum}"
+if [ -r "${day2_secret_dir}/TAILSCALE_OAUTH_CLIENT_ID" ]; then
+  TAILSCALE_OAUTH_CLIENT_ID="$(cat "${day2_secret_dir}/TAILSCALE_OAUTH_CLIENT_ID")"
+  export TAILSCALE_OAUTH_CLIENT_ID
+fi
+if [ -r "${day2_secret_dir}/TAILSCALE_OAUTH_CLIENT_SECRET" ]; then
+  TAILSCALE_OAUTH_CLIENT_SECRET="$(cat "${day2_secret_dir}/TAILSCALE_OAUTH_CLIENT_SECRET")"
+  export TAILSCALE_OAUTH_CLIENT_SECRET
 fi
 
 base64url() {

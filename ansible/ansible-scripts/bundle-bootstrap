@@ -837,6 +837,35 @@ if is_true "${BOOTSTRAP_RUN_PHASE99}"; then
     /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-90/run-phase99.sh
 fi
 
+# Both break-glass and join nodes fetch the same secret-bearing first-boot
+# payload. Phase 99 removes the break-glass copies, but join nodes deliberately
+# skip that phase. Remove the files at the successful outer boundary as well so
+# a completed node cannot retain stale provider, source-repository, or
+# enrollment credentials. Failed runs keep them so the explicit resume path can
+# diagnose and retry the incomplete installation.
+remove_first_boot_env_files() {
+  local path=""
+  for path in \
+    "${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}" \
+    /etc/ansible-bundle-bootstrap.env \
+    /etc/tailscale-firstboot.env; do
+    if [ ! -e "${path}" ]; then
+      continue
+    fi
+    if command -v shred >/dev/null 2>&1; then
+      shred -u -- "${path}" 2>/dev/null || rm -f -- "${path}"
+    else
+      rm -f -- "${path}"
+    fi
+    if [ -e "${path}" ]; then
+      echo "[BOOTSTRAP] failed to remove first-boot credential file: ${path}" >&2
+      return 1
+    fi
+    echo "[BOOTSTRAP] removed first-boot credential file: ${path}"
+  done
+}
+
+remove_first_boot_env_files
 bootstrap_phase_status_write "100" "phase100" "SUCCESS" "$(phase_label_for_id "100")"
 echo "[BOOTSTRAP] bundle-bootstrap complete (validation, bootstrap, GitOps install, handoff, realization, reconciliation, and finalization complete)"
 bootstrap_diag_record \

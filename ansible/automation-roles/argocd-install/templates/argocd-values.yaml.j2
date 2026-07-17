@@ -1,3 +1,12 @@
+global:
+  # Redis is an ephemeral cache, but every Argo CD process must switch its
+  # authentication value together. Reloader converges all Deployments and the
+  # application-controller StatefulSet after ESO updates argocd-redis.
+  deploymentAnnotations:
+    secret.reloader.stakater.com/reload: argocd-redis
+  statefulsetAnnotations:
+    secret.reloader.stakater.com/reload: argocd-redis
+
 configs:
   cm:
     accounts.readonly: apiKey
@@ -8,10 +17,18 @@ configs:
 {% if argocd_admin_password | length > 0 %}
     argocdServerAdminPassword: "{{ argocd_admin_password_hash_effective }}"
 {% endif %}
+{% if argocd_server_secret_key | length > 0 %}
+    extra:
+      server.secretkey: "{{ argocd_server_secret_key }}"
+{% endif %}
   params:
     server.insecure: "true"
 
 server:
+  deploymentAnnotations:
+    # Component annotations replace the global map in this chart, so retain
+    # both the session-signing and shared Redis dependencies explicitly.
+    secret.reloader.stakater.com/reload: argocd-secret,argocd-redis
   service:
     type: ClusterIP
 
@@ -33,3 +50,9 @@ repoServer:
     timeoutSeconds: 10
     periodSeconds: 20
     failureThreshold: 10
+
+# Adaetum provisions argocd-redis before Helm and later reconciles its `auth`
+# field from OpenBao. Disable the chart Job so it cannot become a competing
+# random-secret authority on install or upgrade.
+redisSecretInit:
+  enabled: false

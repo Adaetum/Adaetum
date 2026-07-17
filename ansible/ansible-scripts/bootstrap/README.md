@@ -32,13 +32,12 @@ are generated locally on the first server and are disposable.
   `CLUSTER_LOCAL_DOMAIN` is optional and defaults to a
   `.local` form derived from `CLUSTER_DOMAIN` (for example, `example.services`
   becomes `example.local`).
-  Authentik's local bootstrap backup credentials are authoritative: the
-  generated `authentik_admin_username` / `authentik_admin_password` files are
-  written first, synced into OpenBao and `authentik-secrets`, and then left as
-  the desired value. The live `akadmin` password is applied once in Phase 90,
-  after Authentik exists, using the local backup files when available and
-  falling back to OpenBao `secret/bootstrap/platform` after Phase 99 removes the
-  local bootstrap secret directory.
+  Authentik bootstrap values are split by ownership before handoff:
+  `authentik-encryption` holds the migration-gated encryption key,
+  `authentik-postgresql` holds the active database credentials, and
+  `authentik-admin` holds the reconciled administrator value. Phase 40 records
+  those values under separate OpenBao application paths before Phase 99 removes
+  the local bootstrap secret directory.
 - `Phase-60/run-phase60.sh`: Seed the repo and complete the Gitea -> Argo GitOps handoff.
   For the opinionated setup path, Phase 60 source-repo seeding can reuse the
   setup `GITHUB_SYNC_TOKEN` when that token is a normal git-capable GitHub
@@ -57,7 +56,12 @@ are generated locally on the first server and are disposable.
 - `Phase-90/run-phase99.sh`: Export the recovery kit and remove bootstrap-local authority.
 - `bundle-bootstrap`: Default first-boot orchestrator for the full bootstrap chain.
   It is the only supported operator entrypoint and expects the OS install layer
-  to have already provisioned Homebrew for first-boot tooling.
+  to have already provisioned Homebrew for first-boot tooling. After a
+  successful run it removes the three first-boot environment files. The outer
+  first-boot handoff also removes its rendered scripts and installed Anaconda
+  kickstart copies because they can contain the shared bootstrap delivery
+  token. Failed runs retain these artifacts for the explicit resume path. This
+  cleanup also runs on join nodes, which do not execute Phase 99.
 
 Per-phase logs:
 - `bundle-bootstrap` writes a separate log per step under
@@ -96,7 +100,12 @@ Failure analytics:
 ## Expected secret directory
 
 By default, secrets are written to `/var/lib/bootstrap-secrets` with `0700`
-permissions. Override with `BOOTSTRAP_SECRET_DIR`.
+permissions. Override with `BOOTSTRAP_SECRET_DIR`. Phase 99 removes this
+directory after the encrypted recovery export succeeds. The outer bundle
+orchestrator separately removes its first-boot environment files on every
+successful node so they cannot become a persistent credential source. The
+enclosing first-boot service then destroys the rendered scripts and installed
+kickstart copies before writing its completion marker.
 
 ## Usage (break-glass)
 

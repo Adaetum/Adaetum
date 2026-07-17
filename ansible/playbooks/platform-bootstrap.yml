@@ -57,6 +57,9 @@
       }}
     kubeconfig_path: "/etc/rancher/rke2/rke2.yaml"
     kubectl_cmd: "/var/lib/rancher/rke2/bin/kubectl"
+    # Ansible's root execution environment does not consistently include
+    # /usr/local/bin, so invoke the installer-owned Helm binary explicitly.
+    helm_cmd: "/usr/local/bin/helm"
     helm_install_script: "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3"
 
     # Cluster service DNS suffix (e.g., example.services or lab1.example.services).
@@ -127,8 +130,14 @@
         | regex_replace('/.*$', '')
       }}
     rancher_chart_repo: "https://releases.rancher.com/server-charts/latest"
+    # PasswordChangeRequest is part of the pinned Rancher 2.14 contract used
+    # by the OpenBao rotation reconciler.
+    rancher_chart_version: "2.14.3"
     longhorn_chart_repo: "https://charts.longhorn.io"
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
+    # OpenBao Redis ownership and Reloader annotations depend on this chart
+    # contract; upgrades require a rendered-secret review.
+    argocd_chart_version: "10.1.4"
     argocd_enabled: "{{ (lookup('ansible.builtin.env', 'ARGOCD_ENABLED') | default('false', true)) | bool }}"
     cloudflared_namespace: "cloudflared"
     cloudflared_image: "cloudflare/cloudflared:latest"
@@ -236,9 +245,16 @@
         - { name: "rke2_token", length: 48 }
         - { name: "rancher_admin_password", length: 24 }
         - { name: "argocd_admin_password", length: 24 }
+        - { name: "argocd_server_secret_key", length: 48 }
+        - { name: "argocd_redis_password", length: 24 }
         - { name: "gitea_admin_password", length: 24 }
         - { name: "gitea_runner_token", length: 32 }
+        - { name: "gitea_secret_key", length: 48 }
+        - { name: "gitea_internal_token", length: 48 }
+        - { name: "gitea_jwt_secret", length: 48 }
         - { name: "grafana_admin_password", length: 24 }
+        - { name: "grafana_secret_key", length: 48 }
+        - { name: "homepage_grafana_password", length: 24 }
         - { name: "authentik_secret_key", length: 48 }
         - { name: "authentik_postgresql_password", length: 24 }
         - { name: "authentik_admin_password", length: 24 }
@@ -284,9 +300,16 @@
         - rke2_token
         - rancher_admin_password
         - argocd_admin_password
+        - argocd_server_secret_key
+        - argocd_redis_password
         - gitea_admin_password
         - gitea_runner_token
+        - gitea_secret_key
+        - gitea_internal_token
+        - gitea_jwt_secret
         - grafana_admin_password
+        - grafana_secret_key
+        - homepage_grafana_password
         - authentik_secret_key
         - authentik_postgresql_password
         - authentik_admin_password
@@ -522,14 +545,22 @@
         rke2_token: "{{ lookup('file', bootstrap_secret_dir + '/rke2_token') | trim }}"
         rancher_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/rancher_admin_password') | trim }}"
         argocd_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/argocd_admin_password') | trim }}"
+        argocd_server_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/argocd_server_secret_key') | trim }}"
+        argocd_redis_password: "{{ lookup('file', bootstrap_secret_dir + '/argocd_redis_password') | trim }}"
         gitea_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/gitea_admin_password') | trim }}"
         gitea_runner_token: "{{ lookup('file', bootstrap_secret_dir + '/gitea_runner_token') | trim }}"
+        gitea_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/gitea_secret_key') | trim }}"
+        gitea_internal_token: "{{ lookup('file', bootstrap_secret_dir + '/gitea_internal_token') | trim }}"
+        gitea_jwt_secret: "{{ lookup('file', bootstrap_secret_dir + '/gitea_jwt_secret') | trim }}"
         grafana_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/grafana_admin_password') | trim }}"
+        grafana_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/grafana_secret_key') | trim }}"
+        homepage_grafana_password: "{{ lookup('file', bootstrap_secret_dir + '/homepage_grafana_password') | trim }}"
         authentik_admin_username: "{{ lookup('file', bootstrap_secret_dir + '/authentik_admin_username') | trim }}"
         authentik_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/authentik_admin_password') | trim }}"
         authentik_bootstrap_token: "{{ lookup('file', bootstrap_secret_dir + '/authentik_bootstrap_token') | trim }}"
         authentik_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/authentik_secret_key') | trim }}"
         authentik_postgresql_password: "{{ lookup('file', bootstrap_secret_dir + '/authentik_postgresql_password') | trim }}"
+      no_log: true
 
     - name: Read shared rke2 token from primary host
       ansible.builtin.shell: |
@@ -549,6 +580,7 @@
       args:
         executable: /bin/bash
       register: rke2_primary_token_result
+      no_log: true
       changed_when: false
       failed_when: false
       delegate_to: "{{ rke2_primary_host }}"
@@ -569,6 +601,7 @@
     - name: Use primary rke2 token on every host
       ansible.builtin.set_fact:
         rke2_token: "{{ rke2_primary_token_result.stdout | trim }}"
+      no_log: true
 
     - name: Detect node Tailscale IPv4 address
       ansible.builtin.shell: |
@@ -613,6 +646,7 @@
             - "{{ rke2_tls_san }}"
           write-kubeconfig-mode: "0644"
           cni: "calico"
+      no_log: true
       when:
         - rke2_role == "server"
         - inventory_hostname == rke2_primary_host
@@ -630,6 +664,7 @@
             - "{{ rke2_tls_san }}"
           write-kubeconfig-mode: "0644"
           cni: "calico"
+      no_log: true
       when:
         - rke2_role == "server"
         - inventory_hostname != rke2_primary_host
@@ -642,6 +677,7 @@
           token: "{{ rke2_token }}"
           server: "https://{{ rke2_primary_api_host }}:9345"
           node-ip: "{{ rke2_node_ip_effective }}"
+      no_log: true
       when:
         - rke2_role == "agent"
 
@@ -882,11 +918,11 @@
 
     - name: Add Helm repos
       ansible.builtin.shell: |
-        helm repo add rancher-latest "{{ rancher_chart_repo }}"
-        helm repo add longhorn "{{ longhorn_chart_repo }}"
-        helm repo add argo "{{ argocd_chart_repo }}"
-        helm repo add gitea "{{ gitea_chart_repo }}"
-        helm repo update
+        {{ helm_cmd }} repo add rancher-latest "{{ rancher_chart_repo }}"
+        {{ helm_cmd }} repo add longhorn "{{ longhorn_chart_repo }}"
+        {{ helm_cmd }} repo add argo "{{ argocd_chart_repo }}"
+        {{ helm_cmd }} repo add gitea "{{ gitea_chart_repo }}"
+        {{ helm_cmd }} repo update
       args:
         executable: /bin/bash
       register: bootstrap_helm_repos
@@ -898,9 +934,9 @@
     - name: Install cert-manager (required by Rancher)
       ansible.builtin.shell: |
         {{ kubectl_cmd }} create namespace cert-manager --dry-run=client -o yaml | {{ kubectl_cmd }} apply --validate=false -f -
-        helm repo add jetstack https://charts.jetstack.io
-        helm repo update
-        helm upgrade --install cert-manager jetstack/cert-manager \
+        {{ helm_cmd }} repo add jetstack https://charts.jetstack.io
+        {{ helm_cmd }} repo update
+        {{ helm_cmd }} upgrade --install cert-manager jetstack/cert-manager \
           --namespace cert-manager \
           --set installCRDs=true \
           --wait \
@@ -1054,6 +1090,30 @@
         - inventory_hostname == rke2_primary_host
         - ingress_nginx_webhook_relax is defined
 
+    - name: Relax Rancher webhook probes for slow homelab nodes
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if ! {{ kubectl_cmd }} -n cattle-system get deployment rancher-webhook >/dev/null 2>&1; then
+          echo "absent"
+          exit 0
+        fi
+        {{ kubectl_cmd }} -n cattle-system patch deployment rancher-webhook --type=json \
+          -p='[
+            {"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/timeoutSeconds","value":10},
+            {"op":"replace","path":"/spec/template/spec/containers/0/startupProbe/failureThreshold","value":180},
+            {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/timeoutSeconds","value":10},
+            {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/failureThreshold","value":12}
+          ]'
+      args:
+        executable: /bin/bash
+      register: rancher_webhook_probe_patch
+      retries: 10
+      delay: 5
+      until: rancher_webhook_probe_patch.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
     - name: Wait for Rancher webhook endpoints (if present)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -1109,11 +1169,14 @@
         # The next task relaxes Rancher's startup probe for slower homelab
         # nodes. Waiting here would let the chart's shorter default probe
         # restart Rancher before Adaetum can apply that policy.
-        helm upgrade --install rancher rancher-latest/rancher \
+        # Read the bootstrap password from its root-only file so it never
+        # appears in Helm process arguments.
+        {{ helm_cmd }} upgrade --install rancher rancher-latest/rancher \
+          --version {{ rancher_chart_version }} \
           --namespace cattle-system \
           --set replicas={{ rancher_replica_target | default('1') }} \
           --set hostname={{ rancher_hostname }} \
-          --set bootstrapPassword={{ rancher_admin_password }} \
+          --set-file bootstrapPassword={{ bootstrap_secret_dir }}/rancher_admin_password \
           --timeout 15m
       args:
         executable: /bin/bash
@@ -1400,10 +1463,12 @@
     - name: Install Longhorn (storage)
       ansible.builtin.shell: |
         {{ kubectl_cmd }} create namespace longhorn-system --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
-        helm upgrade --install longhorn longhorn/longhorn \
+        {{ helm_cmd }} upgrade --install longhorn longhorn/longhorn \
           --namespace longhorn-system \
           --create-namespace \
           --set persistence.defaultClassReplicaCount={{ longhorn_default_replica_count }} \
+          --set defaultSettings.engineImagePodLivenessProbeTimeout=15 \
+          --set defaultSettings.engineImagePodLivenessProbeFailureThreshold=12 \
           --wait --timeout 10m
       args:
         executable: /bin/bash
@@ -1420,10 +1485,12 @@
     - name: Launch Longhorn install in background
       ansible.builtin.shell: |
         {{ kubectl_cmd }} create namespace longhorn-system --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
-        helm upgrade --install longhorn longhorn/longhorn \
+        {{ helm_cmd }} upgrade --install longhorn longhorn/longhorn \
           --namespace longhorn-system \
           --create-namespace \
           --set persistence.defaultClassReplicaCount={{ longhorn_default_replica_count }} \
+          --set defaultSettings.engineImagePodLivenessProbeTimeout=15 \
+          --set defaultSettings.engineImagePodLivenessProbeFailureThreshold=12 \
           --wait --timeout 10m
       args:
         executable: /bin/bash
@@ -1455,6 +1522,7 @@
     - name: Create Argo CD admin password hash
       ansible.builtin.command: "htpasswd -nbBC 10 '' '{{ argocd_admin_password }}'"
       register: argocd_htpasswd
+      no_log: true
       changed_when: false
       when:
         - inventory_hostname == rke2_primary_host
@@ -1463,10 +1531,19 @@
     - name: Install Argo CD
       ansible.builtin.shell: |
         {{ kubectl_cmd }} create namespace argocd --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
-        helm upgrade --install argocd argo/argo-cd \
+        {{ kubectl_cmd }} -n argocd create secret generic argocd-redis \
+          --from-literal=auth="$ARGOCD_REDIS_PASSWORD" \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n argocd apply -f -
+        {{ helm_cmd }} upgrade --install argocd argo/argo-cd \
           --namespace argocd \
+          --version {{ argocd_chart_version }} \
           --set configs.params.server\\.insecure=true \
-          --set configs.secret.argocdServerAdminPassword="{{ argocd_htpasswd.stdout | replace(':', '') }}"
+          --set-string configs.secret.extra.server\\.secretkey="{{ argocd_server_secret_key }}" \
+          --set configs.secret.argocdServerAdminPassword="{{ argocd_htpasswd.stdout | replace(':', '') }}" \
+          --set redisSecretInit.enabled=false \
+          --set-string 'global.deploymentAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-redis' \
+          --set-string 'global.statefulsetAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-redis' \
+          --set-string 'server.deploymentAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-secret\,argocd-redis'
       args:
         executable: /bin/bash
       register: argocd_install
@@ -1475,18 +1552,29 @@
       until: argocd_install.rc == 0
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
+        ARGOCD_REDIS_PASSWORD: "{{ argocd_redis_password }}"
       when:
         - inventory_hostname == rke2_primary_host
         - argocd_enabled | bool
         - not platform_parallel_installs_enabled
+      no_log: true
 
     - name: Launch Argo CD install in background
       ansible.builtin.shell: |
         {{ kubectl_cmd }} create namespace argocd --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
-        helm upgrade --install argocd argo/argo-cd \
+        {{ kubectl_cmd }} -n argocd create secret generic argocd-redis \
+          --from-literal=auth="$ARGOCD_REDIS_PASSWORD" \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n argocd apply -f -
+        {{ helm_cmd }} upgrade --install argocd argo/argo-cd \
           --namespace argocd \
+          --version {{ argocd_chart_version }} \
           --set configs.params.server\\.insecure=true \
-          --set configs.secret.argocdServerAdminPassword="{{ argocd_htpasswd.stdout | replace(':', '') }}"
+          --set-string configs.secret.extra.server\\.secretkey="{{ argocd_server_secret_key }}" \
+          --set configs.secret.argocdServerAdminPassword="{{ argocd_htpasswd.stdout | replace(':', '') }}" \
+          --set redisSecretInit.enabled=false \
+          --set-string 'global.deploymentAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-redis' \
+          --set-string 'global.statefulsetAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-redis' \
+          --set-string 'server.deploymentAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-secret\,argocd-redis'
       args:
         executable: /bin/bash
       register: argocd_install_async
@@ -1494,17 +1582,19 @@
       poll: 0
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
+        ARGOCD_REDIS_PASSWORD: "{{ argocd_redis_password }}"
       when:
         - inventory_hostname == rke2_primary_host
         - argocd_enabled | bool
         - platform_parallel_installs_enabled
       changed_when: false
+      no_log: true
 
     - name: Wait for background Longhorn install
       ansible.builtin.async_status:
         jid: "{{ longhorn_install_async.ansible_job_id }}"
       register: longhorn_install
-      until: longhorn_install.finished
+      until: longhorn_install.finished | bool
       retries: "{{ platform_parallel_install_poll_retries }}"
       delay: "{{ platform_parallel_install_poll_delay }}"
       failed_when: false
@@ -1622,7 +1712,7 @@
         {{ kubectl_cmd }} get storageclass -o wide || true
         {{ kubectl_cmd }} -n longhorn-system get pods -o wide || true
         {{ kubectl_cmd }} -n longhorn-system get events --sort-by=.lastTimestamp | tail -n 50 || true
-        helm status longhorn -n longhorn-system || true
+        {{ helm_cmd }} status longhorn -n longhorn-system || true
       register: longhorn_sc_diag
       changed_when: false
       environment:
@@ -1851,6 +1941,10 @@
           --type=merge -p '{"value":"200"}'
       args:
         executable: /bin/bash
+      register: longhorn_single_node_settings
+      retries: 30
+      delay: 5
+      until: longhorn_single_node_settings.rc == 0
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       when:
@@ -1872,6 +1966,10 @@
           -p "{\"spec\":{\"disks\":{\"${disk}\":{\"storageReserved\":0,\"allowScheduling\":true}}}}"
       args:
         executable: /bin/bash
+      register: longhorn_disk_pressure_relax
+      retries: 30
+      delay: 5
+      until: longhorn_disk_pressure_relax.rc == 0
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       when:
@@ -1910,7 +2008,7 @@
       ansible.builtin.async_status:
         jid: "{{ argocd_install_async.ansible_job_id }}"
       register: argocd_install
-      until: argocd_install.finished
+      until: argocd_install.finished | bool
       retries: "{{ platform_parallel_install_poll_retries }}"
       delay: "{{ platform_parallel_install_poll_delay }}"
       failed_when: false
@@ -2253,6 +2351,24 @@
       no_log: true
       when: inventory_hostname == rke2_primary_host
 
+    - name: Create Gitea cryptographic secrets before the GitOps install
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} -n gitea create secret generic gitea-encryption \
+          --from-literal=secret_key='{{ gitea_secret_key }}' \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n gitea apply -f -
+        {{ kubectl_cmd }} -n gitea create secret generic gitea-runtime \
+          --from-literal=internal_token='{{ gitea_internal_token }}' \
+          --from-literal=jwt_secret='{{ gitea_jwt_secret }}' \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n gitea apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+      no_log: true
+      when: inventory_hostname == rke2_primary_host
+
     - name: Persist Cloudflare bootstrap token for later phases
       ansible.builtin.copy:
         content: "{{ external_dns_cloudflare_token }}\n"
@@ -2293,14 +2409,19 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       when: inventory_hostname == rke2_primary_host
 
-    - name: Create Authentik bootstrap secret early
+    - name: Create Authentik bootstrap credentials early
       ansible.builtin.shell: |
         set -euo pipefail
-        {{ kubectl_cmd }} -n authentik create secret generic authentik-secrets \
+        {{ kubectl_cmd }} -n authentik create secret generic authentik-encryption \
           --from-literal=secret_key='{{ lookup('file', bootstrap_secret_dir + '/authentik_secret_key') | trim }}' \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n authentik apply -f -
+        {{ kubectl_cmd }} -n authentik create secret generic authentik-postgresql \
           --from-literal=postgresql_password='{{ lookup('file', bootstrap_secret_dir + '/authentik_postgresql_password') | trim }}' \
           --from-literal=password='{{ lookup('file', bootstrap_secret_dir + '/authentik_postgresql_password') | trim }}' \
           --from-literal=postgres-password='{{ lookup('file', bootstrap_secret_dir + '/authentik_postgresql_password') | trim }}' \
+          --dry-run=client -o yaml | {{ kubectl_cmd }} -n authentik apply -f -
+        {{ kubectl_cmd }} -n authentik create secret generic authentik-admin \
+          --from-literal=admin_username='akadmin' \
           --from-literal=bootstrap_password='{{ lookup('file', bootstrap_secret_dir + '/authentik_admin_password') | trim }}' \
           --from-literal=bootstrap_token='{{ lookup('file', bootstrap_secret_dir + '/authentik_bootstrap_token') | trim }}' \
           --dry-run=client -o yaml | {{ kubectl_cmd }} -n authentik apply -f -
@@ -2352,6 +2473,19 @@
       when:
         - inventory_hostname == rke2_primary_host
         - cloudflared_enabled | bool
+
+    - name: Persist cloudflared tunnel token until OpenBao handoff
+      ansible.builtin.copy:
+        content: "{{ cloudflared_tunnel_token }}\n"
+        dest: "{{ bootstrap_secret_dir }}/rancher_cloudflared_tunnel_token"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when:
+        - inventory_hostname == rke2_primary_host
+        - cloudflared_enabled | bool
+        - cloudflared_tunnel_token | length > 0
 
     - name: Deploy cloudflared tunnel
       ansible.builtin.shell: |
@@ -2420,6 +2554,6 @@
         name: tailscale-retag
       vars:
         tailscale_retag_role_tag: "tag:{{ rke2_role }}"
-        tailscale_retag_platform_tag: "tag:rke2"
+        tailscale_retag_platform_tag: "tag:rocky10"
         tailscale_retag_fail_on_missing_authkey: true
         tailscale_retag_force: false

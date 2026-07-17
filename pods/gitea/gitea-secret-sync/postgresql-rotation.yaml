@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitea-postgresql-rotation
+  namespace: gitea
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gitea-postgresql-rotation
+  namespace: gitea
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["gitea-postgresql"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitea-postgresql-rotation
+  namespace: gitea
+subjects:
+  - kind: ServiceAccount
+    name: gitea-postgresql-rotation
+    namespace: gitea
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gitea-postgresql-rotation
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gitea-postgresql-rotation
+  namespace: gitea
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          serviceAccountName: gitea-postgresql-rotation
+          restartPolicy: Never
+          initContainers:
+            - name: rotate-database
+              # Match the database major version while keeping the client image
+              # immutable. psql changes both roles in one transaction.
+              image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  if cmp -s /var/run/active/password /var/run/desired/password \
+                    && cmp -s /var/run/active/postgres-password /var/run/desired/postgres-password; then
+                    echo "Gitea PostgreSQL roles already match OpenBao."
+                    exit 0
+                  fi
+
+                  old_postgres_password="$(cat /var/run/active/postgres-password)"
+                  new_postgres_password="$(cat /var/run/desired/postgres-password)"
+                  new_application_password="$(cat /var/run/desired/password)"
+                  export PGPASSWORD="${old_postgres_password}"
+
+                  if psql -h gitea-postgresql -U postgres -d postgres \
+                    -v ON_ERROR_STOP=1 -c 'SELECT 1' >/dev/null 2>&1; then
+                    export NEW_POSTGRES_PASSWORD="${new_postgres_password}"
+                    export NEW_APPLICATION_PASSWORD="${new_application_password}"
+                    printf '%s\n' \
+                      '\getenv new_postgres_password NEW_POSTGRES_PASSWORD' \
+                      '\getenv new_application_password NEW_APPLICATION_PASSWORD' \
+                      'BEGIN;' \
+                      "ALTER ROLE postgres PASSWORD :'new_postgres_password';" \
+                      "ALTER ROLE gitea PASSWORD :'new_application_password';" \
+                      'COMMIT;' \
+                      | psql -h gitea-postgresql -U postgres -d postgres -v ON_ERROR_STOP=1
+                  else
+                    # A previous attempt may have committed PostgreSQL but
+                    # failed before promoting the Kubernetes delivery Secret.
+                    export PGPASSWORD="${new_postgres_password}"
+                    psql -h gitea-postgresql -U postgres -d postgres \
+                      -v ON_ERROR_STOP=1 -c 'SELECT 1' >/dev/null
+                  fi
+                  printf rotated >/work/state
+              volumeMounts:
+                - name: active-passwords
+                  mountPath: /var/run/active
+                  readOnly: true
+                - name: desired-passwords
+                  mountPath: /var/run/desired
+                  readOnly: true
+                - name: work
+                  mountPath: /work
+          containers:
+            - name: promote-passwords
+              image: bitnami/kubectl:latest@sha256:558420daf32bbc382e3e9af4537f4073085b336ddd47399a3b70e70087115978
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/bash", "-ec"]
+              args:
+                - |
+                  if [[ ! -s /work/state ]]; then
+                    exit 0
+                  fi
+                  payload="$(
+                    jq -n \
+                      --rawfile password /var/run/desired/password \
+                      --rawfile postgres_password /var/run/desired/postgres-password \
+                      '{stringData: {
+                        "password": $password,
+                        "postgres-password": $postgres_password
+                      }}'
+                  )"
+                  kubectl -n gitea patch secret gitea-postgresql --type=merge -p "${payload}"
+                  echo "Gitea PostgreSQL delivery Secret promoted from OpenBao."
+              volumeMounts:
+                - name: desired-passwords
+                  mountPath: /var/run/desired
+                  readOnly: true
+                - name: work
+                  mountPath: /work
+          volumes:
+            - name: active-passwords
+              secret:
+                secretName: gitea-postgresql
+                items:
+                  - key: password
+                    path: password
+                  - key: postgres-password
+                    path: postgres-password
+            - name: desired-passwords
+              secret:
+                secretName: gitea-postgresql-desired
+                items:
+                  - key: password
+                    path: password
+                  - key: postgres-password
+                    path: postgres-password
+            - name: work
+              emptyDir: {}

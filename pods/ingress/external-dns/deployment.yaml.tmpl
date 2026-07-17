@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: external-dns
   namespace: ingress
+  annotations:
+    secret.reloader.stakater.com/auto: "true"
   labels:
     app: external-dns
 spec:
@@ -59,4 +61,3 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-
