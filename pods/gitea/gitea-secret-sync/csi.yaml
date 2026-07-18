@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitea-csi
+  namespace: gitea
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: gitea-openbao
+  namespace: gitea
+spec:
+  provider: openbao
+  secretObjects:
+    - secretName: gitea-admin-secret
+      type: Opaque
+      data:
+        - objectName: username
+          key: username
+        - objectName: password
+          key: password
+        - objectName: email
+          key: email
+    - secretName: gitea-encryption
+      type: Opaque
+      data:
+        - objectName: secret_key
+          key: secret_key
+    - secretName: gitea-runtime
+      type: Opaque
+      data:
+        - objectName: internal_token
+          key: internal_token
+        - objectName: jwt_secret
+          key: jwt_secret
+  parameters:
+    roleName: gitea
+    objects: |
+      - objectName: username
+        secretPath: secret/data/apps/gitea/admin
+        secretKey: username
+      - objectName: password
+        secretPath: secret/data/apps/gitea/admin
+        secretKey: password
+      - objectName: email
+        secretPath: secret/data/apps/gitea/admin
+        secretKey: email
+      - objectName: secret_key
+        secretPath: secret/data/apps/gitea/encryption
+        secretKey: secret_key
+      - objectName: internal_token
+        secretPath: secret/data/apps/gitea/runtime
+        secretKey: internal_token
+      - objectName: jwt_secret
+        secretPath: secret/data/apps/gitea/runtime
+        secretKey: jwt_secret

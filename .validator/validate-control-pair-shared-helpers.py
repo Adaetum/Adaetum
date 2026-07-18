@@ -162,15 +162,13 @@ mock_kubectl() {{
     EXEC_VALIDATED=1
     return 0
   fi
-  if [[ " $* " == *" create namespace gitea "* ]]; then
-    printf '%s\n' 'apiVersion: v1' 'kind: Namespace' 'metadata:' '  name: gitea'
+  if [[ " $* " == *" get secret gitea-push-mirror "* ]]; then
     return 0
   fi
-  if [[ " $* " == *" create secret generic gitea-push-mirror "* ]]; then
-    [[ " $* " == *"--from-literal=remote_url=https://github.com/example/recovery.git"* ]]
-    [[ " $* " == *"--from-literal=username=openbao-user"* ]]
-    [[ " $* " == *"--from-literal=token=openbao-token-value"* ]]
-    printf '%s\n' 'apiVersion: v1' 'kind: Secret' 'metadata:' '  name: gitea-push-mirror'
+  if [[ " $* " == *" get externalsecret gitea-push-mirror "* ]]; then
+    if [[ " $* " == *" jsonpath="* ]]; then
+      printf 'True\tReady\tOpenBao delivery ready'
+    fi
     return 0
   fi
   if [[ " $* " == *" apply -f - "* ]]; then

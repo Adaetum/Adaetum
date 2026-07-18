@@ -122,12 +122,12 @@ phase_position_for_id() {
 phase_baseline_seconds_for_id() {
   case "${1:-}" in
     10) printf '30' ;;   # local validation
-    20|30) printf '300' ;; # one Ansible playbook split into two visible gates
-    40) printf '600' ;;  # OpenBao initialization and synchronization
-    50) printf '420' ;;  # Argo CD and Gitea control pair
-    60) printf '600' ;;  # repository seed and GitOps handoff
+    20|30) printf '240' ;; # one Ansible playbook split into two visible gates
+    40) printf '570' ;;  # OpenBao initialization and synchronization
+    50) printf '360' ;;  # Argo CD and Gitea control pair
+    60) printf '480' ;;  # repository seed and GitOps handoff
     70) printf '720' ;;  # application realization, image build, checks
-    90) printf '420' ;;  # late reconciliation
+    90) printf '360' ;;  # late reconciliation
     99) printf '120' ;;  # export and temporary-authority removal
     *) printf '0' ;;
   esac
@@ -137,13 +137,13 @@ phase_remaining_baseline_seconds_for_id() {
   # Phase 20 and 30 are views of one playbook. Do not double-count them in the
   # customer-facing total estimate.
   case "${1:-}" in
-    10) printf '3210' ;;
-    20|30) printf '3180' ;;
-    40) printf '2880' ;;
-    50) printf '2280' ;;
-    60) printf '1860' ;;
-    70) printf '1260' ;;
-    90) printf '540' ;;
+    10) printf '2880' ;;
+    20|30) printf '2850' ;;
+    40) printf '2610' ;;
+    50) printf '2040' ;;
+    60) printf '1680' ;;
+    70) printf '1200' ;;
+    90) printf '480' ;;
     99) printf '120' ;;
     *) printf '0' ;;
   esac
@@ -286,6 +286,20 @@ bootstrap_phase_status_detail_from_log() {
       sub(/^\[rollout\] /, "", activity)
       if (activity ~ /(watching |: Ready$|still progressing|terminal )/) {
         latest = "Deployment progress: " activity
+      }
+    }
+    /^\[secret-sync\] / {
+      activity = $0
+      sub(/^\[secret-sync\] /, "", activity)
+      if (activity ~ /(watching |ready and ESO-backed|WARNING:|terminal )/) {
+        latest = "OpenBao secret delivery: " activity
+      }
+    }
+    /^\[secret-csi\] / {
+      activity = $0
+      sub(/^\[secret-csi\] /, "", activity)
+      if (activity ~ /(watching |mounted by |waiting for |terminal )/) {
+        latest = "OpenBao CSI delivery: " activity
       }
     }
     END { if (latest != "") print latest }
@@ -1035,27 +1049,27 @@ fi
 
 if is_true "${BOOTSTRAP_RUN_PHASE50}"; then
   run_bootstrap_phase "50" "phase50" "run Phase 50 (install minimal Argo CD + Gitea control pair)" \
-    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh || exit $?
 fi
 
 if is_true "${BOOTSTRAP_RUN_PHASE60}"; then
   run_bootstrap_phase "60" "phase60" "run Phase 60 (repo seed + GitOps handoff)" \
-    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh || exit $?
 fi
 
 if is_true "${BOOTSTRAP_RUN_PHASE70}"; then
   run_bootstrap_phase "70" "phase70" "run Phase 70 (GitOps realization gate)" \
-    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh || exit $?
 fi
 
 if is_true "${BOOTSTRAP_RUN_PHASE90}"; then
   run_bootstrap_phase "90" "phase90" "run Phase 90 (late live-state reconciliation)" \
-    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh || exit $?
 fi
 
 if is_true "${BOOTSTRAP_RUN_PHASE99}"; then
   run_bootstrap_phase "99" "phase99" "run Phase 99 (destroy bootstrap authority + export recovery kit)" \
-    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-90/run-phase99.sh
+    /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-90/run-phase99.sh || exit $?
 fi
 
 # Both break-glass and join nodes fetch the same secret-bearing first-boot

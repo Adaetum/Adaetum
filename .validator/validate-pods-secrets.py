@@ -28,72 +28,52 @@ ROTATION_CONTRACTS = {
     ),
     "pods/ansible/ansible/ansible-runner-deployment.yaml": (
         'value: "playbooks/day2.yml"',
-        "secret.reloader.stakater.com/reload: gitea-registry-creds,tailscale-user-sync",
-        "secretName: tailscale-user-sync",
+        "secret.reloader.stakater.com/reload: gitea-registry-creds",
+        "secretProviderClass: ansible-runner-openbao",
     ),
-    "pods/ansible/ansible/tailscale-external-secret.yaml": (
-        "kind: ExternalSecret",
-        "key: apps/ansible/tailscale",
-        "name: tailscale-user-sync",
-    ),
-    "pods/cloudflared/cloudflared/external-secret.yaml": (
-        "kind: ExternalSecret",
-        "key: apps/cloudflared/tunnel",
-        "refreshInterval: 1m",
-    ),
-    "pods/ingress/external-dns/external-secret.yaml": (
-        "kind: ExternalSecret",
-        "key: apps/ingress/external-dns",
-        "refreshInterval: 1m",
+    "pods/ansible/ansible/csi.yaml": (
+        "kind: SecretProviderClass",
+        "roleName: ansible-runner",
+        "secretPath: secret/data/apps/ansible/tailscale",
+        "objectName: oauth_client_id",
+        "objectName: oauth_client_secret",
     ),
     "pods/cloudflared/cloudflared/deployment.yaml": (
-        'secret.reloader.stakater.com/auto: "true"',
+        "serviceAccountName: cloudflared",
+        "secretProviderClass: cloudflared-openbao",
+        "name: cloudflared-tunnel",
+        "name: TUNNEL_TOKEN",
     ),
     "pods/ingress/external-dns/deployment.yaml": (
-        'secret.reloader.stakater.com/auto: "true"',
-    ),
-    "pods/portal/homepage/external-secret.yaml": (
-        "kind: ExternalSecret",
-        "key: apps/homepage/widgets",
-        "refreshInterval: 1m",
-        "secretKey: HOMEPAGE_ARGOCD_WIDGET_KEY",
-        "secretKey: HOMEPAGE_GITEA_WIDGET_AUTH",
-    ),
-    "pods/portal/homepage/grafana-external-secrets.yaml": (
-        "kind: ExternalSecret",
-        "name: homepage-grafana-active",
-        "key: apps/homepage/grafana",
-        "refreshPolicy: CreatedOnce",
-        "name: homepage-grafana",
-        "secretKey: HOMEPAGE_GRAFANA_USERNAME",
-        "secretKey: HOMEPAGE_GRAFANA_PASSWORD",
+        "secretProviderClass: external-dns-openbao",
+        "name: external-dns-cloudflare",
+        "name: CF_API_TOKEN",
     ),
     "pods/portal/homepage/deployment.yaml": (
-        'secret.reloader.stakater.com/auto: "true"',
-        "name: homepage-grafana",
+        "secretProviderClass: homepage-openbao",
+        'secret_dir = Path("/run/openbao")',
     ),
     "pods/portal/homepage/config/services.yaml": (
         "username: __HOMEPAGE_GRAFANA_USERNAME__",
         "password: __HOMEPAGE_GRAFANA_PASSWORD__",
     ),
-    "pods/observability/apprise/external-secret.yaml": (
-        "kind: ExternalSecret",
-        "key: apps/observability/apprise",
-        "refreshInterval: 1m",
-    ),
     "pods/observability/apprise/apprise-deployment.yaml": (
-        'secret.reloader.stakater.com/auto: "true"',
+        "serviceAccountName: apprise",
+        "secretProviderClass: apprise-openbao",
     ),
-    "pods/gitea/gitea-secret-sync/external-secret.yaml": (
-        "kind: ExternalSecret",
-        "key: apps/gitea/admin",
-        "key: apps/gitea/encryption",
-        "key: apps/gitea/runtime",
-        "refreshPolicy: OnChange",
-        "refreshInterval: 1m",
+    "pods/gitea/gitea-secret-sync/csi.yaml": (
+        "kind: SecretProviderClass",
+        "roleName: gitea",
+        "secretPath: secret/data/apps/gitea/admin",
+        "secretPath: secret/data/apps/gitea/encryption",
+        "secretPath: secret/data/apps/gitea/runtime",
+        "secretName: gitea-admin-secret",
+        "secretName: gitea-encryption",
+        "secretName: gitea-runtime",
     ),
     "pods/gitea/gitea-values.yaml": (
-        "secret.reloader.stakater.com/reload: gitea-admin-secret,gitea-postgresql,gitea-encryption,gitea-runtime",
+        "secretProviderClass: gitea-openbao",
+        "secret.reloader.stakater.com/reload: gitea-postgresql",
         "name: GITEA__DATABASE__PASSWD",
         "name: GITEA__security__SECRET_KEY",
         "name: GITEA__security__INTERNAL_TOKEN",
@@ -104,7 +84,8 @@ ROTATION_CONTRACTS = {
         "mountPath: /var/run/adaetum/push-mirror",
     ),
     "pods/gitea/gitea-values.yaml.tmpl": (
-        "secret.reloader.stakater.com/reload: gitea-admin-secret,gitea-postgresql,gitea-encryption,gitea-runtime",
+        "secretProviderClass: gitea-openbao",
+        "secret.reloader.stakater.com/reload: gitea-postgresql",
         "name: GITEA__DATABASE__PASSWD",
         "name: GITEA__security__SECRET_KEY",
         "name: GITEA__security__INTERNAL_TOKEN",
@@ -116,15 +97,21 @@ ROTATION_CONTRACTS = {
     ),
     "pods/authentik/authentik-secret-sync/external-secret.yaml": (
         "kind: ExternalSecret",
-        "key: apps/authentik/encryption",
         "key: apps/authentik/postgresql",
-        "key: apps/authentik/admin",
         "refreshInterval: 1m",
+    ),
+    "pods/authentik/authentik-secret-sync/csi.yaml": (
+        "kind: SecretProviderClass",
+        "roleName: authentik",
+        "secretPath: secret/data/apps/authentik/encryption",
+        "secretPath: secret/data/apps/authentik/admin",
+        "secretName: authentik-encryption",
+        "secretName: authentik-admin",
     ),
     "pods/authentik/authentik.app.yaml": (
         'source_target_revision: "2026.5.5"',
-        "secret.reloader.stakater.com/reload: authentik-admin,authentik-postgresql,authentik-encryption",
-        "secret.reloader.stakater.com/reload: authentik-postgresql,authentik-encryption",
+        "serviceAccountName: authentik-csi",
+        "secretProviderClass: authentik-openbao",
         "name: authentik-encryption",
         "name: authentik-postgresql",
         "name: authentik-admin",
@@ -164,9 +151,8 @@ ROTATION_CONTRACTS = {
     "pods/observability/grafana-secret-sync/external-secret.yaml": (
         "kind: ExternalSecret",
         "key: apps/observability/grafana",
-        "name: grafana-encryption",
-        "secretKey: GF_SECURITY_SECRET_KEY",
-        "refreshPolicy: OnChange",
+        "name: grafana-admin",
+        "secretKey: admin-password",
         "refreshInterval: 1m",
     ),
     "pods/observability/grafana-secret-sync/homepage-external-secret.yaml": (
@@ -190,8 +176,8 @@ ROTATION_CONTRACTS = {
     ),
     "pods/observability/grafana.app.yaml": (
         'source_target_revision: "10.5.15"',
-        "secret.reloader.stakater.com/reload: grafana-admin,grafana-encryption",
-        "envFromSecret: grafana-encryption",
+        "secretProviderClass: grafana-openbao",
+        'cat /run/openbao/secret-key',
         'admin reset-admin-password "${GF_SECURITY_ADMIN_PASSWORD}"',
         "exec /run.sh",
         "type: Recreate",
@@ -303,12 +289,14 @@ ROTATION_CONTRACTS = {
         "read_openbao_app_field argocd/runtime server_secret_key",
         "ARGOCD_REDIS_PASSWORD",
         "read_openbao_app_field argocd/runtime redis_password",
-        "create secret generic authentik-encryption",
-        "create secret generic authentik-postgresql",
+        "argocd-repository-bootstrap argocd-repository-bootstrap argocd",
         "seed_openbao_app_fields authentik/encryption",
         "seed_openbao_app_fields authentik/postgresql",
+        "authentik-postgresql-desired",
         "read_openbao_app_field authentik/admin bootstrap_password",
         "read_openbao_app_field gitea/actions-runner token",
+        "seed_openbao_app_fields gitea/actions-runner",
+        "bootstrap_wait_for_external_secret_delivery",
         "secret.reloader.stakater.com/reload: gitea-actions-runner",
         'configure_gitea_push_mirror_from_openbao "phase50" "$@"',
     ),
@@ -317,10 +305,10 @@ ROTATION_CONTRACTS = {
         "read_openbao_app_field argocd/runtime server_secret_key",
         "ARGOCD_REDIS_PASSWORD",
         "read_openbao_app_field argocd/runtime redis_password",
-        "create secret generic authentik-encryption",
-        "create secret generic authentik-postgresql",
+        "argocd-repository-bootstrap argocd-repository-bootstrap argocd",
         "seed_openbao_app_fields authentik/encryption",
         "seed_openbao_app_fields authentik/postgresql",
+        "authentik-postgresql-desired",
         "read_openbao_app_field authentik/admin bootstrap_password",
         "read_openbao_app_field gitea/actions-runner token",
         "secret.reloader.stakater.com/reload: gitea-actions-runner",
@@ -332,6 +320,8 @@ ROTATION_CONTRACTS = {
         '--scopes "read:notification,read:repository,read:issue"',
         "gitea_widget_token_has_required_scopes",
         "revoke_stale_gitea_widget_tokens",
+        "seed_openbao_app_fields gitea/registry",
+        "gitea-registry-creds gitea-registry-creds ansible-runner",
     ),
     "ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh": (
         "read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY",
@@ -352,7 +342,7 @@ ROTATION_CONTRACTS = {
         "configure_gitea_push_mirror_from_openbao()",
         "read_openbao_app_field gitea/push-mirror token",
         "seed_openbao_app_fields gitea/push-mirror",
-        "create secret generic gitea-push-mirror",
+        "bootstrap_wait_for_external_secret_delivery",
         "credential_dir=/var/run/adaetum/push-mirror",
         "Remove credentials written by the legacy hook implementation",
     ),
@@ -493,6 +483,51 @@ FORBIDDEN_SECRET_LOG_FRAGMENTS = {
         "https_proxy={{ ansible_env.https_proxy",
     ),
 }
+
+
+def validate_post_handoff_secret_writers() -> list[str]:
+    """Keep Phase 50+ from recreating workload credentials from bootstrap.
+
+    The normal native Secret path in these phases is Headlamp's Kubernetes-owned
+    service-account token request. Three named structural bridges are permitted
+    only before their ESO resources exist, breaking the initial GitOps/ESO
+    cycle; every later run waits for CSI or the explicitly allowed ESO adapter.
+    """
+    failures: list[str] = []
+    bootstrap_bridge_names = {
+        "argocd-repo-https",
+        "argocd-repository-bootstrap",
+        "gitea-actions-runner",
+        "gitea-registry-creds",
+    }
+    for phase, script_name in (("50", "run-phase50.sh"), ("60", "run-phase60.sh"), ("70", "run-phase70.sh"), ("90", "run-phase90.sh")):
+        relative_path = f"ansible/ansible-scripts/bootstrap/Phase-{phase}/{script_name}"
+        path = REPO_ROOT / relative_path
+        text = path.read_text(encoding="utf-8")
+        has_bootstrap_bridge = "BOOTSTRAP-ONLY structural bridge" in text
+        if "create secret generic" in text and not (
+            has_bootstrap_bridge and "create secret generic gitea-actions-runner" in text
+        ):
+            failures.append(f"{relative_path}: post-handoff direct Secret creation is forbidden")
+        if "create secret docker-registry" in text and not (
+            has_bootstrap_bridge and "gitea-registry-creds" in text
+        ):
+            failures.append(f"{relative_path}: post-handoff direct image-pull Secret creation is forbidden")
+        secret_manifests = re.findall(
+            r"apiVersion:\s*v1\s*\nkind:\s*Secret\b(?P<body>.*?)(?=\n---|\napiVersion:|\Z)",
+            text,
+            flags=re.DOTALL,
+        )
+        for manifest in secret_manifests:
+            secret_names = set(re.findall(r"(?m)^metadata:\s*\n\s+name:\s*([^\s]+)\s*$", manifest))
+            is_bootstrap_bridge = has_bootstrap_bridge and secret_names and secret_names <= bootstrap_bridge_names
+            if "type: kubernetes.io/service-account-token" not in manifest and not is_bootstrap_bridge:
+                failures.append(
+                    f"{relative_path}: post-handoff native Secret is not a Kubernetes-owned service-account token"
+                )
+        if re.search(r'"kind"\s*:\s*"Secret"', text):
+            failures.append(f"{relative_path}: post-handoff JSON Secret creation is forbidden")
+    return failures
 
 # Kubernetes itself owns this long-lived service-account token. All committed
 # application credential manifests must instead be ExternalSecrets backed by
@@ -709,6 +744,7 @@ def validate_secret_reference_ownership() -> list[str]:
     """
     failures: list[str] = []
     external_secret_targets: set[str] = set()
+    csi_secret_targets: set[str] = set()
     secret_references: list[tuple[str, str]] = []
 
     def walk(value: object, relative_path: str, path: tuple[str, ...] = ()) -> None:
@@ -759,15 +795,75 @@ def validate_secret_reference_ownership() -> list[str]:
                 target_name = target.get("name") or metadata.get("name")
                 if isinstance(target_name, str):
                     external_secret_targets.add(target_name)
+            if document.get("kind") == "SecretProviderClass":
+                spec = document.get("spec") or {}
+                for secret_object in spec.get("secretObjects") or []:
+                    if isinstance(secret_object, dict) and isinstance(secret_object.get("secretName"), str):
+                        csi_secret_targets.add(secret_object["secretName"])
             walk(document, relative_path)
 
-    approved_names = external_secret_targets | set(COORDINATED_SECRET_REFERENCES)
+    approved_names = external_secret_targets | csi_secret_targets | set(COORDINATED_SECRET_REFERENCES)
     for relative_path, secret_name in sorted(set(secret_references)):
         if secret_name not in approved_names:
             failures.append(
-                f"{relative_path}: Secret reference {secret_name!r} has no ExternalSecret target "
+                f"{relative_path}: Secret reference {secret_name!r} has no ExternalSecret or CSI target "
                 "or approved product-aware owner"
             )
+    return failures
+
+
+def validate_csi_workload_identities() -> list[str]:
+    """Prove each CSI workload role is narrow and configured in OpenBao.
+
+    A SecretProviderClass names the pod identity that asks OpenBao for data;
+    this check keeps that relationship one-to-one with a read-only policy and
+    catches a new CSI consumer that accidentally inherits a broad policy.
+    """
+    failures: list[str] = []
+    roles: dict[str, str] = {}
+    config_job = (REPO_ROOT / "pods/secrets/openbao/config/job.yaml").read_text(encoding="utf-8")
+
+    for path in sorted((REPO_ROOT / "pods").rglob("*.yaml")):
+        relative_path = str(path.relative_to(REPO_ROOT))
+        try:
+            documents = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+        except yaml.YAMLError:
+            continue
+        for document in documents:
+            if not isinstance(document, dict) or document.get("kind") != "SecretProviderClass":
+                continue
+            spec = document.get("spec") or {}
+            if spec.get("provider") != "openbao":
+                continue
+            parameters = spec.get("parameters") or {}
+            role = parameters.get("roleName")
+            objects = parameters.get("objects")
+            if not isinstance(role, str) or not role:
+                failures.append(f"{relative_path}: OpenBao CSI class is missing parameters.roleName")
+                continue
+            if role in roles:
+                failures.append(f"{relative_path}: OpenBao CSI role {role!r} is already used by {roles[role]}")
+            else:
+                roles[role] = relative_path
+            paths = set(re.findall(r"(?m)^\s*secretPath:\s*(secret/data/apps/[^\s]+)\s*$", objects or ""))
+            if not paths:
+                failures.append(f"{relative_path}: OpenBao CSI class has no application secretPath")
+                continue
+            policy_path = REPO_ROOT / "pods/secrets/openbao/policies" / f"{role}.hcl"
+            if not policy_path.is_file():
+                failures.append(f"{relative_path}: missing policy for CSI role {role!r}")
+                continue
+            policy = policy_path.read_text(encoding="utf-8")
+            policy_paths = set(re.findall(r'path\s+"(secret/data/apps/[^"]+)"', policy))
+            if paths != policy_paths:
+                failures.append(
+                    f"{relative_path}: CSI paths {sorted(paths)!r} do not exactly match {policy_path.relative_to(REPO_ROOT)}"
+                )
+            if 'capabilities = ["read"]' not in policy or "*" in policy:
+                failures.append(f"{policy_path.relative_to(REPO_ROOT)}: CSI policy must be read-only and non-wildcard")
+            role_command = f"auth/kubernetes/role/{role}"
+            if role_command not in config_job or f"token_policies={role}" not in config_job:
+                failures.append(f"{relative_path}: OpenBao config job does not configure CSI role {role!r}")
     return failures
 
 
@@ -777,8 +873,10 @@ def main() -> int:
         failures.extend(validate_file(path))
     failures.extend(validate_rotation_contracts())
     failures.extend(validate_ansible_secret_logging())
+    failures.extend(validate_post_handoff_secret_writers())
     failures.extend(validate_committed_secret_manifests())
     failures.extend(validate_secret_reference_ownership())
+    failures.extend(validate_csi_workload_identities())
 
     if failures:
         for failure in failures:

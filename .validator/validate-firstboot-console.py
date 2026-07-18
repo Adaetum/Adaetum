@@ -42,6 +42,7 @@ def main() -> int:
         "bootstrap_phase_status_detail_from_log()",
         "bootstrap_phase_status_start_log_monitor",
         "Ansible task:",
+        "OpenBao secret delivery:",
     ):
         if required not in runner:
             raise SystemExit(f"first-boot console contract failed: runner does not publish detailed progress ({required})")
@@ -72,14 +73,31 @@ def main() -> int:
             raise SystemExit(f"Grafana rollout recovery contract failed: missing {required}")
     for required in (
         "bootstrap_capture_deployment_rollout_diagnostics()",
+        "bootstrap_wait_for_external_secret_delivery()",
+        "bootstrap_wait_for_csi_secret_delivery()",
         'rollout status "deploy/${deployment}" --timeout=45s',
         'get pvc -o wide',
+        'get externalsecret -o wide',
+        'get clustersecretstore openbao -o wide',
+        'logs deploy/external-secrets --all-containers --tail=200',
         'get events --sort-by=.lastTimestamp',
         'logs "${pod_name}" --all-containers --previous --tail=200',
         "ProgressDeadlineExceeded",
     ):
         if required not in control_pair_common:
             raise SystemExit(f"deployment rollout recovery contract failed: missing {required}")
+    for required in (
+        "verify_openbao_secret_delivery_phase70()",
+        "reconcile_csi_runtime_rotations_phase70()",
+        "BOOTSTRAP_RECONCILE_SECRET_ROTATION",
+        "gitea-openbao gitea",
+        "authentik-openbao authentik",
+        "grafana-openbao grafana",
+        "apprise-openbao apprise",
+        "required OpenBao-backed workload secrets did not synchronize",
+    ):
+        if required not in (ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-70" / "run-phase70.sh").read_text(encoding="utf-8"):
+            raise SystemExit(f"OpenBao secret-delivery gate contract failed: missing {required}")
     for required in (
         "gum_status_start_monitor 15",
         "gum_status_stop_monitor",

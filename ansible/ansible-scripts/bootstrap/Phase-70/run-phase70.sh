@@ -218,24 +218,6 @@ persist_widget_field_phase70() {
   persist_openbao_homepage_field "${field}" "${value}" "${openbao_token}"
 }
 
-build_homepage_widget_secret_manifest_phase70() {
-  python3 - <<'PY' "$@"
-import json
-import sys
-
-pairs = [arg.split("=", 1) for arg in sys.argv[1:] if "=" in arg]
-string_data = {k: v for k, v in pairs if v}
-doc = {
-    "apiVersion": "v1",
-    "kind": "Secret",
-    "metadata": {"name": "homepage-widget-secrets", "namespace": "homepage"},
-    "type": "Opaque",
-    "stringData": string_data,
-}
-print(json.dumps(doc), end="")
-PY
-}
-
 service_cluster_ip_phase70() {
   local namespace="${1:-}"
   local service_name="${2:-}"
@@ -310,7 +292,6 @@ ensure_ansible_runner_pull_secret_phase70() {
   local registry_username=""
   local registry_token=""
   local registry_host=""
-  local dockerconfigjson=""
 
   if [[ -z "${kubectl_bin}" ]]; then
     echo "[phase70] kubectl not available; cannot reconcile ansible-runner pull secret" >&2
@@ -350,51 +331,15 @@ PY
     return 1
   fi
 
-  dockerconfigjson="$(
-    python3 - <<'PY' "${registry_username}" "${registry_token}" "${registry_host}"
-import base64
-import json
-import sys
-
-username = sys.argv[1]
-token = sys.argv[2]
-hosts = []
-for host in sys.argv[3:]:
-    host = host.strip()
-    if host and host not in hosts:
-        hosts.append(host)
-for host in (
-    "gitea-http.gitea.svc.cluster.local:3000",
-    "gitea-bootstrap-access.gitea.svc.cluster.local:3000",
-):
-    if host not in hosts:
-        hosts.append(host)
-auth = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("ascii")
-payload = {
-    "auths": {
-        host: {
-            "username": username,
-            "password": token,
-            "auth": auth,
-        }
-        for host in hosts
-    }
-}
-print(json.dumps(payload, separators=(",", ":")), end="")
-PY
-  )"
-
-  "${kubectl_bin}" create namespace ansible --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null 2>&1 || true
-  cat <<EOF | "${kubectl_bin}" -n ansible apply -f - >/dev/null
-apiVersion: v1
-kind: Secret
-metadata:
-  name: gitea-registry-creds
-  namespace: ansible
-type: kubernetes.io/dockerconfigjson
-data:
-  .dockerconfigjson: $(printf '%s' "${dockerconfigjson}" | base64 | tr -d '\r\n')
-EOF
+  # The image-pull Secret is a Kubernetes API consumer, so ESO remains the
+  # adapter. Phase 70 may seed a missing OpenBao field but never writes its
+  # delivery copy directly.
+  seed_openbao_app_fields gitea/registry "${openbao_token}" \
+    "host=${registry_host}" \
+    "username=${registry_username}" \
+    "token=${registry_token}"
+  bootstrap_wait_for_external_secret_delivery \
+    "${kubectl_bin}" ansible gitea-registry-creds gitea-registry-creds ansible-runner
 
   echo "[phase70] ensured ansible-runner image pull secret for ${registry_host}"
 }
@@ -541,6 +486,90 @@ run_gitops_realization_checks_phase70() {
     return 1
   fi
   PHASE60_MODE=realize PHASE60_RECONCILE_ONLY=1 bash "${phase60_script}"
+}
+
+verify_openbao_secret_delivery_phase70() {
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase70] kubectl is unavailable; cannot verify OpenBao secret delivery" >&2
+    return 1
+  fi
+
+  # A CSI status proves that kubelet authenticated this workload's dedicated
+  # service account to OpenBao and mounted its least-privilege path. Checking
+  # each consumer here turns a delivery fault into a quick, specific failure
+  # instead of allowing later rollout waits to consume the run.
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" observability grafana-openbao grafana
+  bootstrap_wait_for_external_secret_delivery \
+    "${kubectl_bin}" observability homepage-grafana-desired homepage-grafana-desired grafana
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" observability apprise-openbao apprise
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" homepage homepage-openbao homepage
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" cloudflared cloudflared-openbao cloudflared
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" ingress external-dns-openbao external-dns
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" ansible ansible-runner-openbao ansible-runner
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" authentik authentik-openbao authentik
+  bootstrap_wait_for_external_secret_delivery \
+    "${kubectl_bin}" authentik authentik-postgresql-desired authentik-postgresql-desired authentik-postgresql
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" gitea gitea-openbao gitea
+  bootstrap_wait_for_external_secret_delivery \
+    "${kubectl_bin}" gitea gitea-postgresql-desired gitea-postgresql-desired gitea-postgresql
+}
+
+# Runtime rotations are explicit operator actions: setting this flag after an
+# OpenBao update restarts only the listed owner workloads. There is no generic
+# cluster-wide controller. A successful rollout alone is insufficient; the new
+# pod must also publish a CSI mount status for its own identity and class.
+restart_csi_workload_phase70() {
+  local namespace="${1:?namespace}"
+  local deployment="${2:?deployment}"
+  local provider_class="${3:?SecretProviderClass}"
+  local selector="${4:?pod selector}"
+  local component="${5:-${deployment}}"
+  local pod_name=""
+
+  if ! "${kubectl_bin}" -n "${namespace}" get deployment "${deployment}" >/dev/null 2>&1; then
+    echo "[phase70] ${component}: deployment is not installed; skipping requested CSI rotation"
+    return 0
+  fi
+  echo "[phase70] ${component}: restarting owner deployment after requested OpenBao rotation"
+  "${kubectl_bin}" -n "${namespace}" rollout restart "deployment/${deployment}" >/dev/null
+  bootstrap_wait_for_deployment_rollout \
+    "${kubectl_bin}" "${namespace}" "${deployment}" "${component}" "${selector}"
+  pod_name="$("${kubectl_bin}" -n "${namespace}" get pods --selector="${selector}" \
+    --sort-by=.metadata.creationTimestamp -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | tail -n 1)"
+  if [[ -z "${pod_name}" ]]; then
+    echo "[phase70] ${component}: rollout completed without a selected replacement pod" >&2
+    return 1
+  fi
+  bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" "${namespace}" "${provider_class}" "${component}" "${pod_name}"
+  echo "[phase70] ${component}: replacement pod ${pod_name} mounted ${provider_class}"
+}
+
+reconcile_csi_runtime_rotations_phase70() {
+  local enabled="${BOOTSTRAP_RECONCILE_SECRET_ROTATION:-0}"
+  enabled="$(printf '%s' "${enabled}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${enabled}" != "1" && "${enabled}" != "true" && "${enabled}" != "yes" && "${enabled}" != "on" ]]; then
+    echo "[phase70] CSI runtime rotation reconcile not requested"
+    return 0
+  fi
+
+  restart_csi_workload_phase70 observability grafana grafana-openbao 'app.kubernetes.io/name=grafana' grafana
+  restart_csi_workload_phase70 observability apprise apprise-openbao 'app=apprise' apprise
+  restart_csi_workload_phase70 homepage homepage homepage-openbao 'app.kubernetes.io/name=homepage' homepage
+  restart_csi_workload_phase70 cloudflared cloudflared cloudflared-openbao 'app=cloudflared' cloudflared
+  restart_csi_workload_phase70 ingress external-dns external-dns-openbao 'app=external-dns' external-dns
+  restart_csi_workload_phase70 ansible ansible-runner ansible-runner-openbao 'app=ansible-runner' ansible-runner
+  restart_csi_workload_phase70 authentik authentik-server authentik-openbao 'app.kubernetes.io/component=server' authentik-server
+  restart_csi_workload_phase70 authentik authentik-worker authentik-openbao 'app.kubernetes.io/component=worker' authentik-worker
+  restart_csi_workload_phase70 gitea gitea gitea-openbao 'app.kubernetes.io/name=gitea' gitea
 }
 
 mint_argocd_widget_key_phase70() {
@@ -698,10 +727,8 @@ ensure_homepage_widget_secrets_phase70() {
   local openbao_token=""
   local argocd_widget_key=""
   local gitea_widget_auth=""
-  local secret_before=""
-  local secret_after=""
-  local existing_argocd_widget_key=""
-  local existing_gitea_widget_auth=""
+  local prior_argocd_widget_key=""
+  local prior_gitea_widget_auth=""
   local gitea_admin_username=""
   local gitea_admin_password=""
   local gitea_service_host=""
@@ -740,15 +767,10 @@ ensure_homepage_widget_secrets_phase70() {
     gitea_base_url="http://${gitea_service_host}:3000"
   fi
 
-  existing_argocd_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_ARGOCD_WIDGET_KEY)"
-  existing_gitea_widget_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GITEA_WIDGET_AUTH)"
-
-  argocd_widget_key="$(read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY "${openbao_token}")"
+  prior_argocd_widget_key="$(read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY "${openbao_token}")"
+  argocd_widget_key="${prior_argocd_widget_key}"
   if validate_argocd_widget_key_phase70 "${argocd_widget_key}"; then
     log_widget_field_phase70 homepage_argocd_widget_key reused "validated from OpenBao"
-  elif validate_argocd_widget_key_phase70 "${existing_argocd_widget_key}"; then
-    argocd_widget_key="${existing_argocd_widget_key}"
-    log_widget_field_phase70 homepage_argocd_widget_key reused "validated from existing delivery secret"
   else
     argocd_widget_key="$(mint_argocd_widget_key_phase70 "${openbao_token}" || true)"
     if [[ -n "${argocd_widget_key}" ]]; then
@@ -760,16 +782,12 @@ ensure_homepage_widget_secrets_phase70() {
     fi
   fi
 
-  gitea_widget_auth="$(read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH "${openbao_token}")"
+  prior_gitea_widget_auth="$(read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH "${openbao_token}")"
+  gitea_widget_auth="${prior_gitea_widget_auth}"
   if validate_gitea_widget_auth_phase70 "${gitea_widget_auth}" \
     && gitea_widget_token_has_required_scopes \
       "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_widget_auth}"; then
     log_widget_field_phase70 homepage_gitea_widget_auth reused "validated read-only token from OpenBao"
-  elif validate_gitea_widget_auth_phase70 "${existing_gitea_widget_auth}" \
-    && gitea_widget_token_has_required_scopes \
-      "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${existing_gitea_widget_auth}"; then
-    gitea_widget_auth="${existing_gitea_widget_auth}"
-    log_widget_field_phase70 homepage_gitea_widget_auth reused "validated read-only token from existing delivery secret"
   else
     gitea_widget_auth="$(mint_gitea_widget_auth_phase70 \
       "${openbao_token}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_base_url}" || true)"
@@ -785,38 +803,19 @@ ensure_homepage_widget_secrets_phase70() {
   persist_widget_field_phase70 homepage_argocd_widget_key "${argocd_widget_key}" "${openbao_token}"
   persist_widget_field_phase70 homepage_gitea_widget_auth "${gitea_widget_auth}" "${openbao_token}"
 
-  secret_before="$("${kubectl_bin}" -n homepage get secret homepage-widget-secrets -o json 2>/dev/null | python3 - <<'PY'
-import json
-import sys
-try:
-    print(json.dumps(json.load(sys.stdin).get("data", {}), sort_keys=True))
-except Exception:
-    print("")
-PY
-  )"
-
-  secret_manifest="$(build_homepage_widget_secret_manifest_phase70 \
-    "HOMEPAGE_ARGOCD_WIDGET_KEY=${argocd_widget_key}" \
-    "HOMEPAGE_GITEA_WIDGET_AUTH=${gitea_widget_auth}")"
-  printf '%s\n' "${secret_manifest}" | "${kubectl_bin}" -n homepage apply -f - >/dev/null
-
-  secret_after="$("${kubectl_bin}" -n homepage get secret homepage-widget-secrets -o json 2>/dev/null | python3 - <<'PY'
-import json
-import sys
-try:
-    print(json.dumps(json.load(sys.stdin).get("data", {}), sort_keys=True))
-except Exception:
-    print("")
-PY
-  )"
-
-  if [[ "${secret_before}" != "${secret_after}" ]]; then
+  # A valid OpenBao value needs no restart. A minted replacement is consumed
+  # only by the next pod through homepage-openbao; never recreate a native
+  # delivery Secret from this reconciliation path.
+  if [[ "${argocd_widget_key}" != "${prior_argocd_widget_key}" || \
+        "${gitea_widget_auth}" != "${prior_gitea_widget_auth}" ]]; then
     "${kubectl_bin}" -n homepage rollout restart deploy/homepage >/dev/null
     if ! bootstrap_wait_for_deployment_rollout \
       "${kubectl_bin}" homepage homepage homepage 'app.kubernetes.io/name=homepage'; then
       echo "[phase70] Homepage restart did not become ready; diagnostics were captured" >&2
     fi
-    echo "[phase70] restarted Homepage deployment to pick up refreshed widget secrets"
+    bootstrap_wait_for_csi_secret_delivery \
+      "${kubectl_bin}" homepage homepage-openbao homepage
+    echo "[phase70] restarted Homepage deployment after OpenBao widget reconciliation"
   fi
 
   if [[ -n "${gitea_widget_auth}" ]]; then
@@ -1041,6 +1040,11 @@ fi
 
 run_phase70_step "verify GitOps handoff" critical verify_phase70_gitops_handoff
 run_phase70_step "run GitOps realization checks" critical run_gitops_realization_checks_phase70
+if ! verify_openbao_secret_delivery_phase70; then
+  echo "[phase70] required OpenBao-backed workload secrets did not synchronize; stopping before realization work" >&2
+  exit 1
+fi
+run_phase70_step "reconcile requested CSI runtime rotations" critical reconcile_csi_runtime_rotations_phase70
 run_phase70_step "reconcile ansible-runner" critical ensure_ansible_runner_phase70
 
 if (( phase70_failures > 0 )); then

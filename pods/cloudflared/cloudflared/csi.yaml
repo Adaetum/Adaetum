@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: cloudflared-openbao
+  namespace: cloudflared
+spec:
+  provider: openbao
+  # cloudflared only accepts this credential as an environment variable. The
+  # CSI driver creates this delivery copy while mounting the pod volume; it is
+  # not an ESO-managed authority and disappears with the consuming pod.
+  secretObjects:
+    - secretName: cloudflared-tunnel
+      type: Opaque
+      data:
+        - objectName: token
+          key: token
+  parameters:
+    roleName: cloudflared
+    objects: |
+      - objectName: token
+        secretPath: secret/data/apps/cloudflared/tunnel
+        secretKey: token

@@ -1,3 +1,3 @@
 resources:
-  - external-secret.yaml
   - apprise-deployment.yaml
+  - csi.yaml

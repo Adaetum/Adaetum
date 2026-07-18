@@ -1097,9 +1097,8 @@ wait_for_gitea_application() {
 }
 
 # Install the recovery-mirror hook without persisting its credential on Gitea's
-# repository PVC. The hook reads the projected delivery Secret on every push,
-# so an External Secrets refresh takes effect without rewriting application
-# state or restarting Gitea.
+# repository PVC. The hook reads the ESO delivery Secret on every push, so a
+# refresh takes effect without rewriting application state or restarting Gitea.
 configure_gitea_push_mirror_from_openbao() {
   local phase_label="${1:?phase label}"
   local target_owner="${2:?owner}"
@@ -1148,14 +1147,11 @@ configure_gitea_push_mirror_from_openbao() {
       "token=${mirror_token}"
   fi
 
-  "${kubectl_bin}" create namespace gitea --dry-run=client -o yaml \
-    | "${kubectl_bin}" apply -f - >/dev/null
-  "${kubectl_bin}" -n gitea create secret generic gitea-push-mirror \
-    --from-literal=remote_url="${mirror_repo_url}" \
-    --from-literal=username="${mirror_username}" \
-    --from-literal=token="${mirror_token}" \
-    --dry-run=client -o yaml \
-    | "${kubectl_bin}" -n gitea apply -f - >/dev/null
+  # This remains an ESO adapter because Gitea's hook uses a projected native
+  # Secret. Once OpenBao is seeded, wait for the adapter instead of reviving a
+  # bootstrap writer on reruns.
+  bootstrap_wait_for_external_secret_delivery \
+    "${kubectl_bin}" gitea gitea-push-mirror gitea-push-mirror gitea-push-mirror
 
   pod="$(find_ready_gitea_pod)" || {
     echo "[${phase_label}] no ready Gitea pod found for push mirror setup" >&2
@@ -1452,6 +1448,17 @@ bootstrap_capture_deployment_rollout_diagnostics() {
     fi
     echo "[rollout] persistent-volume claims:"
     "${kubectl_path}" -n "${namespace}" get pvc -o wide || true
+    # Structural Kubernetes API consumers still receive OpenBao values through
+    # External Secrets. Preserve that adapter's state alongside CSI evidence so
+    # recovery logs identify the actual broken delivery path.
+    echo "[rollout] External Secrets delivery state:"
+    "${kubectl_path}" -n "${namespace}" get externalsecret -o wide || true
+    "${kubectl_path}" -n "${namespace}" describe externalsecret || true
+    echo "[rollout] OpenBao ClusterSecretStore state:"
+    "${kubectl_path}" get clustersecretstore openbao -o wide || true
+    "${kubectl_path}" describe clustersecretstore openbao || true
+    echo "[rollout] External Secrets controller logs:"
+    "${kubectl_path}" -n external-secrets logs deploy/external-secrets --all-containers --tail=200 || true
     echo "[rollout] recent namespace events:"
     "${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp | tail -n 100 || true
     while IFS= read -r pod_name; do
@@ -1472,8 +1479,125 @@ bootstrap_capture_deployment_rollout_diagnostics() {
   } | tee "${evidence_path}" || true
 
   bootstrap_diag_record_file_event \
-    "${component}" "${deployment}-rollout" "captured deployment, pod, PVC, event, and container-log diagnostics" \
+    "${component}" "${deployment}-rollout" "captured deployment, pod, PVC, External Secrets, event, and container-log diagnostics" \
     "${evidence_path}" "error" "rollout"
+}
+
+# GitOps can create a workload before ESO has delivered its OpenBao-backed
+# Kubernetes Secret. Gate dependent work on ESO's Ready condition instead of
+# spending later phases on a pod that Kubernetes already knows cannot start.
+# There is intentionally no wall-clock deadline: a controller that is still
+# starting is allowed to converge, while a reported sync error is actionable.
+# A pre-existing Kubernetes Secret is never sufficient on its own: OpenBao via
+# ESO is the sole production authority for workload credentials.
+bootstrap_wait_for_external_secret_delivery() {
+  local kubectl_path="${1:?kubectl path}"
+  local namespace="${2:?namespace}"
+  local external_secret="${3:?ExternalSecret name}"
+  local target_secret="${4:?target Secret name}"
+  local component="${5:-${external_secret}}"
+  local ready_status=""
+  local ready_reason=""
+  local ready_message=""
+  local evidence_path=""
+  local target_exists="false"
+
+  echo "[secret-sync] watching ${namespace}/externalsecret/${external_secret} -> secret/${target_secret}"
+  while true; do
+    if "${kubectl_path}" -n "${namespace}" get secret "${target_secret}" >/dev/null 2>&1; then
+      target_exists="true"
+    fi
+
+    ready_status="$("${kubectl_path}" -n "${namespace}" get externalsecret "${external_secret}" -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{"\\t"}{.reason}{"\\t"}{.message}{end}' 2>/dev/null || true)"
+    if [[ "${ready_status}" == False$'\t'* ]]; then
+      ready_reason="${ready_status#*$'\t'}"
+      ready_reason="${ready_reason%%$'\t'*}"
+      ready_message="${ready_status##*$'\t'}"
+      echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: terminal ${ready_reason}: ${ready_message}" >&2
+      evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "external-secret")"
+      {
+        echo "[secret-sync] diagnostics for ${namespace}/externalsecret/${external_secret} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+        "${kubectl_path}" -n "${namespace}" describe externalsecret "${external_secret}" || true
+        "${kubectl_path}" get clustersecretstore openbao -o wide || true
+        "${kubectl_path}" describe clustersecretstore openbao || true
+        "${kubectl_path}" -n external-secrets logs deploy/external-secrets --all-containers --tail=200 || true
+      } | tee "${evidence_path}" || true
+      bootstrap_diag_record_file_event \
+        "${component}" "${external_secret}-sync" "captured ExternalSecret, OpenBao store, and controller diagnostics" \
+        "${evidence_path}" "error" "secret-sync"
+      return 1
+    fi
+
+    if [[ "${target_exists}" == "true" ]]; then
+      if [[ "${ready_status}" == True$'\t'* ]]; then
+        echo "[secret-sync] ${namespace}/secret/${target_secret}: ready and ESO-backed"
+        return 0
+      fi
+    fi
+
+    echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: controller is still reconciling"
+    sleep 15
+  done
+}
+
+# CSI is the direct OpenBao delivery path. A SecretProviderClass is declarative
+# intent; the PodStatus is the proof that kubelet mounted the value using the
+# requesting workload identity. Do not accept a similarly named Kubernetes
+# Secret here because that would reintroduce a second authority.
+bootstrap_wait_for_csi_secret_delivery() {
+  local kubectl_path="${1:?kubectl path}"
+  local namespace="${2:?namespace}"
+  local provider_class="${3:?SecretProviderClass name}"
+  local component="${4:-${provider_class}}"
+  local expected_pod="${5:-}"
+  local status=""
+  local mount_failure=""
+  local evidence_path=""
+
+  echo "[secret-csi] watching ${namespace}/secretproviderclass/${provider_class}"
+  while true; do
+    if ! "${kubectl_path}" -n "${namespace}" get secretproviderclass "${provider_class}" >/dev/null 2>&1; then
+      echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: waiting for GitOps apply"
+      sleep 15
+      continue
+    fi
+    status="$("${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus \
+      -o jsonpath='{range .items[?(@.spec.secretProviderClassName=="'"${provider_class}"'")]}{.metadata.name}{"\t"}{.spec.podName}{"\\n"}{end}' 2>/dev/null || true)"
+    if [[ -n "${expected_pod}" ]]; then
+      status="$(printf '%s\n' "${status}" | awk -F '\t' -v pod="${expected_pod}" '$2 == pod { print $1 }')"
+    fi
+    if [[ -n "${status}" ]]; then
+      echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: mounted by ${status//$'\n'/, }"
+      return 0
+    fi
+    mount_failure="$("${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp 2>/dev/null | grep -E 'FailedMount|MountVolume\.SetUp failed|permission denied|forbidden' | tail -n 1 || true)"
+    if [[ -n "${mount_failure}" ]]; then
+      echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: terminal mount failure: ${mount_failure}" >&2
+      evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "csi-secret")"
+      {
+        echo "[secret-csi] diagnostics for ${namespace}/secretproviderclass/${provider_class} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+        echo "${mount_failure}"
+        "${kubectl_path}" -n "${namespace}" describe secretproviderclass "${provider_class}" || true
+        "${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus -o wide || true
+        "${kubectl_path}" -n kube-system get pods -o wide | grep -E 'secrets-store|openbao.*csi' || true
+        "${kubectl_path}" -n kube-system logs -l app.kubernetes.io/component=csi --all-containers --tail=200 || true
+      } | tee "${evidence_path}" || true
+      bootstrap_diag_record_file_event \
+        "${component}" "${provider_class}-csi" "captured CSI class, mount, provider, and event diagnostics" \
+        "${evidence_path}" "error" "secret-csi"
+      return 1
+    fi
+    evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "csi-secret")"
+    {
+      echo "[secret-csi] diagnostics for ${namespace}/secretproviderclass/${provider_class} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+      "${kubectl_path}" -n "${namespace}" describe secretproviderclass "${provider_class}" || true
+      "${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus -o wide || true
+      "${kubectl_path}" -n kube-system get pods -o wide | grep -E 'secrets-store|openbao.*csi' || true
+      "${kubectl_path}" -n kube-system logs -l app.kubernetes.io/component=csi --all-containers --tail=100 || true
+    } >"${evidence_path}" 2>&1 || true
+    echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: waiting for first authenticated mount"
+    sleep 15
+  done
 }
 
 bootstrap_wait_for_deployment_rollout() {

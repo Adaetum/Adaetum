@@ -1,7 +1,7 @@
 resources:
   - ansible-runner-deployment.yaml
+  - csi.yaml
   - registry-external-secret.yaml
-  - tailscale-external-secret.yaml
   - ansible-cluster-config.yaml
 
 replacements:

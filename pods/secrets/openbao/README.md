@@ -35,11 +35,12 @@ OpenBao KV -> External Secrets Operator -> Kubernetes Secret -> workload
                                                        +-> Reloader rollout
 ```
 
-External Secrets polls OpenBao once per minute. Workloads that read credentials
-from environment variables opt into Reloader, which performs a normal rolling
-restart when the synchronized Kubernetes Secret changes. Kubernetes Secrets are
-delivery copies: editing one directly is temporary and will be overwritten by
-the next reconciliation.
+ESO polls OpenBao only for Kubernetes API consumers that cannot mount a CSI
+volume. Runtime workloads authenticate their dedicated service accounts to
+OpenBao through the CSI provider at pod creation. A chart that only accepts
+environment variables may use CSI's pod-lifecycle synchronized delivery Secret;
+it is still created from that authenticated CSI mount, not by ESO or bootstrap.
+Editing any delivery copy directly is temporary and unsupported.
 
 Bootstrap is allowed to seed a missing application path once. Rerunning Phase
 40, 50, or 60 does not overwrite fields that already exist under
@@ -48,32 +49,45 @@ encryption values continue using their active Kubernetes copy until their
 coordinator or documented migration explicitly promotes the desired OpenBao
 version.
 
+The first control-pair boot is the sole structural exception: Argo's repository
+credential, the initial actions-runner token, and the runner image-pull Secret
+may be created once only when their ESO resources do not exist yet—those
+resources are needed to install ESO itself. The bootstrap scripts mark this
+bridge explicitly and switch to ESO waiting as soon as the resource exists;
+they never use it as a rerun fallback.
+
+For a deliberate runtime credential rotation, run the normal Phase 70
+reconciliation with `BOOTSTRAP_RECONCILE_SECRET_ROTATION=1`. It restarts only
+the named owning workloads, waits for their normal rollout, and proves that the
+replacement pod published its matching `SecretProviderClassPodStatus`. It is
+not a generic restart controller.
+
 Workload delivery is continuously reconciled as follows:
 
 | OpenBao field | Kubernetes consumer | Rotation behavior |
 | --- | --- | --- |
-| `secret/apps/ingress/external-dns:api_token` | `ingress/external-dns-cloudflare` | Issue a replacement at Cloudflare, patch OpenBao, then External Secrets updates the Secret and Reloader restarts external-dns. |
-| `secret/apps/cloudflared/tunnel:token` | `cloudflared/cloudflared-tunnel` | Issue or retrieve a valid tunnel token, patch OpenBao, then External Secrets updates the Secret and Reloader restarts cloudflared. |
+| `secret/apps/ingress/external-dns:api_token` | CSI-mounted `ingress/external-dns-cloudflare` delivery copy | Issue a replacement at Cloudflare, update OpenBao, then restart the owning Deployment and verify the new pod's CSI status. |
+| `secret/apps/cloudflared/tunnel:token` | CSI-mounted `cloudflared/cloudflared-tunnel` delivery copy | Issue or retrieve a valid tunnel token, update OpenBao, then restart the owning Deployment and verify the new pod's CSI status. |
 | `secret/apps/argocd/repository` | Argo CD repository and repo-creds Secrets | Replace the Gitea credential, patch OpenBao, and Argo CD observes the synchronized repository Secret. |
 | `secret/apps/argocd/admin:password` | Argo CD's `argocd-secret` administrator hash | External Secrets updates an isolated plaintext delivery copy. A scoped CronJob detects a changed password, generates the bcrypt value Argo CD requires, and patches only the administrator hash and modification time. Existing sessions are revoked by Argo CD. |
 | `secret/apps/argocd/runtime:server_secret_key` | `argocd/argocd-secret:server.secretkey` | External Secrets merges only the session-signing field and Reloader restarts the Argo CD server. Rotation deliberately revokes existing UI/API sessions without changing repository or application configuration. |
 | `secret/apps/argocd/runtime:redis_password` | `argocd/argocd-redis:auth` | The chart's random secret-init Job is disabled. External Secrets updates the cache credential and Reloader restarts Redis plus every Argo CD Deployment and StatefulSet that can consume it. Redis is an ephemeral cache, so convergence may cause a brief control-plane retry window but does not require configuration or data migration. |
 | `secret/apps/homepage/widgets` | `homepage/homepage-widget-secrets` | Replace or mint the configured Argo CD or Gitea widget token, patch OpenBao, and Reloader restarts Homepage. Authentik, Cloudflare, and Tailscale are links only and receive no credential. Gitea's token registry must confirm the exact required read scopes; after promotion, late reconciliation revokes superseded `homepage-widget*` tokens by ID. |
 | `secret/apps/homepage/grafana` | Desired `observability/homepage-grafana-desired`, Grafana's dedicated `homepage` Viewer, then active `homepage/homepage-grafana` | A scoped coordinator creates or updates the Viewer in Grafana, enforces its Viewer role, validates the desired login, and only then promotes Homepage's delivery copy. Homepage never receives the Grafana administrator password. |
-| `secret/apps/observability/apprise:apprise_yml` | `observability/apprise-config` | Patch the complete Apprise YAML in OpenBao; Reloader restarts Apprise with the synchronized file. |
-| `secret/apps/ansible/tailscale` | `ansible/tailscale-user-sync` | Create the replacement OAuth client in Tailscale, patch both values in OpenBao, and Reloader restarts the day-two runner with only that scoped delivery Secret mounted. |
-| `secret/apps/gitea/admin` | `gitea/gitea-admin-secret` | External Secrets updates the delivery copy, Reloader starts a new pod, and Gitea's native `keepUpdated` startup mode reconciles the internal admin account. |
+| `secret/apps/observability/apprise:apprise_yml` | direct `observability/apprise-openbao` CSI file | Patch the complete Apprise YAML in OpenBao; the mounted file rotates and the owning rollout verifies a replacement mount. |
+| `secret/apps/ansible/tailscale` | direct `ansible/ansible-runner-openbao` CSI files | Create the replacement OAuth client in Tailscale, patch both values in OpenBao, then restart the day-two runner and verify its CSI mount. |
+| `secret/apps/gitea/admin` | CSI-mounted `gitea/gitea-admin-secret` delivery copy | CSI creates the chart-required copy during pod setup; Gitea's native `keepUpdated` startup mode reconciles the internal admin account after an owning rollout. |
 | `secret/apps/gitea/actions-runner:token` | `gitea/gitea-actions-runner` | Request a replacement registration token from Gitea, patch OpenBao, and Reloader restarts the runner with the synchronized copy. A random KV value is not a valid registration token. |
 | `secret/apps/gitea/registry` | `ansible/gitea-registry-creds` | Issue a replacement Gitea token, patch its host, username, and token fields in OpenBao, and External Secrets rebuilds the Docker config consumed by the day-two runner. |
 | `secret/apps/gitea/push-mirror` | `gitea/gitea-push-mirror`, projected read-only into the Gitea container | Issue a replacement GitHub PAT with access to the private recovery repository, then patch `remote_url`, `username`, and `token` in OpenBao. The repository hook reads the projected files on every push, so the next mirror operation uses the replacement without restarting Gitea or rewriting its PVC. Bootstrap removes credential files created by the legacy hook implementation. |
-| `secret/apps/gitea/runtime` | `gitea/gitea-runtime` | `internal_token` and `jwt_secret` are ordinary runtime signing material. External Secrets updates the delivery copy and Reloader restarts Gitea. Existing OAuth/LFS tokens may be invalidated, but persisted configuration does not need to be rebuilt. |
-| `secret/apps/gitea/encryption:secret_key` | `gitea/gitea-encryption` | Migration-gated. This key protects persisted values such as 2FA secrets. External Secrets uses `OnChange`; migrate encrypted data before deliberately promoting a new version. |
+| `secret/apps/gitea/runtime` | CSI-mounted `gitea/gitea-runtime` delivery copy | `internal_token` and `jwt_secret` are ordinary runtime signing material. An owning rollout after OpenBao rotation creates the current copy before Gitea starts. Existing OAuth/LFS tokens may be invalidated, but persisted configuration does not need to be rebuilt. |
+| `secret/apps/gitea/encryption:secret_key` | CSI-mounted `gitea/gitea-encryption` delivery copy | Migration-gated. This key protects persisted values such as 2FA secrets; migrate encrypted data before deliberately promoting a replacement. |
 | `secret/apps/gitea/postgresql` | Desired `gitea/gitea-postgresql-desired`, then active `gitea/gitea-postgresql` | A scoped coordinator changes the PostgreSQL superuser and Gitea roles in one transaction, promotes the active delivery Secret, and only then lets Reloader restart Gitea. A retry recognizes a committed database change even if delivery promotion was interrupted. |
-| `secret/apps/authentik/admin` | `authentik/authentik-admin` | External Secrets updates the isolated admin copy, Reloader starts the server, and Authentik's lifecycle hook reconciles its internal administrator before the pod becomes ready. |
+| `secret/apps/authentik/admin` | CSI-mounted `authentik/authentik-admin` delivery copy | CSI creates the isolated admin copy during pod setup, and Authentik's lifecycle hook reconciles its internal administrator before the pod becomes ready. |
 | `secret/apps/authentik/postgresql` | Desired `authentik/authentik-postgresql-desired`, then active `authentik/authentik-postgresql` | A scoped coordinator changes the PostgreSQL superuser and Authentik roles in one transaction, promotes the active delivery Secret, and only then lets Reloader restart the server and worker. |
-| `secret/apps/authentik/encryption:secret_key` | `authentik/authentik-encryption` | For the pinned post-2023.6 Authentik release this is session-signing material, not a stable-user-ID key. External Secrets updates it and Reloader restarts the server and worker. Existing sessions are intentionally invalidated; persisted users and configuration remain valid. |
-| `secret/apps/observability/grafana` | `observability/grafana-admin` | External Secrets updates the delivery copy, Reloader starts a new pod, and the startup wrapper resets Grafana's database-backed admin password before launching the server. |
-| `secret/apps/observability/grafana:secret_key` | `observability/grafana-encryption` | Migration-gated. This is Grafana's key-encryption key for persisted datasource and alerting secrets. Rotate Grafana data keys normally; re-encrypt those keys before deliberately promoting a replacement `secret_key`. |
+| `secret/apps/authentik/encryption:secret_key` | CSI-mounted `authentik/authentik-encryption` delivery copy | For the pinned post-2023.6 Authentik release this is session-signing material, not a stable-user-ID key. An owning rollout creates the current copy before server and worker start. Existing sessions are intentionally invalidated; persisted users and configuration remain valid. |
+| `secret/apps/observability/grafana` | direct `observability/grafana-openbao` CSI files; `grafana-admin` remains only for the Homepage Viewer controller | An owning rollout mounts the current admin/password/key files before Grafana starts; the scoped Viewer controller uses the ESO adapter only to call Grafana's API. |
+| `secret/apps/observability/grafana:secret_key` | direct `observability/grafana-openbao` CSI file | Migration-gated. This is Grafana's key-encryption key for persisted datasource and alerting secrets. Rotate Grafana data keys normally; re-encrypt those keys before deliberately promoting a replacement `secret_key`. |
 | `secret/apps/rancher/admin:bootstrap_password` | Desired `cattle-system/rancher-admin-desired`, then Rancher's local administrator and `bootstrap-secret` recovery copy | A scoped reconciler verifies the current login, submits Rancher's native `PasswordChangeRequest`, verifies the new login, and only then promotes the recovery copy. An interrupted run recognizes an already-active desired password. |
 
 Provider-issued credentials are not arbitrary strings: Cloudflare must issue

@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: authentik-csi
+  namespace: authentik
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: authentik-openbao
+  namespace: authentik
+spec:
+  provider: openbao
+  secretObjects:
+    - secretName: authentik-encryption
+      type: Opaque
+      data:
+        - objectName: secret_key
+          key: secret_key
+    - secretName: authentik-admin
+      type: Opaque
+      data:
+        - objectName: admin_username
+          key: admin_username
+        - objectName: bootstrap_password
+          key: bootstrap_password
+        - objectName: bootstrap_token
+          key: bootstrap_token
+  parameters:
+    roleName: authentik
+    objects: |
+      - objectName: secret_key
+        secretPath: secret/data/apps/authentik/encryption
+        secretKey: secret_key
+      - objectName: admin_username
+        secretPath: secret/data/apps/authentik/admin
+        secretKey: admin_username
+      - objectName: bootstrap_password
+        secretPath: secret/data/apps/authentik/admin
+        secretKey: bootstrap_password
+      - objectName: bootstrap_token
+        secretPath: secret/data/apps/authentik/admin
+        secretKey: bootstrap_token

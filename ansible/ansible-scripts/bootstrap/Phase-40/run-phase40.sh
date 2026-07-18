@@ -1526,6 +1526,14 @@ if [[ "${use_argo}" != true ]]; then
       --from-file=argo.hcl="${policy_dir}/argo.hcl" \
       --from-file=config.hcl="${policy_dir}/config.hcl" \
       --from-file=external-secrets.hcl="${policy_dir}/external-secrets.hcl" \
+      --from-file=apprise.hcl="${policy_dir}/apprise.hcl" \
+      --from-file=cloudflared.hcl="${policy_dir}/cloudflared.hcl" \
+      --from-file=external-dns.hcl="${policy_dir}/external-dns.hcl" \
+      --from-file=ansible-runner.hcl="${policy_dir}/ansible-runner.hcl" \
+      --from-file=homepage.hcl="${policy_dir}/homepage.hcl" \
+      --from-file=grafana.hcl="${policy_dir}/grafana.hcl" \
+      --from-file=authentik.hcl="${policy_dir}/authentik.hcl" \
+      --from-file=gitea.hcl="${policy_dir}/gitea.hcl" \
       --dry-run=client -o yaml | "${kubectl_bin}" apply -f -
   else
     echo "[phase40] warning: policy directory missing at ${policy_dir}; skipping policy configmap" >&2

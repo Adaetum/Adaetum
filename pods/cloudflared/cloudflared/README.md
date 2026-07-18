@@ -9,10 +9,12 @@ then run `cloudflared` here with the issued tunnel token.
 ## Secret
 
 The provider-issued tunnel token is stored at
-`secret/apps/cloudflared/tunnel:token` in OpenBao. External Secrets maintains
-the `cloudflared/cloudflared-tunnel` delivery Secret, and Reloader restarts the
-connector when that copy changes. Do not create or edit the Kubernetes Secret
-directly; replace the token in Cloudflare first, then update the OpenBao field.
+`secret/apps/cloudflared/tunnel:token` in OpenBao. The pod's dedicated service
+account authenticates through `cloudflared-openbao`; CSI creates the
+chart-required `cloudflared/cloudflared-tunnel` delivery copy only during that
+mount. Do not create or edit that Kubernetes Secret directly; replace the token
+in Cloudflare first, update OpenBao, then perform the Deployment's normal
+rollout and verify its CSI pod status.
 
 ## Recommended setup
 

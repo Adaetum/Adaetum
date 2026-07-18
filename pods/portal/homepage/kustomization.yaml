@@ -1,8 +1,7 @@
 resources:
   - serviceaccount.yaml
   - secret.yaml
-  - external-secret.yaml
-  - grafana-external-secrets.yaml
+  - csi.yaml
   - clusterrole.yaml
   - clusterrolebinding.yaml
   - homepage-cluster-config.yaml

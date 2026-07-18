@@ -1,5 +1,5 @@
 resources:
-  - external-secret.yaml
+  - csi.yaml
   - postgresql-external-secret.yaml
   - postgresql-rotation.yaml
   - push-mirror-external-secret.yaml

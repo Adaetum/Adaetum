@@ -20,6 +20,12 @@ persistence:
 # push. External Secrets refreshes it from OpenBao, so provider-token rotation
 # never writes a credential into the repository PVC or requires a pod restart.
 extraVolumes:
+  - name: gitea-openbao
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: gitea-openbao
   - name: push-mirror-credential
     secret:
       secretName: gitea-push-mirror
@@ -32,6 +38,9 @@ extraVolumes:
         - key: token
           path: token
 extraContainerVolumeMounts:
+  - name: gitea-openbao
+    mountPath: /run/openbao
+    readOnly: true
   - name: push-mirror-credential
     mountPath: /var/run/adaetum/push-mirror
     readOnly: true
@@ -62,7 +71,7 @@ gitea:
   # every pod start. Database delivery changes happen only after PostgreSQL is
   # updated, then Reloader starts Gitea with both current credentials.
   podAnnotations:
-    secret.reloader.stakater.com/reload: gitea-admin-secret,gitea-postgresql,gitea-encryption,gitea-runtime
+    secret.reloader.stakater.com/reload: gitea-postgresql
   additionalConfigFromEnvs:
     - name: GITEA__DATABASE__PASSWD
       valueFrom:
@@ -118,3 +127,7 @@ valkey-cluster:
 
 valkey:
   enabled: false
+
+serviceAccount:
+  create: false
+  name: gitea-csi

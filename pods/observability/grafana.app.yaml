@@ -6,18 +6,21 @@ source_chart: grafana
 # Rotation relies on this chart's command override and persistent-volume shape.
 source_target_revision: "10.5.15"
 source_helm_values: |
-  admin:
-    existingSecret: grafana-admin
-    userKey: admin-user
-    passwordKey: admin-password
+  serviceAccount:
+    create: false
+    name: grafana
 
-  podAnnotations:
-    secret.reloader.stakater.com/reload: grafana-admin,grafana-encryption
-
-  # The Secret contains the correctly named GF_SECURITY_SECRET_KEY variable.
-  # Its ExternalSecret is OnChange because changing the database KEK requires
-  # Grafana's documented data-key re-encryption procedure first.
-  envFromSecret: grafana-encryption
+  extraVolumes:
+    - name: grafana-openbao
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: grafana-openbao
+  extraVolumeMounts:
+    - name: grafana-openbao
+      mountPath: /run/openbao
+      readOnly: true
 
   # Grafana persists the administrator hash in its database. On every start,
   # reconcile that state from the OpenBao-backed environment before launching
@@ -27,6 +30,9 @@ source_helm_values: |
     - -ec
   args:
     - |
+      export GF_SECURITY_ADMIN_USER="$(cat /run/openbao/admin-user)"
+      export GF_SECURITY_ADMIN_PASSWORD="$(cat /run/openbao/admin-password)"
+      export GF_SECURITY_SECRET_KEY="$(cat /run/openbao/secret-key)"
       if [ -s /var/lib/grafana/grafana.db ]; then
         /usr/share/grafana/bin/grafana cli \
           --homepath /usr/share/grafana \

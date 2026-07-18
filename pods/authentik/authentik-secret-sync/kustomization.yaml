@@ -1,3 +1,4 @@
 resources:
+  - csi.yaml
   - external-secret.yaml
   - postgresql-rotation.yaml

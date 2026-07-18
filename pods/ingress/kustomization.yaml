@@ -1,7 +1,7 @@
 resources:
   - ingress-cluster-config.yaml
   - nginx-controller-config.yaml
-  - external-dns/external-secret.yaml
+  - external-dns/csi.yaml
   - external-dns/deployment.yaml
   - external-dns/rbac.yaml
   - nginx-routing/gitea-ingress.yaml
@@ -30,10 +30,7 @@ replacements:
           kind: Deployment
           name: external-dns
         fieldPaths:
-          - spec.template.spec.containers.[name=external-dns].args.7
-        options:
-          delimiter: "="
-          index: 1
+          - spec.template.spec.containers.[name=external-dns].env.[name=EXTERNAL_DNS_DOMAIN_FILTER].value
   - source:
       kind: ConfigMap
       name: ingress-cluster-config

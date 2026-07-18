@@ -3,8 +3,6 @@ kind: Deployment
 metadata:
   name: external-dns
   namespace: ingress
-  annotations:
-    secret.reloader.stakater.com/auto: "true"
   labels:
     app: external-dns
 spec:
@@ -27,6 +25,16 @@ spec:
         - name: external-dns
           image: registry.k8s.io/external-dns/external-dns:v0.14.2
           imagePullPolicy: IfNotPresent
+          env:
+            - name: EXTERNAL_DNS_DOMAIN_FILTER
+              value: mudazukai.cloud
+            # This delivery Secret is created by external-dns-openbao's CSI
+            # mount, never by ESO or a bootstrap writer.
+            - name: CF_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: external-dns-cloudflare
+                  key: api-token
           args:
             - --log-level=info
             - --source=service
@@ -35,13 +43,7 @@ spec:
             - --policy=sync
             - --registry=txt
             - --txt-owner-id=external-dns-ingress
-            - --domain-filter=mudazukai.cloud
-          env:
-            - name: CF_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: external-dns-cloudflare
-                  key: api-token
+            - --domain-filter=$(EXTERNAL_DNS_DOMAIN_FILTER)
           resources:
             requests:
               cpu: 25m
@@ -58,6 +60,15 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: external-dns-openbao
+              mountPath: /run/openbao
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: external-dns-openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: external-dns-openbao

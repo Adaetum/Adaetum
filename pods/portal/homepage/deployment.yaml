@@ -3,8 +3,6 @@ kind: Deployment
 metadata:
   name: homepage
   namespace: homepage
-  annotations:
-    secret.reloader.stakater.com/auto: "true"
   labels:
     app.kubernetes.io/name: homepage
 spec:
@@ -25,12 +23,6 @@ spec:
           envFrom:
             - configMapRef:
                 name: homepage-cluster-config
-            - secretRef:
-                name: homepage-widget-secrets
-                optional: true
-            - secretRef:
-                name: homepage-grafana
-                optional: true
           command:
             - /bin/sh
             - -c
@@ -41,6 +33,10 @@ spec:
               from pathlib import Path
               template_dir = Path("/templates")
               output_dir = Path("/rendered")
+              secret_dir = Path("/run/openbao")
+              for secret_file in secret_dir.iterdir():
+                  if secret_file.is_file():
+                      os.environ[secret_file.name] = secret_file.read_text(encoding="utf-8").strip()
               output_dir.mkdir(parents=True, exist_ok=True)
               for source in template_dir.iterdir():
                   if not source.is_file():
@@ -58,6 +54,9 @@ spec:
               mountPath: /templates
             - name: homepage-config
               mountPath: /rendered
+            - name: homepage-openbao
+              mountPath: /run/openbao
+              readOnly: true
       containers:
         - name: homepage
           image: ghcr.io/gethomepage/homepage:v1.3.2
@@ -65,12 +64,6 @@ spec:
           envFrom:
             - configMapRef:
                 name: homepage-cluster-config
-            - secretRef:
-                name: homepage-widget-secrets
-                optional: true
-            - secretRef:
-                name: homepage-grafana
-                optional: true
           ports:
             - name: http
               containerPort: 3000
@@ -94,9 +87,18 @@ spec:
           volumeMounts:
             - name: homepage-config
               mountPath: /app/config
+            - name: homepage-openbao
+              mountPath: /run/openbao
+              readOnly: true
       volumes:
         - name: homepage-templates
           configMap:
             name: homepage-templates
         - name: homepage-config
           emptyDir: {}
+        - name: homepage-openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: homepage-openbao

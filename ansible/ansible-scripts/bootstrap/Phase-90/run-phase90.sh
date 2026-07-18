@@ -233,24 +233,6 @@ persist_widget_field_phase90() {
   persist_openbao_homepage_field "${field}" "${value}" "${openbao_token}"
 }
 
-build_homepage_widget_secret_manifest_phase90() {
-  python3 - <<'PY' "$@"
-import json
-import sys
-
-pairs = [arg.split("=", 1) for arg in sys.argv[1:] if "=" in arg]
-string_data = {k: v for k, v in pairs if v}
-doc = {
-    "apiVersion": "v1",
-    "kind": "Secret",
-    "metadata": {"name": "homepage-widget-secrets", "namespace": "homepage"},
-    "type": "Opaque",
-    "stringData": string_data,
-}
-print(json.dumps(doc), end="")
-PY
-}
-
 service_cluster_ip_phase90() {
   local namespace="${1:-}"
   local service_name="${2:-}"
@@ -334,17 +316,6 @@ validate_headlamp_admin_token_phase90() {
     return 1
   fi
   "${kubectl_bin}" --token="${token}" auth can-i get pods --all-namespaces >/dev/null 2>&1
-}
-
-secret_data_json_phase90() {
-  if [[ -z "${kubectl_bin}" ]]; then
-    return 0
-  fi
-  "${kubectl_bin}" -n homepage get secret homepage-widget-secrets -o json 2>/dev/null | python3 -c 'import json, sys
-try:
-    print(json.dumps(json.load(sys.stdin).get("data", {}), sort_keys=True))
-except Exception:
-    print("")'
 }
 
 mint_argocd_widget_key_phase90() {
@@ -565,10 +536,8 @@ ensure_homepage_widget_secrets_phase90() {
   local openbao_token=""
   local argocd_widget_key=""
   local gitea_widget_auth=""
-  local secret_before=""
-  local secret_after=""
-  local existing_argocd_widget_key=""
-  local existing_gitea_widget_auth=""
+  local prior_argocd_widget_key=""
+  local prior_gitea_widget_auth=""
   local gitea_admin_username=""
   local gitea_admin_password=""
   local gitea_service_host=""
@@ -607,15 +576,10 @@ ensure_homepage_widget_secrets_phase90() {
     gitea_base_url="http://${gitea_service_host}:3000"
   fi
 
-  existing_argocd_widget_key="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_ARGOCD_WIDGET_KEY)"
-  existing_gitea_widget_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GITEA_WIDGET_AUTH)"
-
-  argocd_widget_key="$(read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY "${openbao_token}")"
+  prior_argocd_widget_key="$(read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY "${openbao_token}")"
+  argocd_widget_key="${prior_argocd_widget_key}"
   if validate_argocd_widget_key_phase90 "${argocd_widget_key}"; then
     log_widget_field_phase90 homepage_argocd_widget_key reused "validated from OpenBao"
-  elif validate_argocd_widget_key_phase90 "${existing_argocd_widget_key}"; then
-    argocd_widget_key="${existing_argocd_widget_key}"
-    log_widget_field_phase90 homepage_argocd_widget_key reused "validated from existing delivery secret"
   else
     argocd_widget_key="$(mint_argocd_widget_key_phase90 "${openbao_token}" || true)"
     if [[ -n "${argocd_widget_key}" ]]; then
@@ -627,16 +591,12 @@ ensure_homepage_widget_secrets_phase90() {
     fi
   fi
 
-  gitea_widget_auth="$(read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH "${openbao_token}")"
+  prior_gitea_widget_auth="$(read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH "${openbao_token}")"
+  gitea_widget_auth="${prior_gitea_widget_auth}"
   if validate_gitea_widget_auth_phase90 "${gitea_widget_auth}" \
     && gitea_widget_token_has_required_scopes \
       "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_widget_auth}"; then
     log_widget_field_phase90 homepage_gitea_widget_auth reused "validated read-only token from OpenBao"
-  elif validate_gitea_widget_auth_phase90 "${existing_gitea_widget_auth}" \
-    && gitea_widget_token_has_required_scopes \
-      "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${existing_gitea_widget_auth}"; then
-    gitea_widget_auth="${existing_gitea_widget_auth}"
-    log_widget_field_phase90 homepage_gitea_widget_auth reused "validated read-only token from existing delivery secret"
   else
     gitea_widget_auth="$(mint_gitea_widget_auth_phase90 \
       "${openbao_token}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_base_url}" || true)"
@@ -652,22 +612,16 @@ ensure_homepage_widget_secrets_phase90() {
   persist_widget_field_phase90 homepage_argocd_widget_key "${argocd_widget_key}" "${openbao_token}"
   persist_widget_field_phase90 homepage_gitea_widget_auth "${gitea_widget_auth}" "${openbao_token}"
 
-  secret_before="$(secret_data_json_phase90)"
-
-  secret_manifest="$(build_homepage_widget_secret_manifest_phase90 \
-    "HOMEPAGE_ARGOCD_WIDGET_KEY=${argocd_widget_key}" \
-    "HOMEPAGE_GITEA_WIDGET_AUTH=${gitea_widget_auth}")"
-  printf '%s\n' "${secret_manifest}" | "${kubectl_bin}" -n homepage apply -f - >/dev/null
-
-  secret_after="$(secret_data_json_phase90)"
-
-  if [[ "${secret_before}" != "${secret_after}" ]]; then
+  if [[ "${argocd_widget_key}" != "${prior_argocd_widget_key}" || \
+        "${gitea_widget_auth}" != "${prior_gitea_widget_auth}" ]]; then
     "${kubectl_bin}" -n homepage rollout restart deploy/homepage >/dev/null
     if ! bootstrap_wait_for_deployment_rollout \
       "${kubectl_bin}" homepage homepage homepage 'app.kubernetes.io/name=homepage'; then
       echo "[phase90] Homepage restart did not become ready; diagnostics were captured" >&2
     fi
-    echo "[phase90] restarted Homepage deployment to pick up refreshed widget secrets"
+    bootstrap_wait_for_csi_secret_delivery \
+      "${kubectl_bin}" homepage homepage-openbao homepage
+    echo "[phase90] restarted Homepage deployment after OpenBao widget reconciliation"
   fi
 
   if [[ -n "${gitea_widget_auth}" ]]; then

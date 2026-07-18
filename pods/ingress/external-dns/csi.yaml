@@ -1,0 +1,21 @@
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: external-dns-openbao
+  namespace: ingress
+spec:
+  provider: openbao
+  # external-dns expects a Cloudflare token in its process environment. CSI
+  # creates this pod-scoped delivery copy only after OpenBao authentication.
+  secretObjects:
+    - secretName: external-dns-cloudflare
+      type: Opaque
+      data:
+        - objectName: api-token
+          key: api-token
+  parameters:
+    roleName: external-dns
+    objects: |
+      - objectName: api-token
+        secretPath: secret/data/apps/ingress/external-dns
+        secretKey: api_token

@@ -1,0 +1,22 @@
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: homepage-openbao
+  namespace: homepage
+spec:
+  provider: openbao
+  parameters:
+    roleName: homepage
+    objects: |
+      - objectName: HOMEPAGE_ARGOCD_WIDGET_KEY
+        secretPath: secret/data/apps/homepage/widgets
+        secretKey: HOMEPAGE_ARGOCD_WIDGET_KEY
+      - objectName: HOMEPAGE_GITEA_WIDGET_AUTH
+        secretPath: secret/data/apps/homepage/widgets
+        secretKey: HOMEPAGE_GITEA_WIDGET_AUTH
+      - objectName: HOMEPAGE_GRAFANA_USERNAME
+        secretPath: secret/data/apps/homepage/grafana
+        secretKey: username
+      - objectName: HOMEPAGE_GRAFANA_PASSWORD
+        secretPath: secret/data/apps/homepage/grafana
+        secretKey: password

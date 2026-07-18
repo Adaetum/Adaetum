@@ -4,7 +4,7 @@ metadata:
   name: ansible-runner
   namespace: ansible
   annotations:
-    secret.reloader.stakater.com/reload: gitea-registry-creds,tailscale-user-sync
+    secret.reloader.stakater.com/reload: gitea-registry-creds
 spec:
   replicas: 1
   selector:
@@ -15,6 +15,7 @@ spec:
       labels:
         app: ansible-runner
     spec:
+      serviceAccountName: ansible-runner
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       imagePullSecrets:
@@ -50,5 +51,8 @@ spec:
             path: /opt/ansible-runner
             type: Directory
         - name: day2-secrets
-          secret:
-            secretName: tailscale-user-sync
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ansible-runner-openbao

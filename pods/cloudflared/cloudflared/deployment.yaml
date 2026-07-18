@@ -3,8 +3,6 @@ kind: Deployment
 metadata:
   name: cloudflared
   namespace: cloudflared
-  annotations:
-    secret.reloader.stakater.com/auto: "true"
   labels:
     app: cloudflared
 spec:
@@ -17,24 +15,35 @@ spec:
       labels:
         app: cloudflared
     spec:
+      serviceAccountName: cloudflared
       containers:
         - name: cloudflared
           image: cloudflare/cloudflared:latest
           imagePullPolicy: IfNotPresent
-          args:
-            - tunnel
-            - --no-autoupdate
-            - run
+          args: ["tunnel", "--no-autoupdate", "run"]
           env:
+            # This delivery Secret is created by cloudflared-openbao's CSI
+            # mount, never by ESO or a bootstrap writer.
             - name: TUNNEL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: cloudflared-tunnel
                   key: token
+          volumeMounts:
+            - name: cloudflared-openbao
+              mountPath: /run/openbao
+              readOnly: true
           resources:
             requests:
               cpu: 50m
               memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+        - name: cloudflared-openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: cloudflared-openbao

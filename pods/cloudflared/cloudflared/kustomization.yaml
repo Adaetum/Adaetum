@@ -1,4 +1,4 @@
 resources:
   - namespace.yaml
-  - external-secret.yaml
+  - csi.yaml
   - deployment.yaml

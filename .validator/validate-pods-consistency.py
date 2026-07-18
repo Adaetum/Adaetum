@@ -203,7 +203,10 @@ def main() -> int:
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    domain_filter_match = re.search(r'(?m)^\s*-\s*--domain-filter=(.*?)\s*$', ext_dns_text)
+    domain_filter_match = re.search(
+        r'(?ms)name:\s*EXTERNAL_DNS_DOMAIN_FILTER\s*\n\s*value:\s*"?(.*?)"?\s*$',
+        ext_dns_text,
+    )
     actual_filter = domain_filter_match.group(1) if domain_filter_match else ""
     expect_equal(
         failures,

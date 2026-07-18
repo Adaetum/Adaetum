@@ -20,10 +20,11 @@ This repo uses that for the nginx ingress controller Service:
 ## Secret
 
 The zone-scoped, provider-issued token is stored at
-`secret/apps/ingress/external-dns:api_token` in OpenBao. External Secrets
-maintains the `ingress/external-dns-cloudflare` delivery Secret, and Reloader
-restarts external-dns when it changes. Replace or revoke the credential in
-Cloudflare first, then update OpenBao; do not edit the Kubernetes delivery copy.
+`secret/apps/ingress/external-dns:api_token` in OpenBao. The pod's dedicated
+service account authenticates through `external-dns-openbao`; CSI creates the
+chart-required `ingress/external-dns-cloudflare` delivery copy only during that
+mount. Replace or revoke the credential in Cloudflare first, then update
+OpenBao, perform the Deployment's normal rollout, and verify its CSI pod status.
 
 ## Domain filter
 

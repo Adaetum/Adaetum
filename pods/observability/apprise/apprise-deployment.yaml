@@ -3,8 +3,6 @@ kind: Deployment
 metadata:
   name: apprise
   namespace: observability
-  annotations:
-    secret.reloader.stakater.com/auto: "true"
 spec:
   replicas: 1
   selector:
@@ -15,6 +13,7 @@ spec:
       labels:
         app: apprise
     spec:
+      serviceAccountName: apprise
       initContainers:
         - name: seed-config
           image: public.ecr.aws/docker/library/busybox:1.36
@@ -25,7 +24,7 @@ spec:
               set -eu
               cp /seed/apprise.yml /config/apprise.yml
           volumeMounts:
-            - name: apprise-config-seed
+            - name: apprise-openbao
               mountPath: /seed
               readOnly: true
             - name: apprise-config
@@ -65,9 +64,12 @@ spec:
       volumes:
         - name: apprise-config
           emptyDir: {}
-        - name: apprise-config-seed
-          secret:
-            secretName: apprise-config
+        - name: apprise-openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: apprise-openbao
         - name: apprise-attach
           emptyDir: {}
         - name: apprise-plugin

@@ -257,19 +257,9 @@ ensure_authentik_secret() {
     return 1
   fi
   "${kubectl_bin}" create namespace authentik --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  "${kubectl_bin}" -n authentik create secret generic authentik-encryption \
-    --from-literal=secret_key="${secret_key}" \
-    --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
-  "${kubectl_bin}" -n authentik create secret generic authentik-postgresql \
-    --from-literal=postgresql_password="${postgresql_password}" \
-    --from-literal=password="${postgresql_password}" \
-    --from-literal=postgres-password="${postgresql_password}" \
-    --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
-  "${kubectl_bin}" -n authentik create secret generic authentik-admin \
-    --from-literal=admin_username=akadmin \
-    --from-literal=bootstrap_password="${bootstrap_password}" \
-    --from-literal=bootstrap_token="${bootstrap_token}" \
-    --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
+  # Runtime values belong to OpenBao after Phase 40. CSI creates application
+  # copies during pod setup and the database coordinator owns the active chart
+  # Secret. Phase 60 must never overwrite either from bootstrap inputs.
   seed_openbao_app_fields authentik/encryption "${openbao_token:-}" \
     "secret_key=${secret_key}"
   seed_openbao_app_fields authentik/postgresql "${openbao_token:-}" \
@@ -280,6 +270,12 @@ ensure_authentik_secret() {
     admin_username=akadmin \
     "bootstrap_password=${bootstrap_password}" \
     "bootstrap_token=${bootstrap_token}"
+  bootstrap_wait_for_external_secret_delivery \
+    "${kubectl_bin}" authentik authentik-postgresql-desired authentik-postgresql-desired authentik-postgresql
+  if ! "${kubectl_bin}" -n authentik get secret authentik-postgresql >/dev/null 2>&1; then
+    echo "[phase60] Authentik active PostgreSQL Secret is absent after OpenBao handoff; refusing bootstrap fallback" >&2
+    return 1
+  fi
 }
 
 ensure_headlamp_admin_token() {
@@ -574,7 +570,6 @@ ensure_ansible_runner_pull_secret() {
   local registry_username=""
   local registry_token=""
   local secret_name=""
-  local dockerconfigjson=""
 
   registry_host="$(ansible_runner_registry_host_effective)"
   push_host="$(ansible_runner_registry_host_push)"
@@ -590,47 +585,22 @@ ensure_ansible_runner_pull_secret() {
   write_secret_file gitea_registry_host "${registry_host}"
   write_secret_file gitea_registry_username "${registry_username}"
 
-  dockerconfigjson="$(
-    python3 - <<'PY' "${registry_username}" "${registry_token}" "${registry_host}" "${push_host}"
-import base64, json, sys
-username = sys.argv[1]
-token = sys.argv[2]
-hosts = []
-for host in sys.argv[3:]:
-    host = host.strip()
-    if host and host not in hosts:
-        hosts.append(host)
-auth = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("ascii")
-payload = {
-    "auths": {
-        host: {
-            "username": username,
-            "password": token,
-            "auth": auth,
-        }
-        for host in hosts
-    }
-}
-print(json.dumps(payload, separators=(",", ":")), end="")
-PY
-  )"
-
-  "${kubectl_bin}" create namespace ansible --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null 2>&1 || true
-  cat <<EOF | "${kubectl_bin}" -n ansible apply -f - >/dev/null
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ${secret_name}
-  namespace: ansible
-type: kubernetes.io/dockerconfigjson
-data:
-  .dockerconfigjson: $(printf '%s' "${dockerconfigjson}" | base64 | tr -d '\r\n')
-EOF
-
   seed_openbao_app_fields gitea/registry "${openbao_token:-}" \
     "host=${registry_host}" \
     "username=${registry_username}" \
     "token=${registry_token}"
+  if "${kubectl_bin}" -n ansible get externalsecret gitea-registry-creds >/dev/null 2>&1; then
+    bootstrap_wait_for_external_secret_delivery \
+      "${kubectl_bin}" ansible gitea-registry-creds "${secret_name}" ansible-runner
+  else
+    # BOOTSTRAP-ONLY structural bridge: the runner image cannot pull until
+    # GitOps has installed the ESO adapter that owns this copy thereafter.
+    "${kubectl_bin}" create namespace ansible --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
+    "${kubectl_bin}" -n ansible create secret docker-registry "${secret_name}" \
+      --docker-server="${registry_host}" --docker-username="${registry_username}" \
+      --docker-password="${registry_token}" --dry-run=client -o yaml \
+      | "${kubectl_bin}" -n ansible apply -f - >/dev/null
+  fi
 
   if [[ "${push_host}" != "${registry_host}" ]]; then
     echo "[phase60] ensured ansible-runner imagePullSecret ${secret_name} for ${registry_host} and internal push host ${push_host}"
@@ -839,18 +809,9 @@ ensure_external_dns_cloudflare_secret() {
     return 1
   fi
 
-  echo "[phase60] ensuring secret ingress/external-dns-cloudflare from ${token_source}"
-  cat <<EOF | "${kubectl_bin}" -n ingress apply -f - >/dev/null
-apiVersion: v1
-kind: Secret
-metadata:
-  name: external-dns-cloudflare
-  namespace: ingress
-type: Opaque
-stringData:
-  api-token: ${token}
-EOF
-
+  # CSI owns the Kubernetes delivery Secret. Phase 60 may seed OpenBao during
+  # the handoff, but must never recreate a workload credential from bootstrap.
+  echo "[phase60] seeding OpenBao ingress/external-dns from ${token_source}"
   seed_openbao_app_fields ingress/external-dns "${openbao_token:-}" "api_token=${token}"
   write_secret_file external_dns_cloudflare_token_source "${token_source}"
   return 0
@@ -1087,7 +1048,15 @@ reconcile_argocd_bootstrap_repo() {
       "username=${repo_username}" \
       "password=${repo_token}" \
       "branch=${repo_branch}"
-    cat <<EOF | "${kubectl_bin}" -n argocd apply -f -
+    if "${kubectl_bin}" -n argocd get externalsecret argocd-repo-https >/dev/null 2>&1; then
+      bootstrap_wait_for_external_secret_delivery \
+        "${kubectl_bin}" argocd argocd-repo-https argocd-repo-https argocd
+      bootstrap_wait_for_external_secret_delivery \
+        "${kubectl_bin}" argocd argocd-repository-bootstrap argocd-repository-bootstrap argocd
+    else
+      # BOOTSTRAP-ONLY structural bridge: Argo needs this repository before it
+      # can apply the ESO Applications that will own it on every later run.
+      cat <<EOF | "${kubectl_bin}" -n argocd apply -f -
 apiVersion: v1
 kind: Secret
 metadata:
@@ -1101,9 +1070,7 @@ stringData:
   username: ${repo_username}
   password: ${repo_token}
   type: git
-EOF
-
-    cat <<EOF | "${kubectl_bin}" -n argocd apply -f -
+---
 apiVersion: v1
 kind: Secret
 metadata:
@@ -1119,6 +1086,7 @@ stringData:
   type: git
   name: bootstrap-gitea
 EOF
+    fi
   fi
 
   "${kubectl_bin}" -n argocd delete application argocd --ignore-not-found >/dev/null 2>&1 || true
@@ -1278,18 +1246,9 @@ ensure_gitea_admin_secret() {
     return 1
   fi
 
-  cat <<EOF | "${kubectl_bin}" -n gitea apply -f -
-apiVersion: v1
-kind: Secret
-metadata:
-  name: gitea-admin-secret
-  namespace: gitea
-type: Opaque
-stringData:
-  username: gitea-admin
-  password: ${admin_password}
-  email: gitea-admin@example.com
-EOF
+  # Gitea mounts its CSI class before chart init containers run. Seed OpenBao
+  # first and let CSI create the admin delivery copy rather than writing it
+  # directly after the handoff.
   seed_openbao_app_fields gitea/admin "${openbao_token:-}" \
     username=gitea-admin \
     "password=${admin_password}" \
@@ -1317,17 +1276,19 @@ ensure_gitea_actions_runner() {
   fi
 
   "${kubectl_bin}" create namespace gitea --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
+  seed_openbao_app_fields gitea/actions-runner "${openbao_token:-}" "token=${runner_token}"
+  if "${kubectl_bin}" -n gitea get externalsecret gitea-actions-runner >/dev/null 2>&1; then
+    bootstrap_wait_for_external_secret_delivery \
+      "${kubectl_bin}" gitea gitea-actions-runner gitea-actions-runner gitea-actions-runner
+  else
+    # BOOTSTRAP-ONLY structural bridge until the post-OpenBao GitOps app
+    # applies runner-external-secret.yaml. ESO owns every later delivery.
+    "${kubectl_bin}" -n gitea create secret generic gitea-actions-runner \
+      --from-literal=token="${runner_token}" --dry-run=client -o yaml \
+      | "${kubectl_bin}" -n gitea apply -f - >/dev/null
+  fi
 
   cat <<EOF | "${kubectl_bin}" -n gitea apply -f -
-apiVersion: v1
-kind: Secret
-metadata:
-  name: gitea-actions-runner
-  namespace: gitea
-type: Opaque
-stringData:
-  token: ${runner_token}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -3476,16 +3437,16 @@ fi
 
 external_dns_available=0
 
-# external-dns requires a Cloudflare API token Secret (kept out of git).
+# external-dns authenticates through its CSI/OpenBao mount. Applying the
+# workload creates the delivery Secret only after that mount authenticates.
 if [[ -d "${repo_root}/pods/ingress/external-dns" ]]; then
-  ensure_external_dns_cloudflare_secret >/dev/null 2>&1 || true
-  if "${kubectl_bin}" -n ingress get secret external-dns-cloudflare >/dev/null 2>&1; then
+  if ensure_external_dns_cloudflare_secret; then
     external_dns_available=1
     run_or_fail \
       "failed applying external-dns manifests with CLUSTER_DOMAIN=${CLUSTER_DOMAIN}" \
       apply_external_dns_manifests
   else
-    echo "[phase60] skip: external-dns-cloudflare secret missing in namespace ingress"
+    echo "[phase60] skip: OpenBao source ingress/external-dns is unavailable"
   fi
 else
   echo "[phase60] skip: missing ${repo_root}/pods/ingress/external-dns"
