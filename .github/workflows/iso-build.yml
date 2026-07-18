@@ -289,7 +289,7 @@ jobs:
           printf '%s\n' \
             "TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}" \
             "TAILSCALE_OAUTH_TTL=${TAILSCALE_OAUTH_TTL}" \
-            "TAILSCALE_ADVERTISE_TAGS=${os_tag}" \
+            "TAILSCALE_ADVERTISE_TAGS=${os_tag},tag:${variant_role}" \
             "TAILSCALE_DOMAIN=${TAILSCALE_DOMAIN}" \
             "TAILSCALE_NODE_ROLE=${variant_role}" \
             "TAILSCALE_CLUSTER_TAG=${TAILSCALE_CLUSTER_TAG}" \

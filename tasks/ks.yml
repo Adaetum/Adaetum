@@ -692,7 +692,8 @@ tasks:
     internal: true
     desc: Interactive R2 logs wizard (select node, download all logs to dist)
     cmds:
-      - cmd: ./tasks/scripts/download-logs-interactive.sh
+      # Invoke Bash explicitly: archives and some checkouts do not preserve script mode.
+      - cmd: bash ./tasks/scripts/download-logs-interactive.sh
         platforms: [linux, darwin]
       - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/download-logs-interactive.sh
         platforms: [windows]
