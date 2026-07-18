@@ -661,6 +661,7 @@ publish_ansible_runner_image() {
   local active=""
   local gitea_service_ip=""
   local host_alias_block=""
+  local registry_token_service_host=""
   local host_aliases=()
 
   runner_image="$(ansible_runner_image_effective)"
@@ -686,6 +687,14 @@ publish_ansible_runner_image() {
     echo "[phase50] kaniko will push ansible-runner to internal registry endpoint ${push_image} while the deployment continues to use ${runner_image}"
     gitea_service_ip="$(gitea_service_cluster_ip)"
     if [[ -n "${gitea_service_ip}" ]]; then
+      # Gitea's registry challenge names its token service using Gitea's
+      # configured canonical host. During initial bootstrap that .local name
+      # may not resolve yet, so derive the exact host from the live challenge
+      # and reach it through the already-available in-cluster Service IP.
+      registry_token_service_host="$(curl -sSI --max-time 10 "http://${GITEA_INTERNAL_SERVICE_HOST}/v2/" 2>/dev/null | python3 "${script_dir}/registry-token-service-host.py" 2>/dev/null || true)"
+      if [[ -n "${registry_token_service_host}" ]]; then
+        host_aliases+=("${registry_token_service_host}")
+      fi
       if [[ -n "${CLUSTER_LOCAL_DOMAIN}" ]]; then
         host_aliases+=("gitea.${CLUSTER_LOCAL_DOMAIN}")
       fi

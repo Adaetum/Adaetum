@@ -72,6 +72,12 @@ repos:
           - --self-test
         pass_filenames: false
         files: ^(ks-src/|tasks/scripts/compile-kickstarts\.py|tasks/ks\.yml|Taskfile\.yml)
+      - id: validate-firstboot-console
+        name: Validate first-boot console contract
+        entry: python3 .validator/validate-firstboot-console.py
+        language: system
+        pass_filenames: false
+        files: ^(ansible/ansible-scripts/bundle-bootstrap|ks-src/fragments/shared/portable/11-tailscale-firstboot-lib\.shfrag|\.validator/validate-firstboot-console\.py)$
       - id: validate-bootstrap-mode
         name: Validate Tailscale bootstrap mode detection
         entry: python3 .validator/validate-bootstrap-mode.py

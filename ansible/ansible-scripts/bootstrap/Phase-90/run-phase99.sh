@@ -106,6 +106,19 @@ if [[ "${is_join_node}" -eq 1 ]] && [[ "${skip_burn_on_join}" == "1" || "${skip_
   exit 0
 fi
 
+# Phase 99 always removes the bootstrap-token Secret after the recovery export.
+# Resolve kubectl before the optional backup branch so the final destructive
+# step has the same explicit dependency regardless of backup format.
+kubectl_bin=""
+if command -v kubectl >/dev/null 2>&1; then
+  kubectl_bin="$(command -v kubectl)"
+elif [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
+  kubectl_bin="/var/lib/rancher/rke2/bin/kubectl"
+else
+  echo "kubectl not found; cannot remove the OpenBao bootstrap-token Secret safely." >&2
+  exit 10
+fi
+
 redact_url() {
   # Redact token query param in logs.
   python3 - <<'PY' "${1:-}"
@@ -368,17 +381,6 @@ PY
   if [[ -z "${BOOTSTRAP_BACKUP_PASSPHRASE}" ]]; then
     echo "BOOTSTRAP_BACKUP_PASSPHRASE (or BOOTSTRAP_BACKUP_PASSPHRASE_B64) is required when BOOTSTRAP_BACKUP_TO_R2=1" >&2
     exit 6
-  fi
-
-  kubectl_bin=""
-  if command -v kubectl >/dev/null 2>&1; then
-    kubectl_bin="$(command -v kubectl)"
-  elif [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
-    kubectl_bin="/var/lib/rancher/rke2/bin/kubectl"
-  else
-    echo "kubectl not found; cannot export cluster/OpenBao credentials for the emergency kit." >&2
-    echo "Refusing to burn secrets without a recoverable export." >&2
-    exit 10
   fi
 
   if [[ -z "${KUBECONFIG:-}" && -f /etc/rancher/rke2/rke2.yaml ]]; then

@@ -456,7 +456,7 @@ first_run_load_profile() {
 
 first_run_select_cloudflare_domain() {
   local zone_rows="" selected_label="" zone="" account_id="" account_name="" label="" index=""
-  local credential_store="${repo_root}/tasks/scripts/setup-credential-store.sh" credential_namespace="" credential_backend="" stored_token=""
+  local credential_store="${repo_root}/tasks/scripts/setup-credential-store.sh" credential_namespace="" credential_backend="" stored_token="" credential_rejected=0
   local zone_options=() zone_names=() account_ids=() account_names=()
   first_run_heading "Cloudflare account and DNS zone"
   first_run_message "${ADAETUM_UI_MUTED}" "Cloudflare calls the organization or personal workspace that owns resources an account. R2 buckets, Workers, and Tunnels belong to that account."
@@ -489,7 +489,9 @@ first_run_select_cloudflare_domain() {
         first_run_status success "Reusing the validated Cloudflare account token from ${credential_backend}."
       else
         first_run_status warning "The saved Cloudflare token is no longer valid for zone discovery and will be removed from ${credential_backend}."
-        bash "${credential_store}" delete "${credential_namespace}" cloudflare-api-token
+        # Credential-store cleanup must not prevent the normal interactive replacement flow.
+        bash "${credential_store}" delete "${credential_namespace}" cloudflare-api-token || true
+        first_run_cloudflare_token=""
       fi
     fi
     if [ -z "${first_run_cloudflare_token:-}" ]; then
@@ -568,8 +570,14 @@ first_run_select_cloudflare_domain() {
       --token-stdin \
       --account-id "${first_run_cloudflare_account_id}" \
       --zone-domain "${first_run_domain}" \
-      --validate-access-only >/dev/null 2>&1; then
+        --validate-access-only >/dev/null 2>&1; then
     [ "${silent_run}" != 1 ] || die "The saved Cloudflare token no longer has the required access. Run task init interactively to replace it."
+    if [ -n "${credential_backend}" ]; then
+      # This token passed discovery but failed the complete provider contract;
+      # do not leave it available for a later rerun to select again.
+      bash "${credential_store}" delete "${credential_namespace}" cloudflare-api-token || true
+      credential_rejected=1
+    fi
     local replacement_token="" replacement_rows="" replacement_zone="" replacement_account_id="" replacement_account_name=""
     local replacement_has_zone=0
     first_run_heading "Cloudflare permission required"
@@ -583,8 +591,12 @@ first_run_select_cloudflare_domain() {
         --token-stdin \
         --account-id "${first_run_cloudflare_account_id}" \
         --zone-domain "${first_run_domain}" \
-        --validate-access-only >/dev/null 2>&1; then
+      --validate-access-only >/dev/null 2>&1; then
       first_run_status success "The existing Cloudflare token now has tunnel access."
+      if [ "${credential_rejected}" = 1 ]; then
+        printf '%s\n' "${first_run_cloudflare_token}" | bash "${credential_store}" set "${credential_namespace}" cloudflare-api-token
+        first_run_status success "Updated the saved Cloudflare setup token in ${credential_backend}."
+      fi
     else
       replacement_token="$(first_run_secret "Replacement Cloudflare bootstrap token")"
       [ -n "${replacement_token}" ] || die "A replacement Cloudflare token is required to continue."
@@ -636,14 +648,20 @@ first_run_load_saved_tailscale_oauth() {
   fi
 
   first_run_status warning "The saved Tailscale OAuth client is invalid and will be removed from ${credential_backend}."
-  bash "${credential_store}" delete "${credential_namespace}" tailscale-oauth-client-id
-  bash "${credential_store}" delete "${credential_namespace}" tailscale-oauth-client-secret
+  # Delete both halves together; a partial OAuth client is never reusable.
+  bash "${credential_store}" delete "${credential_namespace}" tailscale-oauth-client-id || true
+  bash "${credential_store}" delete "${credential_namespace}" tailscale-oauth-client-secret || true
+  first_run_tailscale_oauth_client_id=""
+  first_run_tailscale_oauth_client_secret=""
   return 1
 }
 
 first_run_select_tailscale_domain() {
   local tailnets="" credential_store="${repo_root}/tasks/scripts/setup-credential-store.sh"
   local credential_namespace="" credential_backend="" stored_token="" tailnet_input="" tailnet_candidate="" saved_tailnet_available=0
+  # A valid durable OAuth client can resume without the one-day user token.
+  # Keep the export defined after an expired saved token is removed under set -u.
+  first_run_tailscale_token="${first_run_tailscale_token:-}"
   first_run_heading "Tailscale"
   first_run_message "${ADAETUM_UI_MUTED}" "Adaetum uses Tailscale for node enrollment, MagicDNS discovery, and private service access."
   first_run_heading "Temporary setup token"
@@ -673,7 +691,8 @@ first_run_select_tailscale_domain() {
         first_run_status success "Reusing the validated Tailscale API access token from ${credential_backend}."
       else
         first_run_status warning "The saved Tailscale token is invalid and will be removed from ${credential_backend}."
-        bash "${credential_store}" delete "${credential_namespace}" tailscale-api-token
+        bash "${credential_store}" delete "${credential_namespace}" tailscale-api-token || true
+        first_run_tailscale_token=""
       fi
     fi
     if [ -z "${first_run_tailscale_token:-}" ]; then
@@ -702,7 +721,7 @@ first_run_select_tailscale_domain() {
     first_run_tailscale_token="tskey-api-dry-run-placeholder"
     tailnets="$(python3 ./tasks/scripts/list-tailscale-tailnets.py --fixture)"
   fi
-  export SETUP_TAILSCALE_USER_API_TOKEN="${first_run_tailscale_token}"
+  export SETUP_TAILSCALE_USER_API_TOKEN="${first_run_tailscale_token:-}"
   export ADAETUM_TAILSCALE_AUTHORIZED=1
   if [ -n "${tailnets}" ]; then
     if [ "${clean_run}" != 1 ] && [ "${dry_run}" != 1 ] && [ -n "${first_run_overlay_domain:-}" ]; then

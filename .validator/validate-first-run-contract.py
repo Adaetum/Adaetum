@@ -171,6 +171,8 @@ def main() -> int:
         fail("Cloudflare account-token handoff lacks a generic dashboard entrypoint")
     if "Reusing the validated Cloudflare account token" not in first_run:
         fail("cancelled first-run cannot reuse a validated Cloudflare token")
+    if first_run.count('delete "${credential_namespace}" cloudflare-api-token || true') < 2:
+        fail("rejected Cloudflare credentials are not removed for both discovery and access failures")
     if "so a cancelled setup can resume?" not in first_run:
         fail("Cloudflare setup never offers secure resume storage")
     if "security add-generic-password" not in credential_store or "secret-tool store" not in credential_store:
@@ -252,6 +254,12 @@ def main() -> int:
         fail("new Tailscale tailnets do not have an inline DNS-name fallback")
     if "tailscale-api-token" not in first_run or "so a cancelled setup can resume?" not in first_run:
         fail("validated Tailscale access tokens cannot resume interrupted setup")
+    if 'delete "${credential_namespace}" tailscale-api-token || true' not in first_run:
+        fail("rejected Tailscale setup tokens are not removed before recovery")
+    if 'delete "${credential_namespace}" tailscale-oauth-client-id || true' not in first_run or 'delete "${credential_namespace}" tailscale-oauth-client-secret || true' not in first_run:
+        fail("rejected Tailscale OAuth clients are not removed as a credential pair")
+    if 'export SETUP_TAILSCALE_USER_API_TOKEN="${first_run_tailscale_token:-}"' not in first_run:
+        fail("OAuth-only Tailscale recovery can abort when the expired user token is unset")
     if "--prepare-policy-only" not in first_run or "--user-token-stdin" not in first_run:
         fail("temporary Tailscale API access is not used to prepare OAuth tag ownership")
     if "tag:rocky10, tag:server, tag:cluster" not in first_run:
