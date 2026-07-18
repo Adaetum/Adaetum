@@ -25,6 +25,20 @@ else
   exec > >(tee "${log_file}") 2>&1
 fi
 
+# The ISO installs this exact binary before first boot. Do not silently fall
+# back to a different renderer: this is the console contract operators rely on
+# when the node is still too early for network-backed recovery.
+GUM_BIN="/usr/bin/gum"
+if [ ! -x "${GUM_BIN}" ]; then
+  echo "[BOOTSTRAP] Required Gum console binary is missing: ${GUM_BIN}" >&2
+  exit 1
+fi
+"${GUM_BIN}" style --bold --foreground 39 -- "Adaetum first-boot status renderer ready" >/dev/null || {
+  echo "[BOOTSTRAP] Required Gum console binary failed its startup check" >&2
+  exit 1
+}
+GUM_CONSOLE_BRAND="Adaetum"
+
 if [[ "${LOG_UPLOAD_DEBUG}" == __*__ ]] || [ -z "${LOG_UPLOAD_DEBUG}" ]; then
   LOG_UPLOAD_DEBUG="0"
 fi
@@ -116,16 +130,11 @@ CURRENT_STEP=""
 STEP_INDEX=0
 STEP_TOTAL_HINT=0
 BOOTSTRAP_PHASE_STATUS_FILE="${BOOTSTRAP_PHASE_STATUS_FILE:-/run/bootstrap-phase-status.env}"
-STATUS_TTY_PATH=""
 STATUS_STATE="STARTING"
 STATUS_DETAIL="Preparing first-boot workflow"
-STATUS_TTY_ROWS=25
-STATUS_TTY_COLS=80
-STATUS_PANEL_HEIGHT=11
-STATUS_SCROLL_TOP=12
-STATUS_COMPACT_UI=0
 STATUS_LOG_HINT="Logs: /var/log/tailscale-firstboot.log"
-STATUS_COLOR_ENABLED=1
+GUM_STATUS_TTY=""
+GUM_STATUS_MONITOR_PID=""
 
 BOOTSTRAP_PROGRESS_PHASE_ID=""
 BOOTSTRAP_PROGRESS_PHASE_KEY=""
@@ -138,9 +147,7 @@ BOOTSTRAP_PROGRESS_PHASE_LOG_PATH=""
 BOOTSTRAP_PROGRESS_PHASE_STARTED_AT=""
 BOOTSTRAP_PROGRESS_UPDATED_AT=""
 BOOTSTRAP_PROGRESS_RUN_STARTED_AT=""
-UI_PHASE_MONITOR_PID=""
-
-ui_phase_state_reset() {
+gum_status_reset_phase() {
   BOOTSTRAP_PROGRESS_PHASE_ID=""
   BOOTSTRAP_PROGRESS_PHASE_KEY=""
   BOOTSTRAP_PROGRESS_PHASE_POSITION=""
@@ -154,8 +161,8 @@ ui_phase_state_reset() {
   BOOTSTRAP_PROGRESS_RUN_STARTED_AT=""
 }
 
-ui_load_bootstrap_phase_status() {
-  ui_phase_state_reset
+gum_status_load_phase() {
+  gum_status_reset_phase
   if [ ! -r "${BOOTSTRAP_PHASE_STATUS_FILE}" ]; then
     return 1
   fi
@@ -178,216 +185,17 @@ ui_load_bootstrap_phase_status() {
   return 0
 }
 
-ui_open_console() {
+gum_status_open_console() {
   for cand in /dev/tty1 /dev/console; do
     if [ -w "${cand}" ]; then
-      STATUS_TTY_PATH="${cand}"
+      GUM_STATUS_TTY="${cand}"
       return 0
     fi
   done
   return 1
 }
 
-ui_write_raw() {
-  if [ -z "${STATUS_TTY_PATH}" ]; then
-    return 0
-  fi
-  printf '%b' "${1:-}" >"${STATUS_TTY_PATH}" 2>/dev/null || true
-}
-
-ui_detect_console_size() {
-  local size="" rows="" cols=""
-  if [ -n "${STATUS_TTY_PATH}" ] && command -v stty >/dev/null 2>&1; then
-    size="$(stty -F "${STATUS_TTY_PATH}" size 2>/dev/null || true)"
-    if [ -z "${size}" ]; then
-      size="$(stty size <"${STATUS_TTY_PATH}" 2>/dev/null || true)"
-    fi
-  fi
-  if [ -z "${size}" ] && [ -n "${LINES:-}" ] && [ -n "${COLUMNS:-}" ]; then
-    size="${LINES} ${COLUMNS}"
-  fi
-  rows="$(printf '%s' "${size}" | awk '{print $1}')"
-  cols="$(printf '%s' "${size}" | awk '{print $2}')"
-  if ! printf '%s' "${rows}" | grep -Eq '^[0-9]+$'; then
-    rows=25
-  fi
-  if ! printf '%s' "${cols}" | grep -Eq '^[0-9]+$'; then
-    cols=80
-  fi
-  if [ "${rows}" -lt 10 ]; then
-    rows=10
-  fi
-  if [ "${cols}" -lt 32 ]; then
-    cols=32
-  fi
-  STATUS_TTY_ROWS="${rows}"
-  STATUS_TTY_COLS="${cols}"
-}
-
-ui_refresh_layout() {
-  ui_detect_console_size
-  STATUS_COMPACT_UI=0
-  STATUS_PANEL_HEIGHT=11
-  if [ "${STATUS_TTY_ROWS}" -lt 20 ] || [ "${STATUS_TTY_COLS}" -lt 72 ]; then
-    STATUS_PANEL_HEIGHT=9
-  fi
-  if [ "${STATUS_TTY_ROWS}" -lt 13 ] || [ "${STATUS_TTY_COLS}" -lt 48 ]; then
-    STATUS_PANEL_HEIGHT=6
-    STATUS_COMPACT_UI=1
-  fi
-  STATUS_SCROLL_TOP=$((STATUS_PANEL_HEIGHT + 1))
-  if [ "${STATUS_SCROLL_TOP}" -gt "${STATUS_TTY_ROWS}" ]; then
-    STATUS_SCROLL_TOP="${STATUS_TTY_ROWS}"
-  fi
-}
-
-ui_fit_text() {
-  local width="${1:-0}"
-  shift || true
-  local text="$*"
-  if ! printf '%s' "${width}" | grep -Eq '^[0-9]+$'; then
-    width=0
-  fi
-  if [ "${width}" -le 0 ]; then
-    printf '%s' ""
-    return 0
-  fi
-  if [ "${#text}" -le "${width}" ]; then
-    printf '%s' "${text}"
-    return 0
-  fi
-  if [ "${width}" -le 3 ]; then
-    printf '%s' "${text:0:${width}}"
-    return 0
-  fi
-  printf '%s...' "${text:0:$((width - 3))}"
-}
-
-ui_pad_right() {
-  local width="${1:-0}"
-  shift || true
-  local text="$*"
-  local fit=""
-  fit="$(ui_fit_text "${width}" "${text}")"
-  printf "%-*s" "${width}" "${fit}"
-}
-
-ui_progress_bar() {
-  local width="${1:-0}"
-  local current="${2:-0}"
-  local total="${3:-0}"
-  local filled=0 empty=0
-  if ! printf '%s' "${width}" | grep -Eq '^[0-9]+$'; then
-    width=0
-  fi
-  if ! printf '%s' "${current}" | grep -Eq '^[0-9]+$'; then
-    current=0
-  fi
-  if ! printf '%s' "${total}" | grep -Eq '^[0-9]+$'; then
-    total=0
-  fi
-  if [ "${width}" -le 0 ]; then
-    printf '%s' ""
-    return 0
-  fi
-  if [ "${total}" -le 0 ]; then
-    total=1
-  fi
-  if [ "${current}" -lt 0 ]; then
-    current=0
-  fi
-  if [ "${current}" -gt "${total}" ]; then
-    current="${total}"
-  fi
-  filled=$((current * width / total))
-  if [ "${filled}" -lt 0 ]; then
-    filled=0
-  fi
-  if [ "${filled}" -gt "${width}" ]; then
-    filled="${width}"
-  fi
-  empty=$((width - filled))
-  printf '%*s' "${filled}" '' | tr ' ' '#'
-  printf '%*s' "${empty}" '' | tr ' ' '-'
-}
-
-ui_display_phase() {
-  local phase="${1:-initializing}"
-  if [ -z "${phase}" ]; then
-    phase="initializing"
-  fi
-  phase="$(printf '%s' "${phase}" | tr '-' ' ')"
-  printf '%s' "${phase}"
-}
-
-ui_box_line() {
-  local row="${1:?row}"
-  local left="${2:-| }"
-  local text="${3:-}"
-  local right="${4:- |}"
-  local inner_width=$((STATUS_TTY_COLS - ${#left} - ${#right}))
-  if [ "${inner_width}" -lt 0 ]; then
-    inner_width=0
-  fi
-  ui_write_raw "\033[${row};1H\033[2K${left}$(ui_pad_right "${inner_width}" "${text}")${right}"
-}
-
-ui_color_for_state() {
-  case "${1:-}" in
-    SUCCESS) printf '\033[1;32m' ;;
-    FAILED|ERROR) printf '\033[1;31m' ;;
-    RUNNING|STARTING) printf '\033[1;33m' ;;
-    *) printf '\033[0m' ;;
-  esac
-}
-
-ui_box_line_color() {
-  local row="${1:?row}"
-  local color="${2:-\033[0m}"
-  local left="${3:-| }"
-  local text="${4:-}"
-  local right="${5:- |}"
-  local inner_width=$((STATUS_TTY_COLS - ${#left} - ${#right}))
-  local padded=""
-  if [ "${inner_width}" -lt 0 ]; then
-    inner_width=0
-  fi
-  padded="$(ui_pad_right "${inner_width}" "${text}")"
-  ui_write_raw "\033[${row};1H\033[2K${left}${color}${padded}\033[0m${right}"
-}
-
-ui_prepare_console() {
-  ui_refresh_layout
-  ui_write_raw "\033[?25l\033[2J\033[H\033[${STATUS_SCROLL_TOP};${STATUS_TTY_ROWS}r\033[${STATUS_SCROLL_TOP};1H"
-}
-
-ui_clear_screen() {
-  if [ -z "${STATUS_TTY_PATH}" ]; then
-    return 0
-  fi
-  ui_refresh_layout
-  ui_write_raw "\033[?25l\033[2J\033[H\033[${STATUS_SCROLL_TOP};${STATUS_TTY_ROWS}r\033[${STATUS_SCROLL_TOP};1H"
-}
-
-ui_clear_panel() {
-  local row=1
-  if [ -z "${STATUS_TTY_PATH}" ]; then
-    return 0
-  fi
-  while [ "${row}" -le "${STATUS_PANEL_HEIGHT}" ]; do
-    ui_write_raw "\033[${row};1H\033[2K"
-    row=$((row + 1))
-  done
-}
-
-ui_restore_console() {
-  if [ -z "${STATUS_TTY_PATH}" ]; then
-    return 0
-  fi
-  ui_write_raw "\033[r\033[?25h"
-}
-
-ui_duration_label() {
+gum_status_duration() {
   local seconds="${1:-0}"
   if ! printf '%s' "${seconds}" | grep -Eq '^[0-9]+$'; then seconds=0; fi
   if [ "${seconds}" -ge 3600 ]; then
@@ -399,7 +207,14 @@ ui_duration_label() {
   fi
 }
 
-ui_latest_activity() {
+gum_status_safe_text() {
+  # The phase-status file and log are separate processes. Keep their values
+  # printable and single-line before giving them to Gum so status content can
+  # never inject terminal controls into the physical console.
+  printf '%s' "${1:-}" | LC_ALL=C tr -cd '\11\12\15\40-\176' | tr '\r\n' ' '
+}
+
+gum_status_latest_activity() {
   local log_path="${1:-}"
   local line=""
   if [ -r "${log_path}" ]; then
@@ -414,7 +229,7 @@ ui_latest_activity() {
   printf '%s' "${line}"
 }
 
-ui_log_freshness() {
+gum_status_log_freshness() {
   local log_path="${1:-}" now="" modified="" age=""
   if [ ! -e "${log_path}" ]; then
     printf '%s' 'log not created yet'
@@ -427,23 +242,29 @@ ui_log_freshness() {
     return 0
   fi
   age=$((now - modified))
-  printf 'output %s ago' "$(ui_duration_label "${age}")"
+  printf 'output %s ago' "$(gum_status_duration "${age}")"
 }
 
-ui_render() {
+gum_status_color() {
+  case "${1:-}" in
+    SUCCESS) printf '%s' '10' ;;
+    FAILED|ERROR) printf '%s' '9' ;;
+    RUNNING|STARTING) printf '%s' '11' ;;
+    *) printf '%s' '7' ;;
+  esac
+}
+
+gum_status_render() {
   if [ $# -ge 1 ]; then STATUS_STATE="${1:-RUNNING}"; fi
   if [ $# -ge 2 ]; then STATUS_DETAIL="${2:-}"; fi
-  if [ -z "${STATUS_TTY_PATH}" ]; then return 0; fi
+  if [ -z "${GUM_STATUS_TTY}" ]; then return 0; fi
 
-  ui_refresh_layout
-  local box_top box_mid state_color phase_position="" phase_total="" phase_id=""
+  local phase_position="" phase_total="" phase_id=""
   local phase_state="" phase_label="${CURRENT_STEP:-initializing}" detail="${STATUS_DETAIL:-Waiting for next update}"
   local phase_log="${STATUS_LOG_HINT#Logs: }" phase_started="" run_started="" updated="" now=""
   local progress_text="Bootstrap phases pending" activity="" elapsed="" phase_elapsed="" freshness="" status_freshness=""
-  local inner_width=$((STATUS_TTY_COLS - 4)) progress_width row
-  if [ "${inner_width}" -lt 8 ]; then inner_width=8; fi
 
-  if ui_load_bootstrap_phase_status; then
+  if gum_status_load_phase; then
     phase_position="${BOOTSTRAP_PROGRESS_PHASE_POSITION:-}"
     phase_total="${BOOTSTRAP_PROGRESS_PHASE_TOTAL:-}"
     phase_id="${BOOTSTRAP_PROGRESS_PHASE_ID:-}"
@@ -460,109 +281,81 @@ ui_render() {
       if [ -n "${phase_id}" ]; then progress_text="${progress_text}  (gate ${phase_id}/100)"; fi
     fi
   fi
+  phase_label="$(gum_status_safe_text "${phase_label}")"
+  detail="$(gum_status_safe_text "${detail}")"
+  phase_log="$(gum_status_safe_text "${phase_log}")"
   now="$(date +%s)"
-  if [ -n "${run_started}" ]; then elapsed="$(ui_duration_label "$((now - run_started))")"; else elapsed="not started"; fi
-  if [ -n "${phase_started}" ]; then phase_elapsed="$(ui_duration_label "$((now - phase_started))")"; else phase_elapsed="not started"; fi
-  if [ -n "${updated}" ]; then status_freshness="status $(ui_duration_label "$((now - updated))") ago"; else status_freshness="status pending"; fi
-  activity="$(ui_latest_activity "${phase_log}")"
-  freshness="$(ui_log_freshness "${phase_log}")"
-  state_color="$(ui_color_for_state "${STATUS_STATE:-RUNNING}")"
-  progress_width=$((inner_width - 26)); if [ "${progress_width}" -lt 8 ]; then progress_width=8; fi
-  box_top="+$(printf '%*s' $((STATUS_TTY_COLS - 2)) '' | tr ' ' '-')+"
-  box_mid="|$(printf '%*s' $((STATUS_TTY_COLS - 2)) '' | tr ' ' ' ')|"
-
-  ui_write_raw "\033[s"
-  ui_clear_panel
-  ui_write_raw "\033[H${box_top}"
-  ui_box_line_color 2 "${state_color}" "| " "Adaetum first-boot console  |  ${STATUS_STATE:-RUNNING}" " |"
-  ui_box_line 3 "| " "Host: ${HOSTNAME:-unknown}  |  ${progress_text}" " |"
-  if [ "${STATUS_COMPACT_UI}" -eq 1 ]; then
-    ui_box_line 4 "| " "Now: ${phase_label}" " |"
-    ui_box_line 5 "| " "Live console below — ${freshness}" " |"
-  else
-    ui_box_line 4 "| " "Now: ${phase_label}" " |"
-    ui_box_line 5 "| " "Progress: [$(ui_progress_bar "${progress_width}" "${phase_position:-0}" "${phase_total:-1}")]" " |"
-    ui_box_line 6 "| " "Detail: ${detail}" " |"
-    ui_box_line 7 "| " "Elapsed: ${elapsed} total  |  ${phase_elapsed} in this phase  |  ${status_freshness}" " |"
-    if [ "${STATUS_PANEL_HEIGHT}" -ge 11 ]; then
-      ui_box_line 8 "| " "Latest: ${activity}" " |"
-      ui_box_line 9 "| " "Live console follows; ${freshness}; ${phase_log}" " |"
-      ui_box_line 10 "| " "${STATUS_LOG_HINT}" " |"
-    fi
-  fi
-  row=2
-  while [ "${row}" -lt "${STATUS_PANEL_HEIGHT}" ]; do
-    row=$((row + 1))
-    case "${row}" in
-      2|3|4|5) : ;;
-      6|7) if [ "${STATUS_COMPACT_UI}" -eq 1 ]; then ui_write_raw "\033[${row};1H\033[2K${box_mid}"; fi ;;
-      8|9|10) if [ "${STATUS_PANEL_HEIGHT}" -lt 11 ]; then ui_write_raw "\033[${row};1H\033[2K${box_mid}"; fi ;;
-      *) ui_write_raw "\033[${row};1H\033[2K${box_mid}" ;;
-    esac
-  done
-  ui_write_raw "\033[${STATUS_PANEL_HEIGHT};1H\033[2K${box_top}\033[u"
+  if [ -n "${run_started}" ]; then elapsed="$(gum_status_duration "$((now - run_started))")"; else elapsed="not started"; fi
+  if [ -n "${phase_started}" ]; then phase_elapsed="$(gum_status_duration "$((now - phase_started))")"; else phase_elapsed="not started"; fi
+  if [ -n "${updated}" ]; then status_freshness="status $(gum_status_duration "$((now - updated))") ago"; else status_freshness="status pending"; fi
+  activity="$(gum_status_latest_activity "${phase_log}")"
+  freshness="$(gum_status_log_freshness "${phase_log}")"
+  "${GUM_BIN}" style --border rounded --border-foreground 39 --padding "0 1" --margin "1 0" \
+    --foreground "$(gum_status_color "${STATUS_STATE:-RUNNING}")" \
+    "${GUM_CONSOLE_BRAND} first-boot status: ${STATUS_STATE:-RUNNING}
+Host: ${HOSTNAME:-unknown}  |  ${progress_text}
+Now: ${phase_label}
+Detail: ${detail}
+Elapsed: ${elapsed} total  |  ${phase_elapsed} in this phase  |  ${status_freshness}
+Latest: ${activity}
+Logs: ${phase_log} (${freshness})" >"${GUM_STATUS_TTY}" 2>/dev/null || true
 }
 
-ui_render_result() {
+gum_status_result() {
   local state="${1:-SUCCESS}"
   local detail="${2:-Completed}"
   local extra="${3:-}"
   if [ -n "${extra}" ]; then
     detail="${detail}; ${extra}"
   fi
-  # Preserve the scrolling evidence region after completion or failure so the
-  # operator does not have to switch away from the result to inspect it.
-  ui_render "${state}" "${detail}"
+  gum_status_render "${state}" "${detail}"
 }
 
-ui_start_phase_monitor() {
-  local interval="${1:-1}"
-  if [ -z "${STATUS_TTY_PATH}" ]; then
+gum_status_start_monitor() {
+  local interval="${1:-15}"
+  if [ -z "${GUM_STATUS_TTY}" ]; then
     return 0
   fi
-  if [ -n "${UI_PHASE_MONITOR_PID:-}" ] && kill -0 "${UI_PHASE_MONITOR_PID}" 2>/dev/null; then
+  if [ -n "${GUM_STATUS_MONITOR_PID:-}" ] && kill -0 "${GUM_STATUS_MONITOR_PID}" 2>/dev/null; then
     return 0
   fi
   (
     while true; do
       sleep "${interval}"
-      ui_render "${STATUS_STATE:-RUNNING}" "${STATUS_DETAIL:-Waiting for next update}"
+      gum_status_render "${STATUS_STATE:-RUNNING}" "${STATUS_DETAIL:-Waiting for next update}"
     done
   ) &
-  UI_PHASE_MONITOR_PID=$!
+  GUM_STATUS_MONITOR_PID=$!
 }
 
-ui_stop_phase_monitor() {
-  if [ -n "${UI_PHASE_MONITOR_PID:-}" ]; then
-    kill "${UI_PHASE_MONITOR_PID}" >/dev/null 2>&1 || true
-    wait "${UI_PHASE_MONITOR_PID}" 2>/dev/null || true
-    UI_PHASE_MONITOR_PID=""
+gum_status_stop_monitor() {
+  if [ -n "${GUM_STATUS_MONITOR_PID:-}" ]; then
+    kill "${GUM_STATUS_MONITOR_PID}" >/dev/null 2>&1 || true
+    wait "${GUM_STATUS_MONITOR_PID}" 2>/dev/null || true
+    GUM_STATUS_MONITOR_PID=""
   fi
 }
 
-if ui_open_console; then
-  ui_prepare_console
-  ui_render "STARTING" "Preparing first-boot workflow"
+if gum_status_open_console; then
+  gum_status_render "STARTING" "Preparing first-boot workflow"
 fi
 
 step_begin() {
   CURRENT_STEP="$1"
   STEP_INDEX=$((STEP_INDEX + 1))
   echo "[BOOTSTRAP] ---- ${CURRENT_STEP} ----"
-  ui_stop_phase_monitor
-  ui_clear_screen
-  ui_render "RUNNING" "Entered ${CURRENT_STEP}"
+  gum_status_stop_monitor
+  gum_status_render "RUNNING" "Entered ${CURRENT_STEP}"
 }
 step_end() {
   rc="${1:-0}"
-  ui_stop_phase_monitor
-  ui_clear_screen
+  gum_status_stop_monitor
   if [ "${rc}" = "0" ]; then
     echo "[BOOTSTRAP] ---- end ${CURRENT_STEP} (ok) ----"
-    ui_render "RUNNING" "Completed ${CURRENT_STEP}"
+    gum_status_render "RUNNING" "Completed ${CURRENT_STEP}"
   else
     echo "[BOOTSTRAP] ---- end ${CURRENT_STEP} (FAILED rc=${rc}) ----"
-    ui_render "FAILED" "Failed ${CURRENT_STEP} (rc=${rc})"
+    gum_status_render "FAILED" "Failed ${CURRENT_STEP} (rc=${rc})"
   fi
   CURRENT_STEP=""
 }

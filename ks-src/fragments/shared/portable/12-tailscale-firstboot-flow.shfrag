@@ -502,7 +502,7 @@ firstboot_exit_trap() {
     return "${rc}"
   fi
   FIRSTBOOT_EXIT_TRAP_RUNNING=1
-  ui_restore_console || true
+  gum_status_stop_monitor || true
   if [ "${rc}" -ne 0 ]; then
     echo "[BOOTSTRAP] EXIT trap: rc=${rc}; attempting final log upload"
     stop_log_stream || true
@@ -570,7 +570,7 @@ wait_for_clock_sync() {
 
 fail_firstboot() {
   echo "[BOOTSTRAP] Tailscale first-boot failure (step=${CURRENT_STEP:-unknown}): ${1:-unknown}"
-  ui_render_result "FAILED" "${1:-unknown}" "There was an error. Check the logs."
+  gum_status_result "FAILED" "${1:-unknown}" "There was an error. Check the logs."
   if [ -n "${CURRENT_STEP:-}" ]; then
     echo "[BOOTSTRAP] ---- end ${CURRENT_STEP} (FAILED) ----"
   fi
@@ -1130,14 +1130,14 @@ if [ -f /etc/profile.d/homebrew.sh ]; then
   . /etc/profile.d/homebrew.sh
   hash -r 2>/dev/null || true
 fi
-ui_start_phase_monitor 1
+gum_status_start_monitor 15
 if [ -x /usr/local/sbin/ansible-bundle-bootstrap.sh ]; then
   BOOTSTRAP_BREAKGLASS="${KS_BREAKGLASS}" /usr/local/sbin/ansible-bundle-bootstrap.sh || fail_firstboot "ansible bootstrap failed"
 else
-  ui_stop_phase_monitor
+  gum_status_stop_monitor
   fail_firstboot "ansible-bundle-bootstrap script missing"
 fi
-ui_stop_phase_monitor
+gum_status_stop_monitor
 step_end 0
 
 # The rendered first-boot scripts and installed setup configuration can
@@ -1183,5 +1183,5 @@ touch "${done_file}"
 bootstrap_service_disable "${firstboot_service_name}" || true
 stop_log_stream
 upload_log "${log_file}" first-boot.log
-ui_render_result "SUCCESS" "First-boot workflow completed" "Bootstrap completed successfully."
+gum_status_result "SUCCESS" "First-boot workflow completed" "Bootstrap completed successfully."
 echo "[BOOTSTRAP] Tailscale first-boot complete"

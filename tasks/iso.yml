@@ -369,6 +369,59 @@ tasks:
         # Ensure extracted files are writable before host-side in-place edits.
         # Container extraction can leave root-owned files on Linux runners.
         run_iso_tool chmod -R a+rwX "${work_dir}" >/dev/null 2>&1 || true
+        # First boot owns the physical console. Bake Gum into every generated
+        # ISO instead of depending on DNF, DNS, or a package repository after
+        # the machine has rebooted. The pinned RPM plus checksum keeps the ISO
+        # assembly input reproducible and makes the console dependency explicit.
+        iso_base="$(basename "${iso_path}")"
+        gum_version="0.17.0"
+        case "${iso_base}" in
+          *aarch64*)
+            gum_rpm_arch="aarch64"
+            gum_rpm_sha256="48447f9d7b3f604cf0765cabc3ae3aaf72b1b2ab474deac33b5feb49c50ce765"
+            ;;
+          *x86_64*)
+            gum_rpm_arch="x86_64"
+            gum_rpm_sha256="789d5b0252238608c807c640d053fa3d0461fd88d676eb8ae92b74635c57bc79"
+            ;;
+          *)
+            echo "Unable to select a Gum RPM for ISO architecture: ${iso_base}" >&2
+            exit 1
+            ;;
+        esac
+        gum_rpm="gum-${gum_version}-1.${gum_rpm_arch}.rpm"
+        gum_rpm_url="https://github.com/charmbracelet/gum/releases/download/v${gum_version}/${gum_rpm}"
+        mkdir -p "${work_dir}/ks"
+        gum_rpm_path="${work_dir}/ks/gum.rpm"
+        gum_rpm_partial="${gum_rpm_path}.partial"
+        rm -f "${gum_rpm_partial}"
+        gum_rpm_source="${ISO_GUM_RPM_SOURCE:-}"
+        if [ -n "${gum_rpm_source}" ]; then
+          if [ ! -f "${gum_rpm_source}" ]; then
+            echo "Configured ISO_GUM_RPM_SOURCE is missing: ${gum_rpm_source}" >&2
+            exit 1
+          fi
+          echo "[iso] Using workflow-prepared first-boot console dependency: ${gum_rpm}"
+          cp -f "${gum_rpm_source}" "${gum_rpm_partial}"
+        else
+          echo "[iso] Downloading required first-boot console dependency: ${gum_rpm}"
+          curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+            --output "${gum_rpm_partial}" "${gum_rpm_url}"
+        fi
+        gum_rpm_actual="$(python3 - "${gum_rpm_partial}" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+        if [ "${gum_rpm_actual}" != "${gum_rpm_sha256}" ]; then
+          rm -f "${gum_rpm_partial}"
+          echo "Gum RPM checksum mismatch for ${gum_rpm}" >&2
+          exit 1
+        fi
+        mv -f "${gum_rpm_partial}" "${gum_rpm_path}"
         if [ "${embed_ks}" = "1" ]; then
           ks_rendered="{{.KS_OUT_DIR}}/${ks_name}"
           if [ ! -f "${ks_rendered}" ]; then
@@ -378,7 +431,6 @@ tasks:
             echo "Missing rendered kickstart file: ${ks_rendered}"
             exit 1
           fi
-          mkdir -p "${work_dir}/ks"
           cp -f "${ks_rendered}" "${work_dir}/ks/${ks_name}"
           mode_detector="ansible/ansible-scripts/detect-cluster-bootstrap-mode.py"
           if [ ! -f "${mode_detector}" ]; then

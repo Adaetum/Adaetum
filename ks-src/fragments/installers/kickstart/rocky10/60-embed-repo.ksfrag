@@ -6,6 +6,8 @@ set -euo pipefail
 target_root="/mnt/sysroot"
 detector_source="/run/install/repo/ks/detect-cluster-bootstrap-mode.py"
 detector_target="${target_root}/usr/local/libexec/adaetum/detect-cluster-bootstrap-mode.py"
+gum_source="/run/install/repo/ks/gum.rpm"
+gum_target="${target_root}/usr/bin/gum"
 
 # Automatic start/join selection runs before the remotely fetched Ansible
 # bundle. Install only its focused decision helper from the trusted media;
@@ -17,6 +19,22 @@ if [ ! -f "${detector_source}" ]; then
 fi
 install -D -m 0755 "${detector_source}" "${detector_target}"
 
-printf "%s\n" "[BOOTSTRAP] Embedded ansible-runner repo copy skipped; first boot must fetch bootstrap artifacts from the Worker/R2 path" \
+if [ ! -f "${gum_source}" ]; then
+  echo "[BOOTSTRAP] Missing required Gum RPM on installer media" \
+    >>"${target_root}/root/bootstrap-post.log"
+  exit 1
+fi
+if ! rpm --root "${target_root}" -Uvh --replacepkgs "${gum_source}" >>"${target_root}/root/bootstrap-post.log" 2>&1; then
+  echo "[BOOTSTRAP] Failed to install required Gum RPM from installer media" \
+    >>"${target_root}/root/bootstrap-post.log"
+  exit 1
+fi
+if [ ! -x "${gum_target}" ]; then
+  echo "[BOOTSTRAP] Gum RPM completed without /usr/bin/gum" \
+    >>"${target_root}/root/bootstrap-post.log"
+  exit 1
+fi
+
+printf "%s\n" "[BOOTSTRAP] Installed required Gum console dependency from installer media; first boot must fetch bootstrap artifacts from the Worker/R2 path" \
   >>"${target_root}/root/bootstrap-post.log"
 %end
