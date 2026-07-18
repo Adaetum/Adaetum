@@ -71,6 +71,9 @@ mkdir -p "${phase_log_dir}"
 export BOOTSTRAP_PHASE_LOG_DIR="${phase_log_dir}"
 BOOTSTRAP_PHASE_STATUS_FILE="${BOOTSTRAP_PHASE_STATUS_FILE:-/run/bootstrap-phase-status.env}"
 export BOOTSTRAP_PHASE_STATUS_FILE
+BOOTSTRAP_PROGRESS_RUN_STARTED_AT="$(date +%s)"
+BOOTSTRAP_PROGRESS_CURRENT_PHASE_KEY=""
+BOOTSTRAP_PROGRESS_CURRENT_PHASE_STARTED_AT=""
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/bootstrap" && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
@@ -130,14 +133,38 @@ bootstrap_phase_status_write() {
   local phase_key="${2:-pre-bootstrap}"
   local phase_state="${3:-STARTING}"
   local phase_label="${4:-}"
+  local phase_detail="${5:-}"
+  local phase_log_path="${6:-}"
   local phase_total="10"
   local phase_position=""
   local status_dir=""
   local tmp_file=""
+  local now=""
+
+  now="$(date +%s)"
+  if [ "${BOOTSTRAP_PROGRESS_CURRENT_PHASE_KEY}" != "${phase_key}" ]; then
+    BOOTSTRAP_PROGRESS_CURRENT_PHASE_KEY="${phase_key}"
+    BOOTSTRAP_PROGRESS_CURRENT_PHASE_STARTED_AT="${now}"
+  fi
 
   phase_position="$(phase_position_for_id "${phase_id}")"
   if [ -z "${phase_label}" ]; then
     phase_label="$(phase_label_for_id "${phase_id}")"
+  fi
+  if [ -z "${phase_detail}" ]; then
+    case "${phase_state}" in
+      RUNNING|STARTING) phase_detail="Running ${phase_label}" ;;
+      SUCCESS) phase_detail="Completed ${phase_label}" ;;
+      FAILED|ERROR) phase_detail="Failed ${phase_label}" ;;
+      *) phase_detail="${phase_label}" ;;
+    esac
+  fi
+  if [ -z "${phase_log_path}" ]; then
+    case "${phase_key}" in
+      phase20|phase30) phase_log_path="$(phase_log_path "bundle-playbook")" ;;
+      pre-bootstrap|phase100) phase_log_path="${log_file}" ;;
+      *) phase_log_path="$(phase_log_path "${phase_key}")" ;;
+    esac
   fi
   status_dir="$(dirname "${BOOTSTRAP_PHASE_STATUS_FILE}")"
   mkdir -p "${status_dir}"
@@ -149,6 +176,11 @@ bootstrap_phase_status_write() {
     printf 'BOOTSTRAP_PROGRESS_PHASE_TOTAL=%q\n' "${phase_total}"
     printf 'BOOTSTRAP_PROGRESS_PHASE_STATE=%q\n' "${phase_state}"
     printf 'BOOTSTRAP_PROGRESS_PHASE_LABEL=%q\n' "${phase_label}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_DETAIL=%q\n' "${phase_detail}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_LOG_PATH=%q\n' "${phase_log_path}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_STARTED_AT=%q\n' "${BOOTSTRAP_PROGRESS_CURRENT_PHASE_STARTED_AT}"
+    printf 'BOOTSTRAP_PROGRESS_UPDATED_AT=%q\n' "${now}"
+    printf 'BOOTSTRAP_PROGRESS_RUN_STARTED_AT=%q\n' "${BOOTSTRAP_PROGRESS_RUN_STARTED_AT}"
   } > "${tmp_file}"
   mv -f "${tmp_file}" "${BOOTSTRAP_PHASE_STATUS_FILE}"
 }
@@ -837,6 +869,35 @@ if is_true "${BOOTSTRAP_RUN_PHASE99}"; then
     /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-90/run-phase99.sh
 fi
 
+# Both break-glass and join nodes fetch the same secret-bearing first-boot
+# payload. Phase 99 removes the break-glass copies, but join nodes deliberately
+# skip that phase. Remove the files at the successful outer boundary as well so
+# a completed node cannot retain stale provider, source-repository, or
+# enrollment credentials. Failed runs keep them so the explicit resume path can
+# diagnose and retry the incomplete installation.
+remove_first_boot_env_files() {
+  local path=""
+  for path in \
+    "${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}" \
+    /etc/ansible-bundle-bootstrap.env \
+    /etc/tailscale-firstboot.env; do
+    if [ ! -e "${path}" ]; then
+      continue
+    fi
+    if command -v shred >/dev/null 2>&1; then
+      shred -u -- "${path}" 2>/dev/null || rm -f -- "${path}"
+    else
+      rm -f -- "${path}"
+    fi
+    if [ -e "${path}" ]; then
+      echo "[BOOTSTRAP] failed to remove first-boot credential file: ${path}" >&2
+      return 1
+    fi
+    echo "[BOOTSTRAP] removed first-boot credential file: ${path}"
+  done
+}
+
+remove_first_boot_env_files
 bootstrap_phase_status_write "100" "phase100" "SUCCESS" "$(phase_label_for_id "100")"
 echo "[BOOTSTRAP] bundle-bootstrap complete (validation, bootstrap, GitOps install, handoff, realization, reconciliation, and finalization complete)"
 bootstrap_diag_record \

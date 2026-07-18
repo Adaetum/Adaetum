@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 99 exports recovery material and, for a break-glass primary, removes
+# temporary local bootstrap authority. It deliberately skips that destructive
+# action on joining nodes: their local files are not the cluster's authority.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
@@ -61,6 +65,8 @@ bootstrap_diag_record \
   "summary=phase99 starting" \
   "log_path=${BOOTSTRAP_DIAG_LOG_PATH}"
 
+# Backup settings describe the recovery artifact, not normal runtime state.
+# The encrypted export is created before any eligible local-secret cleanup.
 BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
 BOOTSTRAP_BURN_LADDER="${BOOTSTRAP_BURN_LADDER:-}"
 BOOTSTRAP_BACKUP_TO_R2="${BOOTSTRAP_BACKUP_TO_R2:-}"
@@ -98,6 +104,19 @@ skip_burn_on_join="$(printf '%s' "${BOOTSTRAP_SKIP_BURN_ON_JOIN}" | tr '[:upper:
 if [[ "${is_join_node}" -eq 1 ]] && [[ "${skip_burn_on_join}" == "1" || "${skip_burn_on_join}" == "true" ]]; then
   echo "[phase99] join node detected (${rke2_cfg} has remote server:). Skipping burn-the-ladder." >&2
   exit 0
+fi
+
+# Phase 99 always removes the bootstrap-token Secret after the recovery export.
+# Resolve kubectl before the optional backup branch so the final destructive
+# step has the same explicit dependency regardless of backup format.
+kubectl_bin=""
+if command -v kubectl >/dev/null 2>&1; then
+  kubectl_bin="$(command -v kubectl)"
+elif [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
+  kubectl_bin="/var/lib/rancher/rke2/bin/kubectl"
+else
+  echo "kubectl not found; cannot remove the OpenBao bootstrap-token Secret safely." >&2
+  exit 10
 fi
 
 redact_url() {
@@ -169,9 +188,9 @@ print("")
 PY
 }
 
-write_ingress_vip_backup_secret() {
+write_ingress_vip_backup_configmap() {
   local dest_path="${1:?dest_path}"
-  local secret_json=""
+  local config_json=""
   local service_json=""
   local internal_vip=""
   local external_vip=""
@@ -181,55 +200,55 @@ write_ingress_vip_backup_secret() {
   local actual_service_type=""
   local actual_service_vip=""
 
-  if "${kubectl_bin}" -n ingress get secret ingress-vip-config >/dev/null 2>&1; then
-    secret_json="$("${kubectl_bin}" -n ingress get secret ingress-vip-config -o json 2>/dev/null || true)"
+  if "${kubectl_bin}" -n ingress get configmap ingress-vip-config >/dev/null 2>&1; then
+    config_json="$("${kubectl_bin}" -n ingress get configmap ingress-vip-config -o json 2>/dev/null || true)"
   fi
 
-  if [[ -n "${secret_json}" ]]; then
-    internal_vip="$(python3 - <<'PY' "${secret_json}"
-import json,sys,base64
+  if [[ -n "${config_json}" ]]; then
+    internal_vip="$(python3 - <<'PY' "${config_json}"
+import json,sys
 raw = sys.argv[1]
 try:
   data = json.loads(raw).get("data", {})
   value = data.get("ingress_internal_vip", "")
   if value:
-    sys.stdout.write(base64.b64decode(value).decode("utf-8"))
+    sys.stdout.write(value)
 except Exception:
   pass
 PY
 )"
-    external_vip="$(python3 - <<'PY' "${secret_json}"
-import json,sys,base64
+    external_vip="$(python3 - <<'PY' "${config_json}"
+import json,sys
 raw = sys.argv[1]
 try:
   data = json.loads(raw).get("data", {})
   value = data.get("ingress_external_vip", "")
   if value:
-    sys.stdout.write(base64.b64decode(value).decode("utf-8"))
+    sys.stdout.write(value)
 except Exception:
   pass
 PY
 )"
-    controller_service="$(python3 - <<'PY' "${secret_json}"
-import json,sys,base64
+    controller_service="$(python3 - <<'PY' "${config_json}"
+import json,sys
 raw = sys.argv[1]
 try:
   data = json.loads(raw).get("data", {})
   value = data.get("ingress_controller_service", "")
   if value:
-    sys.stdout.write(base64.b64decode(value).decode("utf-8"))
+    sys.stdout.write(value)
 except Exception:
   pass
 PY
 )"
-    service_type="$(python3 - <<'PY' "${secret_json}"
-import json,sys,base64
+    service_type="$(python3 - <<'PY' "${config_json}"
+import json,sys
 raw = sys.argv[1]
 try:
   data = json.loads(raw).get("data", {})
   value = data.get("ingress_service_type", "")
   if value:
-    sys.stdout.write(base64.b64decode(value).decode("utf-8"))
+    sys.stdout.write(value)
 except Exception:
   pass
 PY
@@ -302,28 +321,24 @@ PY
   fi
 
   python3 - <<'PY' "${dest_path}" "${internal_vip}" "${external_vip}" "${controller_service}" "${service_type}"
-import base64
+import json
 import sys
 
 dest, internal_vip, external_vip, controller_service, service_type = sys.argv[1:6]
 
-def b64(value: str) -> str:
-    return base64.b64encode(value.encode("utf-8")).decode("ascii")
-
 with open(dest, "w", encoding="utf-8") as fh:
     fh.write("apiVersion: v1\n")
-    fh.write("kind: Secret\n")
+    fh.write("kind: ConfigMap\n")
     fh.write("metadata:\n")
     fh.write("  name: ingress-vip-config\n")
     fh.write("  namespace: ingress\n")
-    fh.write("type: Opaque\n")
     fh.write("data:\n")
-    fh.write(f"  ingress_internal_vip: {b64(internal_vip)}\n")
-    fh.write(f"  ingress_external_vip: {b64(external_vip)}\n")
+    fh.write(f"  ingress_internal_vip: {json.dumps(internal_vip)}\n")
+    fh.write(f"  ingress_external_vip: {json.dumps(external_vip)}\n")
     if controller_service:
-        fh.write(f"  ingress_controller_service: {b64(controller_service)}\n")
+        fh.write(f"  ingress_controller_service: {json.dumps(controller_service)}\n")
     if service_type:
-        fh.write(f"  ingress_service_type: {b64(service_type)}\n")
+        fh.write(f"  ingress_service_type: {json.dumps(service_type)}\n")
 PY
   chmod 0600 "${dest_path}" 2>/dev/null || true
 }
@@ -366,17 +381,6 @@ PY
   if [[ -z "${BOOTSTRAP_BACKUP_PASSPHRASE}" ]]; then
     echo "BOOTSTRAP_BACKUP_PASSPHRASE (or BOOTSTRAP_BACKUP_PASSPHRASE_B64) is required when BOOTSTRAP_BACKUP_TO_R2=1" >&2
     exit 6
-  fi
-
-  kubectl_bin=""
-  if command -v kubectl >/dev/null 2>&1; then
-    kubectl_bin="$(command -v kubectl)"
-  elif [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
-    kubectl_bin="/var/lib/rancher/rke2/bin/kubectl"
-  else
-    echo "kubectl not found; cannot export cluster/OpenBao credentials for the emergency kit." >&2
-    echo "Refusing to burn secrets without a recoverable export." >&2
-    exit 10
   fi
 
   if [[ -z "${KUBECONFIG:-}" && -f /etc/rancher/rke2/rke2.yaml ]]; then
@@ -490,7 +494,7 @@ TXT
   fi
 
   # Capture ingress VIP configuration and current Service state.
-  write_ingress_vip_backup_secret "${kit_dir}/cluster/ingress-vip-config-secret.yaml"
+  write_ingress_vip_backup_configmap "${kit_dir}/cluster/ingress-vip-config.yaml"
   # Authoritative public front door: nginx ingress controller Service state.
   for svc_ref in kube-system/rke2-ingress-nginx-controller ingress-nginx/ingress-nginx-controller; do
     svc_ns="${svc_ref%%/*}"
@@ -564,10 +568,56 @@ PY
     exit 12
   fi
 
-  # Export the known bootstrap-owned OpenBao paths, then package them both
+  # Discover every workload path instead of maintaining a second inventory in
+  # this recovery script. A credential may have rotated only under secret/apps;
+  # burning the node-local copies without exporting that current value would
+  # make OpenBao a single point of loss rather than the secret authority.
+  discovered_app_paths=()
+  discover_openbao_leaf_paths() {
+    local prefix="${1:?OpenBao KV prefix is required}"
+    local listing=""
+    local entry=""
+    local -a entries=()
+
+    if ! listing="$("${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+      env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
+      bao kv list -format=json "${prefix}" 2>/dev/null)"; then
+      return 1
+    fi
+    mapfile -t entries < <(python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+if isinstance(value, dict):
+    value = value.get("keys", [])
+for item in value:
+    print(item)
+' <<<"${listing}")
+    for entry in "${entries[@]}"; do
+      if [[ "${entry}" == */ ]]; then
+        discover_openbao_leaf_paths "${prefix}/${entry%/}" || return 1
+      elif [[ -n "${entry}" ]]; then
+        discovered_app_paths+=("${prefix}/${entry}")
+      fi
+    done
+  }
+
+  if ! discover_openbao_leaf_paths secret/apps || [[ "${#discovered_app_paths[@]}" -eq 0 ]]; then
+    echo "Unable to inventory OpenBao application secrets under secret/apps." >&2
+    echo "Refusing to burn local secrets without a complete workload-secret export." >&2
+    exit 12
+  fi
+
+  # Package bootstrap recovery records and every discovered workload path both
   # inside the emergency kit and as a standalone encrypted OpenBao backup.
   exported_openbao_paths=()
-  for p in secret/bootstrap/rancher secret/bootstrap/argocd secret/bootstrap/platform; do
+  openbao_paths=(
+    secret/bootstrap/rancher
+    secret/bootstrap/argocd
+    secret/bootstrap/platform
+    "${discovered_app_paths[@]}"
+  )
+  app_export_failed=0
+  for p in "${openbao_paths[@]}"; do
     out="${kit_dir}/openbao/$(printf '%s' "${p}" | tr '/' '_').json"
     if "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
       env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
@@ -576,8 +626,16 @@ PY
       exported_openbao_paths+=("${p}")
     else
       rm -f "${out}" 2>/dev/null || true
+      if [[ "${p}" == secret/apps/* ]]; then
+        app_export_failed=1
+      fi
     fi
   done
+  if [[ "${app_export_failed}" -ne 0 ]]; then
+    echo "One or more OpenBao application secrets changed or became unreadable during export." >&2
+    echo "Refusing to burn local secrets; rerun Phase 99 after OpenBao is stable." >&2
+    exit 12
+  fi
 
   headlamp_admin_username="$(read_local_secret_file "${BOOTSTRAP_SECRET_DIR}/headlamp_admin_username")"
   headlamp_admin_token="$(read_local_secret_file "${BOOTSTRAP_SECRET_DIR}/headlamp_admin_token")"
@@ -915,6 +973,13 @@ PY
   fi
 fi
 
+# The declarative config Job and External Secrets now authenticate through
+# scoped Kubernetes roles. Keeping the initial root token in Kubernetes after
+# the encrypted recovery export would make that delivery copy a second secret
+# authority and a standing cluster-escalation path.
+"${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" delete secret openbao-bootstrap-token \
+  --ignore-not-found >/dev/null
+
 if [[ -d "${BOOTSTRAP_SECRET_DIR}" ]]; then
   find "${BOOTSTRAP_SECRET_DIR}" -type f -exec shred -u {} + 2>/dev/null || true
   find "${BOOTSTRAP_SECRET_DIR}" -depth -type d -empty -delete 2>/dev/null || true
@@ -922,6 +987,28 @@ if [[ -d "${BOOTSTRAP_SECRET_DIR}" ]]; then
     rm -rf "${BOOTSTRAP_SECRET_DIR}" 2>/dev/null || true
   fi
 fi
+
+# Phase 99 can be run manually, outside the outer bundle orchestrator. Remove
+# the downloaded secret payload and kickstart EnvironmentFile here as well so
+# manual burn-the-ladder has the same residual-secret boundary. The outer
+# orchestrator repeats this idempotently for join nodes, which skip Phase 99.
+for first_boot_env_file in \
+  "${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}" \
+  /etc/ansible-bundle-bootstrap.env \
+  /etc/tailscale-firstboot.env; do
+  if [[ ! -e "${first_boot_env_file}" ]]; then
+    continue
+  fi
+  if command -v shred >/dev/null 2>&1; then
+    shred -u -- "${first_boot_env_file}" 2>/dev/null || rm -f -- "${first_boot_env_file}"
+  else
+    rm -f -- "${first_boot_env_file}"
+  fi
+  if [[ -e "${first_boot_env_file}" ]]; then
+    echo "Failed to remove first-boot credential file: ${first_boot_env_file}" >&2
+    exit 21
+  fi
+done
 
 echo "Bootstrap secrets removed."
 echo "If Argo CD is not deployed yet, run Phase 50 before burning secrets next time."

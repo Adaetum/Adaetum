@@ -3,9 +3,48 @@ project: default
 source_type: helm
 source_repo_url: https://grafana.github.io/helm-charts
 source_chart: grafana
-source_target_revision: ">=0.0.0"
+# Rotation relies on this chart's command override and persistent-volume shape.
+source_target_revision: "10.5.15"
 source_helm_values: |
-  adminUser: "admin"
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+
+  podAnnotations:
+    secret.reloader.stakater.com/reload: grafana-admin,grafana-encryption
+
+  # The Secret contains the correctly named GF_SECURITY_SECRET_KEY variable.
+  # Its ExternalSecret is OnChange because changing the database KEK requires
+  # Grafana's documented data-key re-encryption procedure first.
+  envFromSecret: grafana-encryption
+
+  # Grafana persists the administrator hash in its database. On every start,
+  # reconcile that state from the OpenBao-backed environment before launching
+  # the normal server; replacing the Kubernetes Secret alone is insufficient.
+  command:
+    - /bin/sh
+    - -ec
+  args:
+    - |
+      if [ -s /var/lib/grafana/grafana.db ]; then
+        /usr/share/grafana/bin/grafana cli \
+          --homepath /usr/share/grafana \
+          admin reset-admin-password "${GF_SECURITY_ADMIN_PASSWORD}"
+      fi
+      exec /run.sh
+
+  # The startup reconciliation above is meaningful only when Grafana's
+  # database survives a rollout. A single-node homelab uses Recreate with an
+  # RWO Longhorn claim so an OpenBao-triggered rotation cannot overlap writers.
+  deploymentStrategy:
+    type: Recreate
+  persistence:
+    enabled: true
+    storageClassName: longhorn
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
   datasources:
     datasources.yaml:
       apiVersion: 1

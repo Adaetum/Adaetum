@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Check that ingress rendering stays aligned with profile-derived host values."""
 from __future__ import annotations
 
 import subprocess

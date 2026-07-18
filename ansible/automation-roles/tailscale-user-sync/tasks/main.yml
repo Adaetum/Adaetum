@@ -1,4 +1,7 @@
 ---
+# Optional controller-side projection of Tailscale ACL membership into local
+# Unix accounts. Tailscale remains the membership authority; this role applies
+# the resulting desired state and never exposes API/OAuth credentials in logs.
 - name: Sync users from Tailscale
   when: tailscale_user_sync_enabled | bool
   block:

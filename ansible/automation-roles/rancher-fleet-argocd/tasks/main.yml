@@ -1,4 +1,7 @@
 ---
+# Optional Fleet-to-Argo bridge. Like the Argo install role, it is constrained
+# to the primary server to avoid concurrent Kubernetes API mutations during
+# bootstrap. Repository credentials are secret inputs and are never logged.
 - name: Skip Fleet Argo CD bootstrap when disabled
   ansible.builtin.debug:
     msg: "Fleet Argo CD bootstrap is disabled."

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Build each pod Kustomization when kubectl is available, without a cluster."""
 from __future__ import annotations
 
 import shutil

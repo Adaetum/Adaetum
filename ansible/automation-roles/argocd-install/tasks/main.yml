@@ -1,4 +1,7 @@
 ---
+# Optional Phase 30 installation path for Argo CD. It runs only on the elected
+# primary server so a break-glass cluster does not race itself. Day-two Argo CD
+# ownership moves to the in-cluster GitOps repository during later phases.
 - name: Skip Argo CD when disabled
   ansible.builtin.debug:
     msg: "Argo CD install is disabled."
@@ -32,6 +35,15 @@
     - argocd_enabled | bool
     - inventory_hostname == rke2_primary
   block:
+    - name: Require the OpenBao-bound Redis bootstrap password
+      ansible.builtin.assert:
+        that:
+          - argocd_redis_password | length > 0
+        fail_msg: >-
+          ARGOCD_REDIS_PASSWORD is required so Helm cannot generate an
+          untracked Argo CD cache password.
+      no_log: true
+
     - name: Detect helm command
       ansible.builtin.shell: |
         set -euo pipefail
@@ -125,6 +137,7 @@
       args:
         executable: /bin/bash
       register: argocd_admin_password_hash_cmd
+      no_log: true
       changed_when: false
       when:
         - argocd_admin_password | length > 0
@@ -138,6 +151,7 @@
             if (argocd_admin_password_hash | length > 0)
             else (argocd_admin_password_hash_cmd.stdout | default(''))
           }}
+      no_log: true
       when: argocd_admin_password | length > 0
 
     - name: Add Argo Helm repository
@@ -160,7 +174,24 @@
       ansible.builtin.template:
         src: argocd-values.yaml.j2
         dest: /tmp/argocd-values.yaml
-        mode: "0644"
+        mode: "0600"
+      no_log: true
+
+    - name: Seed Argo CD Redis delivery secret before Helm
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} create namespace {{ argocd_namespace }} --dry-run=client -o yaml \
+          | {{ kubectl_cmd }} apply -f - >/dev/null
+        {{ kubectl_cmd }} -n {{ argocd_namespace }} create secret generic argocd-redis \
+          --from-literal=auth="$ARGOCD_REDIS_PASSWORD" \
+          --dry-run=client -o yaml \
+          | {{ kubectl_cmd }} -n {{ argocd_namespace }} apply -f - >/dev/null
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+        ARGOCD_REDIS_PASSWORD: "{{ argocd_redis_password }}"
+      no_log: true
 
     - name: Wait for Rancher webhook endpoints when present (best effort)
       ansible.builtin.shell: |

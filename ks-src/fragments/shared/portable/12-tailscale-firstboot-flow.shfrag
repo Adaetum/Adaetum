@@ -502,7 +502,7 @@ firstboot_exit_trap() {
     return "${rc}"
   fi
   FIRSTBOOT_EXIT_TRAP_RUNNING=1
-  ui_restore_console || true
+  gum_status_stop_monitor || true
   if [ "${rc}" -ne 0 ]; then
     echo "[BOOTSTRAP] EXIT trap: rc=${rc}; attempting final log upload"
     stop_log_stream || true
@@ -570,7 +570,7 @@ wait_for_clock_sync() {
 
 fail_firstboot() {
   echo "[BOOTSTRAP] Tailscale first-boot failure (step=${CURRENT_STEP:-unknown}): ${1:-unknown}"
-  ui_render_result "FAILED" "${1:-unknown}" "There was an error. Check the logs."
+  gum_status_result "FAILED" "${1:-unknown}" "There was an error. Check the logs."
   if [ -n "${CURRENT_STEP:-}" ]; then
     echo "[BOOTSTRAP] ---- end ${CURRENT_STEP} (FAILED) ----"
   fi
@@ -821,11 +821,6 @@ append_tag() {
 	os_tag="$(bootstrap_platform_os_tag 2>/dev/null || true)"
 	append_tag "${os_tag}"
 
-	# Tag the platform distribution for inventory/ACLs (rke2 only).
-	case "${PLATFORM_DISTRIBUTION}" in
-	  rke2|RKE2) append_tag "tag:rke2" ;;
-	esac
-
 	if [ -n "${TAILSCALE_ADVERTISE_TAGS}" ]; then
 	  tags_norm="$(printf '%s' "${TAILSCALE_ADVERTISE_TAGS}" | tr ' ' ',' | tr -s ',' | sed 's/^,//;s/,$//')"
 	  IFS=',' read -r -a tag_arr <<EOF
@@ -997,6 +992,41 @@ if ! tailscale ip -4 >/dev/null 2>&1; then
   fail_firstboot "tailscale IP missing"
 fi
 
+resolve_automatic_bootstrap_mode() {
+  mode_detector="/usr/local/libexec/adaetum/detect-cluster-bootstrap-mode.py"
+  status_file="$(mktemp)"
+  if ! tailscale status --json >"${status_file}"; then
+    rm -f "${status_file}"
+    fail_firstboot "cannot inspect Tailscale peers for automatic start/join selection"
+  fi
+  if [ ! -f "${mode_detector}" ]; then
+    rm -f "${status_file}"
+    fail_firstboot "automatic start/join detector is missing from the bootstrap bundle"
+  fi
+  detected_mode="$(python3 "${mode_detector}" --cluster-tag "${TAILSCALE_CLUSTER_TAG}" <"${status_file}")" || {
+    rm -f "${status_file}"
+    fail_firstboot "automatic start/join detection failed"
+  }
+  rm -f "${status_file}"
+  case "${detected_mode}" in
+    start)
+      KS_BREAKGLASS="1"
+      echo "[BOOTSTRAP] No other peer has both ${TAILSCALE_CLUSTER_TAG} and tag:server; this node will create the cluster primary"
+      ;;
+    join)
+      KS_BREAKGLASS="0"
+      echo "[BOOTSTRAP] An existing peer has both ${TAILSCALE_CLUSTER_TAG} and tag:server; this node will join even if that peer is currently offline"
+      ;;
+    *)
+      fail_firstboot "automatic start/join detector returned an unsupported mode: ${detected_mode}"
+      ;;
+  esac
+}
+
+case "$(printf '%s' "${KS_BREAKGLASS}" | tr '[:upper:]' '[:lower:]')" in
+  auto) resolve_automatic_bootstrap_mode ;;
+esac
+
 disable_node_key_expiry() {
   local strict_key_expiry
   strict_key_expiry="$(printf '%s' "${TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR:-0}" | tr '[:upper:]' '[:lower:]')"
@@ -1100,19 +1130,58 @@ if [ -f /etc/profile.d/homebrew.sh ]; then
   . /etc/profile.d/homebrew.sh
   hash -r 2>/dev/null || true
 fi
-ui_start_phase_monitor 1
+gum_status_start_monitor 15
 if [ -x /usr/local/sbin/ansible-bundle-bootstrap.sh ]; then
   BOOTSTRAP_BREAKGLASS="${KS_BREAKGLASS}" /usr/local/sbin/ansible-bundle-bootstrap.sh || fail_firstboot "ansible bootstrap failed"
 else
-  ui_stop_phase_monitor
+  gum_status_stop_monitor
   fail_firstboot "ansible-bundle-bootstrap script missing"
 fi
-ui_stop_phase_monitor
+gum_status_stop_monitor
 step_end 0
 
+# The rendered first-boot scripts and installed setup configuration can
+# contain the shared bootstrap delivery token even after the downloaded runtime
+# env is removed. They are resume artifacts only: retain them after failure,
+# but destroy them after the node has completed the entire bootstrap flow.
+remove_installed_bootstrap_artifacts() {
+  local path=""
+  for path in \
+    "${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}" \
+    /etc/ansible-bundle-bootstrap.env \
+    /etc/tailscale-firstboot.env \
+    /usr/local/sbin/ansible-bundle-bootstrap.sh \
+    /usr/local/sbin/tailscale-firstboot.sh \
+    /root/*-ks.cfg; do
+    if [ ! -e "${path}" ]; then
+      continue
+    fi
+    case "${path}" in
+      /usr/local/sbin/*.sh)
+        # Unlink executable files without overwriting their open inode: this
+        # function is itself running from tailscale-firstboot.sh.
+        rm -f -- "${path}"
+        ;;
+      *)
+        if command -v shred >/dev/null 2>&1; then
+          shred -u -- "${path}" 2>/dev/null || rm -f -- "${path}"
+        else
+          rm -f -- "${path}"
+        fi
+        ;;
+    esac
+    if [ -e "${path}" ]; then
+      echo "[BOOTSTRAP] failed to remove installed bootstrap credential artifact: ${path}" >&2
+      return 1
+    fi
+    echo "[BOOTSTRAP] removed installed bootstrap credential artifact: ${path}"
+  done
+}
+
+remove_installed_bootstrap_artifacts
 touch "${done_file}"
 bootstrap_service_disable "${firstboot_service_name}" || true
 stop_log_stream
 upload_log "${log_file}" first-boot.log
-ui_render_result "SUCCESS" "First-boot workflow completed" "Bootstrap completed successfully."
+gum_status_result "SUCCESS" "First-boot workflow completed" "Bootstrap completed successfully."
 echo "[BOOTSTRAP] Tailscale first-boot complete"

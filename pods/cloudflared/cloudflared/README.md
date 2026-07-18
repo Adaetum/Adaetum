@@ -8,17 +8,11 @@ then run `cloudflared` here with the issued tunnel token.
 
 ## Secret
 
-Create this Secret in the `cloudflared` namespace before syncing the app:
-
-- name: `cloudflared-tunnel`
-- key: `token`
-
-Example:
-
-```bash
-kubectl -n cloudflared create secret generic cloudflared-tunnel \
-  --from-literal=token='<TUNNEL_TOKEN>'
-```
+The provider-issued tunnel token is stored at
+`secret/apps/cloudflared/tunnel:token` in OpenBao. External Secrets maintains
+the `cloudflared/cloudflared-tunnel` delivery Secret, and Reloader restarts the
+connector when that copy changes. Do not create or edit the Kubernetes Secret
+directly; replace the token in Cloudflare first, then update the OpenBao field.
 
 ## Recommended setup
 

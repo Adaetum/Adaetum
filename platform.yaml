@@ -1,0 +1,18 @@
+apiVersion: adaetum.io/v1alpha1
+kind: PlatformProfile
+metadata:
+  name: adaetum-default
+  description: Public-safe default profile for a single Rocky Linux 10 homelab cluster.
+spec:
+  installation: rocky10
+  cluster:
+    domain: mudazukai.cloud
+    localDomain: mudazukai.cloud.local
+    overlayDomain: armadillo-peacock.ts.net
+    overlayClusterTag: tag:cluster
+    repository:
+      owner: gitea-admin
+      name: cluster
+  delivery:
+    bootstrapBaseUrl: https://bootstrap.mudazukai.cloud
+    r2Bucket: iso

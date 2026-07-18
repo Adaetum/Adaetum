@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Ensure committed pod outputs remain safe to publish and free of local secrets."""
 from __future__ import annotations
 
 import os

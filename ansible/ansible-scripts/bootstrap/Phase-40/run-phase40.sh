@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 40 promotes OpenBao from an installed workload to the authority for
+# bootstrap secrets. Earlier phases may create temporary local files; later
+# phases should read durable secret material from OpenBao instead.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
 
+# Controls are grouped by responsibility: local bootstrap state, OpenBao
+# readiness, optional repair actions, then profile-derived public routing.
 BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
 OPENBAO_NAMESPACE="${OPENBAO_NAMESPACE:-openbao}"
 OPENBAO_POD="${OPENBAO_POD:-openbao-0}"
@@ -50,6 +56,8 @@ if [[ -n "${PHASE40_LOG_FILE}" ]]; then
   exec >>"${PHASE40_LOG_FILE}" 2>&1
 fi
 
+# ``--force`` and the environment switch allow an explicit recovery operator to
+# retry the OpenBao introduction path; normal reruns retain conservative mode.
 force=false
 if [[ "${1:-}" == "--force" ]]; then
   force=true
@@ -150,6 +158,43 @@ read_k8s_secret_key() {
   if [[ -n "${raw}" ]]; then
     printf '%s' "${raw}" | base64 -d 2>/dev/null || true
   fi
+}
+
+# Phase 40 is a one-way authority handoff. It may fill an application field
+# that has never been promoted, but a rerun must not replace a value already
+# owned (and possibly rotated) in OpenBao with an older bootstrap copy.
+seed_openbao_app_fields() {
+  local path="${1:?OpenBao application path is required}"
+  local token="${2:?OpenBao token is required}"
+  shift 2
+  local pair=""
+  local field=""
+  local existing=""
+  local -a missing=()
+
+  for pair in "$@"; do
+    field="${pair%%=*}"
+    existing="$(
+      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${token}" \
+        bao kv get -field="${field}" "secret/apps/${path}" 2>/dev/null || true
+    )"
+    if [[ -z "${existing}" ]]; then
+      missing+=("${pair}")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    echo "[phase40] preserving OpenBao-owned application fields at secret/apps/${path}"
+    return 0
+  fi
+
+  retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${token}" \
+    bao kv patch "secret/apps/${path}" "${missing[@]}" >/dev/null 2>&1 || \
+    retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+      env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${token}" \
+      bao kv put "secret/apps/${path}" "${missing[@]}" >/dev/null
 }
 
 timeout_to_seconds() {
@@ -1013,6 +1058,8 @@ if [[ -n "${rancher_password}" ]]; then
   retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
     env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${root_token}" \
     bao kv put secret/bootstrap/rancher "${rancher_kv_args[@]}"
+  seed_openbao_app_fields rancher/admin "${root_token}" \
+    "${rancher_kv_args[@]}"
   echo "[phase40] Rancher bootstrap credentials stored in OpenBao"
 else
   echo "[phase40] Rancher bootstrap credentials missing; skipping OpenBao write."
@@ -1148,9 +1195,37 @@ if [[ "${#argocd_kv_args[@]}" -gt 0 ]]; then
   retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
     env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${root_token}" \
     bao kv put secret/bootstrap/argocd "${argocd_kv_args[@]}"
+  if [[ -n "${argocd_repo_url}" && -n "${argocd_repo_token}" ]]; then
+    seed_openbao_app_fields argocd/repository "${root_token}" \
+      "url=${argocd_repo_url}" \
+      "username=${argocd_repo_username}" \
+      "password=${argocd_repo_token}" \
+      "branch=${argocd_repo_branch:-HEAD}"
+  fi
+  if [[ -n "${argocd_admin_password}" ]]; then
+    seed_openbao_app_fields argocd/admin "${root_token}" \
+      "password=${argocd_admin_password}"
+  fi
   echo "[phase40] Argo CD bootstrap credentials stored in OpenBao"
 else
   echo "[phase40] Argo CD bootstrap credentials missing; skipping OpenBao write."
+fi
+
+# Argo CD's session-signing key is arbitrary runtime material. Seed it before
+# installation so recovery never depends on a controller-generated value that
+# existed only in the cluster's argocd-secret.
+argocd_server_secret_key_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_server_secret_key")"
+argocd_redis_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_redis_password")"
+if [[ -n "${argocd_server_secret_key_val}" || -n "${argocd_redis_password_val}" ]]; then
+  argocd_runtime_args=()
+  if [[ -n "${argocd_server_secret_key_val}" ]]; then
+    argocd_runtime_args+=("server_secret_key=${argocd_server_secret_key_val}")
+  fi
+  if [[ -n "${argocd_redis_password_val}" ]]; then
+    argocd_runtime_args+=("redis_password=${argocd_redis_password_val}")
+  fi
+  seed_openbao_app_fields argocd/runtime "${root_token}" \
+    "${argocd_runtime_args[@]}"
 fi
 
 # Store auto-generated bootstrap secrets in OpenBao so Phase 60 can burn local copies.
@@ -1167,6 +1242,18 @@ fi
 gitea_runner_token_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
 if [[ -n "${gitea_runner_token_val}" ]]; then
   platform_kv_args+=("gitea_runner_token=${gitea_runner_token_val}")
+fi
+gitea_secret_key_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_secret_key")"
+if [[ -n "${gitea_secret_key_val}" ]]; then
+  platform_kv_args+=("gitea_secret_key=${gitea_secret_key_val}")
+fi
+gitea_internal_token_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_internal_token")"
+if [[ -n "${gitea_internal_token_val}" ]]; then
+  platform_kv_args+=("gitea_internal_token=${gitea_internal_token_val}")
+fi
+gitea_jwt_secret_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_jwt_secret")"
+if [[ -n "${gitea_jwt_secret_val}" ]]; then
+  platform_kv_args+=("gitea_jwt_secret=${gitea_jwt_secret_val}")
 fi
 gitea_registry_host_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_registry_host")"
 if [[ -n "${gitea_registry_host_val}" ]]; then
@@ -1187,6 +1274,21 @@ fi
 gitea_registry_token_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_registry_token")"
 if [[ -n "${gitea_registry_token_val}" ]]; then
   platform_kv_args+=("gitea_registry_token=${gitea_registry_token_val}")
+fi
+# The recovery mirror is consumed by an early Argo sync wave. Seed its
+# application path before that wave runs so the ExternalSecret never waits on
+# the later Gitea hook configuration step.
+gitea_push_mirror_repo_url_val="${GITEA_PUSH_MIRROR_REPO_URL:-}"
+gitea_push_mirror_username_val="${GITEA_PUSH_MIRROR_USERNAME:-}"
+gitea_push_mirror_token_val="${GITEA_PUSH_MIRROR_TOKEN:-}"
+if [[ -z "${gitea_push_mirror_repo_url_val}" ]]; then
+  gitea_push_mirror_repo_url_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_repo_url")"
+fi
+if [[ -z "${gitea_push_mirror_username_val}" ]]; then
+  gitea_push_mirror_username_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_username")"
+fi
+if [[ -z "${gitea_push_mirror_token_val}" ]]; then
+  gitea_push_mirror_token_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_token")"
 fi
 cloudflare_zone_api_token_val="${CLOUDFLARE_ZONE_API_TOKEN:-}"
 if [[ -z "${cloudflare_zone_api_token_val}" ]]; then
@@ -1219,10 +1321,24 @@ fi
 if [[ -n "${rancher_cloudflared_tunnel_id_val}" ]]; then
   platform_kv_args+=("rancher_cloudflared_tunnel_id=${rancher_cloudflared_tunnel_id_val}")
 fi
+rancher_cloudflared_tunnel_token_val="${RANCHER_CLOUDFLARED_TUNNEL_TOKEN:-}"
+if [[ -z "${rancher_cloudflared_tunnel_token_val}" ]]; then
+  rancher_cloudflared_tunnel_token_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/rancher_cloudflared_tunnel_token")"
+fi
+if [[ -n "${rancher_cloudflared_tunnel_token_val}" ]]; then
+  # The live Deployment is reconciled from this OpenBao field after bootstrap;
+  # retaining only the tunnel ID would make token rotation a rebuild operation.
+  platform_kv_args+=("rancher_cloudflared_tunnel_token=${rancher_cloudflared_tunnel_token_val}")
+fi
 grafana_admin_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/grafana_admin_password")"
 if [[ -n "${grafana_admin_password_val}" ]]; then
   platform_kv_args+=("grafana_admin_password=${grafana_admin_password_val}")
 fi
+grafana_secret_key_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/grafana_secret_key")"
+if [[ -n "${grafana_secret_key_val}" ]]; then
+  platform_kv_args+=("grafana_secret_key=${grafana_secret_key_val}")
+fi
+homepage_grafana_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/homepage_grafana_password")"
 authentik_admin_username_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
 if [[ -n "${authentik_admin_username_val}" ]]; then
   platform_kv_args+=("authentik_admin_username=${authentik_admin_username_val}")
@@ -1242,6 +1358,20 @@ fi
 authentik_postgresql_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_postgresql_password")"
 if [[ -n "${authentik_postgresql_password_val}" ]]; then
   platform_kv_args+=("authentik_postgresql_password=${authentik_postgresql_password_val}")
+fi
+tailscale_oauth_client_id_val="${TAILSCALE_OAUTH_CLIENT_ID:-}"
+if [[ -z "${tailscale_oauth_client_id_val}" ]]; then
+  tailscale_oauth_client_id_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/tailscale_oauth_client_id")"
+fi
+tailscale_oauth_client_secret_val="${TAILSCALE_OAUTH_CLIENT_SECRET:-}"
+if [[ -z "${tailscale_oauth_client_secret_val}" ]]; then
+  tailscale_oauth_client_secret_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/tailscale_oauth_client_secret")"
+fi
+if [[ -n "${tailscale_oauth_client_id_val}" ]]; then
+  platform_kv_args+=("tailscale_oauth_client_id=${tailscale_oauth_client_id_val}")
+fi
+if [[ -n "${tailscale_oauth_client_secret_val}" ]]; then
+  platform_kv_args+=("tailscale_oauth_client_secret=${tailscale_oauth_client_secret_val}")
 fi
 ingress_internal_vip_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/ingress_internal_vip")"
 if [[ -n "${ingress_internal_vip_val}" ]]; then
@@ -1273,6 +1403,105 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
     env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${root_token}" \
     bao kv put secret/bootstrap/platform "${platform_kv_args[@]}"
   echo "[phase40] platform bootstrap secrets stored in OpenBao (secret/bootstrap/platform)"
+
+  # Promote workload-facing copies into app-owned paths. The bootstrap path is
+  # recovery input; steady-state controllers should not need read access to the
+  # entire bootstrap record just to materialize one workload credential.
+  if [[ -n "${cloudflare_api_token_val}" ]]; then
+    seed_openbao_app_fields ingress/external-dns "${root_token}" \
+      "api_token=${cloudflare_api_token_val}"
+  fi
+  if [[ -n "${rancher_cloudflared_tunnel_token_val}" ]]; then
+    seed_openbao_app_fields cloudflared/tunnel "${root_token}" \
+      "token=${rancher_cloudflared_tunnel_token_val}"
+  fi
+  if [[ -n "${gitea_admin_password_val}" ]]; then
+    seed_openbao_app_fields gitea/admin "${root_token}" \
+      "username=${gitea_repo_username_effective:-gitea-admin}" \
+      "password=${gitea_admin_password_val}" \
+      "email=gitea-admin@example.com"
+  fi
+  if [[ -n "${gitea_runner_token_val}" ]]; then
+    seed_openbao_app_fields gitea/actions-runner "${root_token}" \
+      "token=${gitea_runner_token_val}"
+  fi
+  if [[ -n "${gitea_secret_key_val}" ]]; then
+    seed_openbao_app_fields gitea/encryption "${root_token}" \
+      "secret_key=${gitea_secret_key_val}"
+  fi
+  if [[ -n "${gitea_internal_token_val}" && -n "${gitea_jwt_secret_val}" ]]; then
+    seed_openbao_app_fields gitea/runtime "${root_token}" \
+      "internal_token=${gitea_internal_token_val}" \
+      "jwt_secret=${gitea_jwt_secret_val}"
+  fi
+  if [[ -n "${gitea_registry_token_val}" && -n "${gitea_registry_host_val}" ]]; then
+    seed_openbao_app_fields gitea/registry "${root_token}" \
+      "host=${gitea_registry_host_val}" \
+      "username=${gitea_registry_username_val:-gitea-admin}" \
+      "token=${gitea_registry_token_val}"
+  fi
+  if [[ -n "${gitea_push_mirror_repo_url_val}" \
+    && -n "${gitea_push_mirror_username_val}" \
+    && -n "${gitea_push_mirror_token_val}" ]]; then
+    seed_openbao_app_fields gitea/push-mirror "${root_token}" \
+      "remote_url=${gitea_push_mirror_repo_url_val}" \
+      "username=${gitea_push_mirror_username_val}" \
+      "token=${gitea_push_mirror_token_val}"
+  fi
+  # The chart generated these credentials before OpenBao was available. Adopt
+  # the live values once so OpenBao becomes their recovery authority and ESO
+  # can maintain the existing Kubernetes delivery Secret without replacing it.
+  gitea_postgres_password_val="$(read_k8s_secret_key gitea gitea-postgresql postgres-password)"
+  gitea_app_password_val="$(read_k8s_secret_key gitea gitea-postgresql password)"
+  gitea_replication_password_val="$(read_k8s_secret_key gitea gitea-postgresql replication-password)"
+  if [[ -n "${gitea_postgres_password_val}" && -n "${gitea_app_password_val}" ]]; then
+    gitea_postgresql_args=(
+      "postgres-password=${gitea_postgres_password_val}"
+      "password=${gitea_app_password_val}"
+    )
+    if [[ -n "${gitea_replication_password_val}" ]]; then
+      gitea_postgresql_args+=("replication-password=${gitea_replication_password_val}")
+    fi
+    seed_openbao_app_fields gitea/postgresql "${root_token}" \
+      "${gitea_postgresql_args[@]}"
+  else
+    echo "[phase40] Gitea PostgreSQL Secret is not ready; app-owned database credentials were not promoted." >&2
+  fi
+  if [[ -n "${authentik_secret_key_val}" && -n "${authentik_postgresql_password_val}" && -n "${authentik_admin_password_val}" && -n "${authentik_bootstrap_token_val}" ]]; then
+    seed_openbao_app_fields authentik/encryption "${root_token}" \
+      "secret_key=${authentik_secret_key_val}"
+    seed_openbao_app_fields authentik/postgresql "${root_token}" \
+      "postgresql_password=${authentik_postgresql_password_val}" \
+      "password=${authentik_postgresql_password_val}" \
+      "postgres-password=${authentik_postgresql_password_val}"
+    seed_openbao_app_fields authentik/admin "${root_token}" \
+      "admin_username=${authentik_admin_username_val:-akadmin}" \
+      "bootstrap_password=${authentik_admin_password_val}" \
+      "bootstrap_token=${authentik_bootstrap_token_val}"
+  fi
+  if [[ -n "${grafana_admin_password_val}" ]]; then
+    seed_openbao_app_fields observability/grafana "${root_token}" \
+      admin_user=admin \
+      "admin_password=${grafana_admin_password_val}" \
+      "secret_key=${grafana_secret_key_val}"
+  fi
+  if [[ -n "${homepage_grafana_password_val}" ]]; then
+    seed_openbao_app_fields homepage/grafana "${root_token}" \
+      username=homepage \
+      "password=${homepage_grafana_password_val}"
+  fi
+  if [[ -n "${tailscale_oauth_client_id_val}" && -n "${tailscale_oauth_client_secret_val}" ]]; then
+    seed_openbao_app_fields ansible/tailscale "${root_token}" \
+      "oauth_client_id=${tailscale_oauth_client_id_val}" \
+      "oauth_client_secret=${tailscale_oauth_client_secret_val}"
+  fi
+  if ! "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${root_token}" \
+    bao kv get secret/apps/observability/apprise >/dev/null 2>&1; then
+    apprise_default_config=$'version: 1\nurls: []'
+    seed_openbao_app_fields observability/apprise "${root_token}" \
+      "apprise_yml=${apprise_default_config}"
+  fi
 else
   echo "[phase40] no platform bootstrap secrets found to store in OpenBao; skipping."
 fi
@@ -1295,11 +1524,17 @@ if [[ "${use_argo}" != true ]]; then
     "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" create configmap openbao-policies \
       --from-file=ci.hcl="${policy_dir}/ci.hcl" \
       --from-file=argo.hcl="${policy_dir}/argo.hcl" \
+      --from-file=config.hcl="${policy_dir}/config.hcl" \
+      --from-file=external-secrets.hcl="${policy_dir}/external-secrets.hcl" \
       --dry-run=client -o yaml | "${kubectl_bin}" apply -f -
   else
     echo "[phase40] warning: policy directory missing at ${policy_dir}; skipping policy configmap" >&2
   fi
   if [[ -f "${job_manifest}" ]]; then
+    # A Job pod template is immutable. Configuration is idempotent, so replace
+    # the completed runner whenever policy or auth-role desired state changes.
+    "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" delete job openbao-bootstrap-config \
+      --ignore-not-found --wait=true
     "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" apply -f "${job_manifest}"
   else
     echo "[phase40] warning: OpenBao config job manifest missing at ${job_manifest}" >&2

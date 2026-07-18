@@ -5,7 +5,8 @@ argocd_namespace: "argocd"
 argocd_release_name: "argocd"
 argocd_chart_repo: "https://argoproj.github.io/argo-helm"
 argocd_chart_name: "argo-cd"
-argocd_chart_version: ""
+# Secret/reload integration below is tested against this exact chart shape.
+argocd_chart_version: "10.1.4"
 argocd_helm_repo_add_retries: 10
 argocd_helm_repo_add_delay: 15
 argocd_helm_repo_update_retries: 10
@@ -18,6 +19,8 @@ argocd_helm_install_script_url: >-
   }}
 
 argocd_admin_password: "{{ lookup('ansible.builtin.env', 'ARGOCD_ADMIN_PASSWORD') | default('', true) }}"
+argocd_server_secret_key: "{{ lookup('ansible.builtin.env', 'ARGOCD_SERVER_SECRET_KEY') | default('', true) }}"
+argocd_redis_password: "{{ lookup('ansible.builtin.env', 'ARGOCD_REDIS_PASSWORD') | default('', true) }}"
 argocd_admin_password_hash: ""
 argocd_admin_password_hash_effective: ""
 

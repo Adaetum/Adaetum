@@ -369,6 +369,59 @@ tasks:
         # Ensure extracted files are writable before host-side in-place edits.
         # Container extraction can leave root-owned files on Linux runners.
         run_iso_tool chmod -R a+rwX "${work_dir}" >/dev/null 2>&1 || true
+        # First boot owns the physical console. Bake Gum into every generated
+        # ISO instead of depending on DNF, DNS, or a package repository after
+        # the machine has rebooted. The pinned RPM plus checksum keeps the ISO
+        # assembly input reproducible and makes the console dependency explicit.
+        iso_base="$(basename "${iso_path}")"
+        gum_version="0.17.0"
+        case "${iso_base}" in
+          *aarch64*)
+            gum_rpm_arch="aarch64"
+            gum_rpm_sha256="48447f9d7b3f604cf0765cabc3ae3aaf72b1b2ab474deac33b5feb49c50ce765"
+            ;;
+          *x86_64*)
+            gum_rpm_arch="x86_64"
+            gum_rpm_sha256="789d5b0252238608c807c640d053fa3d0461fd88d676eb8ae92b74635c57bc79"
+            ;;
+          *)
+            echo "Unable to select a Gum RPM for ISO architecture: ${iso_base}" >&2
+            exit 1
+            ;;
+        esac
+        gum_rpm="gum-${gum_version}-1.${gum_rpm_arch}.rpm"
+        gum_rpm_url="https://github.com/charmbracelet/gum/releases/download/v${gum_version}/${gum_rpm}"
+        mkdir -p "${work_dir}/ks"
+        gum_rpm_path="${work_dir}/ks/gum.rpm"
+        gum_rpm_partial="${gum_rpm_path}.partial"
+        rm -f "${gum_rpm_partial}"
+        gum_rpm_source="${ISO_GUM_RPM_SOURCE:-}"
+        if [ -n "${gum_rpm_source}" ]; then
+          if [ ! -f "${gum_rpm_source}" ]; then
+            echo "Configured ISO_GUM_RPM_SOURCE is missing: ${gum_rpm_source}" >&2
+            exit 1
+          fi
+          echo "[iso] Using workflow-prepared first-boot console dependency: ${gum_rpm}"
+          cp -f "${gum_rpm_source}" "${gum_rpm_partial}"
+        else
+          echo "[iso] Downloading required first-boot console dependency: ${gum_rpm}"
+          curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+            --output "${gum_rpm_partial}" "${gum_rpm_url}"
+        fi
+        gum_rpm_actual="$(python3 - "${gum_rpm_partial}" <<'PY'
+        import hashlib
+        import pathlib
+        import sys
+
+        print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+        PY
+        )"
+        if [ "${gum_rpm_actual}" != "${gum_rpm_sha256}" ]; then
+          rm -f "${gum_rpm_partial}"
+          echo "Gum RPM checksum mismatch for ${gum_rpm}" >&2
+          exit 1
+        fi
+        mv -f "${gum_rpm_partial}" "${gum_rpm_path}"
         if [ "${embed_ks}" = "1" ]; then
           ks_rendered="{{.KS_OUT_DIR}}/${ks_name}"
           if [ ! -f "${ks_rendered}" ]; then
@@ -378,8 +431,16 @@ tasks:
             echo "Missing rendered kickstart file: ${ks_rendered}"
             exit 1
           fi
-          mkdir -p "${work_dir}/ks"
           cp -f "${ks_rendered}" "${work_dir}/ks/${ks_name}"
+          mode_detector="ansible/ansible-scripts/detect-cluster-bootstrap-mode.py"
+          if [ ! -f "${mode_detector}" ]; then
+            echo "Missing automatic bootstrap mode detector: ${mode_detector}"
+            exit 1
+          fi
+          # Tailscale decides start versus join before the remotely fetched
+          # Ansible bundle runs, so this small decision helper belongs on the
+          # installer media beside the kickstart that invokes it.
+          cp -f "${mode_detector}" "${work_dir}/ks/detect-cluster-bootstrap-mode.py"
           ks_url="cdrom:/ks/${ks_name}"
         fi
         ks_args="inst.ks=${ks_url}"
@@ -473,7 +534,7 @@ tasks:
         }
 
         # Default to a role selector at boot:
-        # - server (default after timeout)
+        # - server with Tailscale-backed start/join detection (default after timeout)
         # - agent (manual selection)
         # - breakglass/server (manual selection)
         role_selector="${ISO_ROLE_SELECTOR:-1}"
@@ -505,7 +566,7 @@ tasks:
         fi
         # Always append explicit role flags after any URL rewrites. This keeps
         # GRUB role selection deterministic when selector URL mode is enabled.
-        server_ks_args="${server_ks_args} ks_role=server ks_breakglass=0"
+        server_ks_args="${server_ks_args} ks_role=server ks_breakglass=auto"
         agent_ks_args="${agent_ks_args} ks_role=agent ks_breakglass=0"
         breakglass_ks_args="${breakglass_ks_args} ks_role=server ks_breakglass=1"
         selector_default_index="0"
@@ -562,15 +623,15 @@ tasks:
                 : > "${selector_file}"
               fi
               {
-                echo 'menuentry "Install Rocky Linux (Server default)" {'
+                echo 'menuentry "Install Rocky Linux (Server - auto start/join, default)" {'
                 printf '%s\n' "${server_linux}"
                 printf '%s\n' "${initrd_line}"
                 echo '}'
-                echo 'menuentry "Install Rocky Linux (Agent join)" {'
+                echo 'menuentry "Install Rocky Linux (Agent - join as worker)" {'
                 printf '%s\n' "${agent_linux}"
                 printf '%s\n' "${initrd_line}"
                 echo '}'
-                echo 'menuentry "Install Rocky Linux (Breakglass bootstrap)" {'
+                echo 'menuentry "Install Rocky Linux (Breakglass - force new primary)" {'
                 printf '%s\n' "${breakglass_linux}"
                 printf '%s\n' "${initrd_line}"
                 echo '}'
@@ -634,9 +695,9 @@ tasks:
           mv "${cfg_path}.tmp" "${cfg_path}"
 
           if [ "${selector_enabled}" = "1" ]; then
-            if ! grep -q 'Install Rocky Linux (Server default)' "${cfg_path}" \
-              || ! grep -q 'Install Rocky Linux (Agent join)' "${cfg_path}" \
-              || ! grep -q 'Install Rocky Linux (Breakglass bootstrap)' "${cfg_path}"; then
+            if ! grep -q 'Install Rocky Linux (Server - auto start/join, default)' "${cfg_path}" \
+              || ! grep -q 'Install Rocky Linux (Agent - join as worker)' "${cfg_path}" \
+              || ! grep -q 'Install Rocky Linux (Breakglass - force new primary)' "${cfg_path}"; then
               echo "ERROR: selector menu validation failed for ${cfg_path}"
               return 1
             fi

@@ -1,0 +1,27 @@
+name: Bug report
+description: Report a reproducible Adaetum problem without secrets.
+labels: ["kind/bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: Never include tokens, recovery kits, private hostnames, or inventory data.
+  - type: input
+    id: version
+    attributes:
+      label: Adaetum version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and sanitized output
+      description: Include the exact command and expected versus actual behavior.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [installer, bootstrap, configuration, integrations, documentation, recovery]
+    validations:
+      required: true

@@ -2,6 +2,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: ansible-host-config-sync
+  namespace: ansible
 spec:
   hostNetwork: true
   restartPolicy: Never
@@ -15,7 +16,7 @@ spec:
         - name: CRON_SCHEDULE
           value: "*/10 * * * *"
         - name: ANSIBLE_PLAYBOOK
-          value: "playbooks/bootstrap.yml"
+          value: "playbooks/day2.yml"
         - name: ANSIBLE_INVENTORY
           value: "node-inventory.yml"
         # Optional. Example:
@@ -24,13 +25,21 @@ spec:
           value: ""
         - name: TAILSCALE_DOMAIN
           value: "example.ts.net"
+        - name: TAILSCALE_TAILNET
+          value: "example.ts.net"
         - name: TAILSCALE_CLUSTER_TAG
           value: "tag:cluster"
       volumeMounts:
         - name: ansible-data
           mountPath: /ansible
+        - name: day2-secrets
+          mountPath: /run/secrets/adaetum
+          readOnly: true
   volumes:
     - name: ansible-data
       hostPath:
         path: /opt/ansible-runner
         type: Directory
+    - name: day2-secrets
+      secret:
+        secretName: tailscale-user-sync

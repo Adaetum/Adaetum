@@ -13,6 +13,7 @@ on:
     paths:
       - ".github/workflows/iso-build.yml"
       - "ks-src/**"
+      - "tasks/iso.yml"
       - "tasks/ks.yml"
       - "tasks/scripts/compile-kickstarts.py"
       - "Taskfile.yml"
@@ -22,6 +23,7 @@ on:
     paths:
       - ".github/workflows/iso-build.yml"
       - "ks-src/**"
+      - "tasks/iso.yml"
       - "tasks/ks.yml"
       - "tasks/scripts/compile-kickstarts.py"
       - "Taskfile.yml"
@@ -201,6 +203,33 @@ jobs:
           echo "ISO_PATH=${iso_path}" >> "$GITHUB_OUTPUT"
           echo "ISO_NAME=${iso_name}" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare required Gum console dependency
+        run: |
+          set -euo pipefail
+          gum_version="0.17.0"
+          case "${{ matrix.arch.arch }}" in
+            aarch64)
+              gum_arch="aarch64"
+              gum_sha256="48447f9d7b3f604cf0765cabc3ae3aaf72b1b2ab474deac33b5feb49c50ce765"
+              ;;
+            x86_64)
+              gum_arch="x86_64"
+              gum_sha256="789d5b0252238608c807c640d053fa3d0461fd88d676eb8ae92b74635c57bc79"
+              ;;
+            *)
+              echo "Unsupported Gum RPM architecture: ${{ matrix.arch.arch }}" >&2
+              exit 1
+              ;;
+          esac
+          gum_rpm="gum-${gum_version}-1.${gum_arch}.rpm"
+          gum_url="https://github.com/charmbracelet/gum/releases/download/v${gum_version}/${gum_rpm}"
+          mkdir -p .cache/gum
+          gum_path="$PWD/.cache/gum/${gum_rpm}"
+          curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+            --output "${gum_path}" "${gum_url}"
+          printf '%s  %s\n' "${gum_sha256}" "${gum_path}" | sha256sum --check --status
+          echo "ISO_GUM_RPM_SOURCE=${gum_path}" >> "$GITHUB_ENV"
+
       - name: Download golden ISO (if missing)
         run: |
           set -euo pipefail
@@ -289,7 +318,7 @@ jobs:
           printf '%s\n' \
             "TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}" \
             "TAILSCALE_OAUTH_TTL=${TAILSCALE_OAUTH_TTL}" \
-            "TAILSCALE_ADVERTISE_TAGS=${os_tag}" \
+            "TAILSCALE_ADVERTISE_TAGS=${os_tag},tag:${variant_role}" \
             "TAILSCALE_DOMAIN=${TAILSCALE_DOMAIN}" \
             "TAILSCALE_NODE_ROLE=${variant_role}" \
             "TAILSCALE_CLUSTER_TAG=${TAILSCALE_CLUSTER_TAG}" \

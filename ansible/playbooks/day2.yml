@@ -1,0 +1,13 @@
+---
+# The recurring runner owns bounded day-two maintenance. It deliberately does
+# not import platform-bootstrap.yml: replaying bootstrap would regenerate local
+# credentials and compete with OpenBao's steady-state authority.
+- import_playbook: _break_glass.yml
+
+- name: Reconcile routine host state
+  hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
+  become: true
+  gather_facts: true
+  roles:
+    - healthcheck
+    - tailscale-user-sync

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Interactively fetch bootstrap logs from configured artifact storage without
+# changing the cluster or regenerating local setup state.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
+# shellcheck source=tasks/scripts/gum-ui.sh
+. "${repo_root}/tasks/scripts/gum-ui.sh"
 
 normalize_value() {
   local value="${1:-}"
@@ -25,6 +30,11 @@ choose_from_list() {
   if [ "${#items[@]}" -eq 0 ]; then
     echo "No options available for ${label}." >&2
     return 1
+  fi
+
+  if adaetum_gum_enabled; then
+    adaetum_gum_choose "${label}" "${items[@]}"
+    return 0
   fi
 
   echo "" >&2
@@ -76,8 +86,13 @@ load_env() {
   export AWS_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
 }
 
-echo "R2 Logs Wizard"
-echo "Repo: ${repo_root}"
+if adaetum_gum_enabled; then
+  adaetum_gum_heading "R2 logs recovery"
+  gum style --foreground 245 "Checkout: ${repo_root}"
+else
+  echo "R2 Logs Wizard"
+  echo "Repo: ${repo_root}"
+fi
 
 require_cmd aws
 require_cmd python3

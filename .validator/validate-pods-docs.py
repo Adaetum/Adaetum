@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Keep setup documentation aligned with the supported pods configuration contract."""
 from __future__ import annotations
 
 import sys

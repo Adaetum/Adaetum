@@ -56,6 +56,12 @@ Sync delay:
   it takes for the playbook to run.
 - The default schedule in `ansible/ansible-host-config-sync.yaml` is `*/10 * * * *`
   (worst case ~10 minutes).
+- The recurring runner uses `playbooks/day2.yml`. Full `bootstrap.yml` is an
+  explicit install/recovery operation and must not be scheduled because it can
+  regenerate bootstrap credentials that OpenBao owns after Phase 40.
+- The runner mounts its OAuth client from the OpenBao-backed
+  `ansible/tailscale-user-sync` Secret. It does not source the bootstrap `.env`,
+  so a stale installer value cannot override a rotation made in OpenBao.
 
 ## Defaults
 

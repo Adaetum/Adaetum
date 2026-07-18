@@ -63,6 +63,7 @@ esac
 case "$(printf '%s' "${install_ks_breakglass_raw}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on) install_ks_breakglass="1" ;;
   0|false|no|off) install_ks_breakglass="0" ;;
+  auto) install_ks_breakglass="auto" ;;
   *) install_ks_breakglass="" ;;
 esac
 {

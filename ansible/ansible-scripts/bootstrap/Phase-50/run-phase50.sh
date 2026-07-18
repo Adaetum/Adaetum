@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 50 establishes the GitOps control pair. It creates the bootstrap
+# Gitea/Argo CD path and proves the cluster can reconcile its own repository.
+# It may create bootstrap resources, but it does not remove local bootstrap
+# authority; Phase 60 owns that irreversible handoff.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
+# shellcheck disable=SC1091
+. "${script_dir}/control-pair-common.sh"
 
+# Repo and bootstrap-secret inputs. Public hosts are rendered from platform.yaml
+# before this script runs; this phase must not derive a second host contract.
 ANSIBLE_INVENTORY="${ANSIBLE_INVENTORY:-ansible/node-inventory.yml}"
 ANSIBLE_PLAYBOOK="${ANSIBLE_PLAYBOOK:-ansible/playbooks/argocd.yml}"
 BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
@@ -13,6 +22,9 @@ OPENBAO_POD="${OPENBAO_POD:-openbao-0}"
 INGRESS_INTERNAL_VIP="${INGRESS_INTERNAL_VIP:-${PLATFORM_ROUTING_INTERNAL_VIP:-}}"
 INGRESS_EXTERNAL_VIP="${INGRESS_EXTERNAL_VIP:-${PLATFORM_ROUTING_EXTERNAL_VIP:-}}"
 phase50_log_root="${BOOTSTRAP_PHASE_LOG_DIR:-/var/log/bootstrap}"
+# Phase controls intentionally default to install. Operators can rerun a
+# narrower handoff or post-handoff path without pretending it is a clean first
+# install.
 PHASE50_LOG_FILE="${PHASE50_LOG_FILE:-${phase50_log_root}/phase50.log}"
 PHASE50_ARGOCD_DEBUG="${PHASE50_ARGOCD_DEBUG:-1}"
 PHASE50_ARGOCD_DEBUG_LOG="${PHASE50_ARGOCD_DEBUG_LOG:-${PHASE50_LOG_FILE}}"
@@ -42,6 +54,8 @@ PHASE50_DOMAIN_CHECK_DELAY="${PHASE50_DOMAIN_CHECK_DELAY:-10}"
 PHASE50_DOMAIN_HTTP_SUCCESS_REGEX="${PHASE50_DOMAIN_HTTP_SUCCESS_REGEX:-^(2[0-9][0-9]|3[0-9][0-9]|401|403)$}"
 PHASE50_INGRESS_FRONTDOOR_WAIT_TIMEOUT="${PHASE50_INGRESS_FRONTDOOR_WAIT_TIMEOUT:-300}"
 PHASE50_INGRESS_FRONTDOOR_WAIT_DELAY="${PHASE50_INGRESS_FRONTDOOR_WAIT_DELAY:-5}"
+# These are generated public values. The fallback only keeps diagnostics useful
+# when an incomplete runtime payload reaches the phase script.
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-example.services}"
 CLUSTER_LOCAL_DOMAIN="${CLUSTER_LOCAL_DOMAIN:-}"
 KUBE_SERVICE_DOMAIN="${KUBE_SERVICE_DOMAIN:-}"
@@ -59,6 +73,7 @@ case "${PHASE50_MODE}" in
     ;;
 esac
 
+# Post-handoff checks report evidence but must not recreate bootstrap state.
 PHASE50_WARNING_ONLY=0
 if [[ "${PHASE50_MODE}" == "post-handoff" ]]; then
   PHASE50_WARNING_ONLY=1
@@ -75,14 +90,10 @@ if [[ -z "${BUNDLE_BOOTSTRAP_LOG_FILE:-}" ]]; then
   exec >>"${PHASE50_LOG_FILE}" 2>&1
 fi
 
+# Resolve the checked-out fork once, then let the shared helper establish the
+# Ansible environment used by direct manifest and playbook calls below.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)"
-cd "${repo_root}"
-
-if [[ -z "${ANSIBLE_CONFIG:-}" && -f "${repo_root}/ansible/ansible.cfg" ]]; then
-  export ANSIBLE_CONFIG="${repo_root}/ansible/ansible.cfg"
-fi
-# Keep role discovery stable regardless of caller working directory.
-export ANSIBLE_ROLES_PATH="${repo_root}/ansible/automation-roles:${repo_root}/ansible/playbooks/roles:/etc/ansible/roles:/usr/share/ansible/roles"
+bootstrap_control_pair_prepare_repo "${repo_root}"
 
 if [[ -z "${KUBECONFIG:-}" ]]; then
   if [[ -f /etc/rancher/rke2/rke2.yaml ]]; then
@@ -90,78 +101,13 @@ if [[ -z "${KUBECONFIG:-}" ]]; then
   fi
 fi
 
-kubectl_bin=""
-if command -v kubectl >/dev/null 2>&1; then
-  kubectl_bin="$(command -v kubectl)"
-elif [[ -x /var/lib/rancher/rke2/bin/kubectl ]]; then
-  kubectl_bin="/var/lib/rancher/rke2/bin/kubectl"
-else
+if ! kubectl_bin="$(bootstrap_control_pair_resolve_kubectl)"; then
   echo "kubectl not found; Phase 50 requires kubectl access to the cluster." >&2
   exit 1
 fi
 
-read_secret_key_plain() {
-  local namespace="$1"
-  local secret_name="$2"
-  local key="$3"
-  local raw=""
-  raw="$("${kubectl_bin}" -n "${namespace}" get secret "${secret_name}" -o "jsonpath={.data.${key}}" 2>/dev/null || true)"
-  if [[ -z "${raw}" ]]; then
-    return 0
-  fi
-  printf '%s' "${raw}" | base64 -d 2>/dev/null | tr -d '\r\n' || true
-}
 
-base64url() {
-  openssl base64 -A | tr '+/' '-_' | tr -d '='
-}
 
-github_app_mint_token() {
-  local key_file=""
-  local now=""
-  local iat=""
-  local exp=""
-  local header=""
-  local payload=""
-  local unsigned=""
-  local signature=""
-  local jwt=""
-  local token_json=""
-
-  [ -n "${GITHUB_APP_ID:-}" ] || return 1
-  [ -n "${GITHUB_APP_INSTALLATION_ID:-}" ] || return 1
-  [ -n "${GITHUB_APP_PRIVATE_KEY_B64:-}" ] || return 1
-
-  key_file="$(mktemp)"
-  if ! printf "%s" "${GITHUB_APP_PRIVATE_KEY_B64}" | base64 -d > "${key_file}" 2>/dev/null; then
-    rm -f "${key_file}"
-    return 1
-  fi
-
-  now="$(date +%s)"
-  iat=$((now - 60))
-  exp=$((now + 540))
-  header='{"alg":"RS256","typ":"JWT"}'
-  payload="{\"iat\":${iat},\"exp\":${exp},\"iss\":\"${GITHUB_APP_ID}\"}"
-  unsigned="$(printf '%s' "${header}" | base64url).$(printf '%s' "${payload}" | base64url)"
-  signature="$(printf '%s' "${unsigned}" | openssl dgst -sha256 -sign "${key_file}" | base64url)"
-  rm -f "${key_file}"
-
-  jwt="${unsigned}.${signature}"
-  token_json="$(
-    curl -fsSL -X POST "https://api.github.com/app/installations/${GITHUB_APP_INSTALLATION_ID}/access_tokens" \
-      -H "Authorization: Bearer ${jwt}" \
-      -H "Accept: application/vnd.github+json"
-  )" || return 1
-
-  printf '%s' "${token_json}" | python3 - <<'PY'
-import json,sys
-try:
-  print(json.load(sys.stdin).get("token",""))
-except Exception:
-  print("")
-PY
-}
 
 github_app_refresh_repo_auth() {
   local token=""
@@ -188,47 +134,7 @@ github_app_refresh_repo_auth() {
   fi
 }
 
-github_token_looks_like_pat() {
-  case "${1:-}" in
-    github_pat_*|ghp_*|gho_*|ghu_*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
-infer_repo_owner_from_url() {
-  python3 - <<'PY' "${1:-}"
-import sys, urllib.parse
-value=(sys.argv[1] if len(sys.argv) > 1 else "").strip()
-owner=""
-try:
-  parsed=urllib.parse.urlparse(value)
-  path=(parsed.path or "").strip("/")
-  parts=path.split("/") if path else []
-  if len(parts) >= 2:
-    owner=parts[-2]
-except Exception:
-  owner=""
-print((owner or "").strip())
-PY
-}
-
-retry_cmd() {
-  local attempts="${1:-5}"
-  local sleep_seconds="${2:-5}"
-  shift 2
-  local i=1
-  while (( i <= attempts )); do
-    if "$@"; then
-      return 0
-    fi
-    if (( i == attempts )); then
-      return 1
-    fi
-    sleep "${sleep_seconds}"
-    i=$((i + 1))
-  done
-  return 1
-}
 
 infer_github_login_from_token() {
   python3 - <<'PY' "${1:-}"
@@ -256,22 +162,6 @@ print(login)
 PY
 }
 
-token_debug_kind() {
-  local token="${1:-}"
-  if [[ -z "${token}" ]]; then
-    printf 'missing'
-    return 0
-  fi
-  if github_token_looks_like_pat "${token}"; then
-    printf 'pat'
-    return 0
-  fi
-  case "${token}" in
-    ghs_*) printf 'installation-token' ;;
-    github_app_*) printf 'app-token' ;;
-    *) printf 'opaque-token' ;;
-  esac
-}
 
 phase50_log_source_repo_auth() {
   local source_repo_url="${1:-}"
@@ -296,12 +186,12 @@ phase50_log_source_repo_auth() {
 }
 
 rehydrate_ingress_vip_config() {
-  local secret_ns="ingress"
-  local secret_name="ingress-vip-config"
+  local config_ns="ingress"
+  local config_name="ingress-vip-config"
   local internal_vip=""
   local external_vip=""
 
-  if ! "${kubectl_bin}" -n "${secret_ns}" get secret "${secret_name}" >/dev/null 2>&1; then
+  if ! "${kubectl_bin}" -n "${config_ns}" get configmap "${config_name}" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -310,8 +200,8 @@ rehydrate_ingress_vip_config() {
     return 0
   fi
 
-  internal_vip="$(read_secret_key_plain "${secret_ns}" "${secret_name}" ingress_internal_vip)"
-  external_vip="$(read_secret_key_plain "${secret_ns}" "${secret_name}" ingress_external_vip)"
+  internal_vip="$(read_configmap_key_plain "${config_ns}" "${config_name}" ingress_internal_vip)"
+  external_vip="$(read_configmap_key_plain "${config_ns}" "${config_name}" ingress_external_vip)"
 
   if [[ -n "${internal_vip}" ]]; then
     INGRESS_INTERNAL_VIP="${internal_vip}"
@@ -321,27 +211,10 @@ rehydrate_ingress_vip_config() {
   fi
 
   if [[ -n "${INGRESS_INTERNAL_VIP:-}" || -n "${INGRESS_EXTERNAL_VIP:-}" ]]; then
-    echo "[phase50] hydrated ingress VIP config from ${secret_ns}/${secret_name}"
+    echo "[phase50] hydrated ingress VIP config from ${config_ns}/${config_name}"
   fi
 }
 
-detect_kube_service_domain() {
-  local corefile=""
-  corefile="$("${kubectl_bin}" -n kube-system get configmap rke2-coredns-rke2-coredns -o jsonpath='{.data.Corefile}' 2>/dev/null || true)"
-  if [[ -z "${corefile}" ]]; then
-    corefile="$("${kubectl_bin}" -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' 2>/dev/null || true)"
-  fi
-  if [[ -z "${corefile}" ]]; then
-    printf 'cluster.local'
-    return 0
-  fi
-  python3 - <<'PY' "${corefile}"
-import re,sys
-corefile=(sys.argv[1] if len(sys.argv) > 1 else "")
-m=re.search(r'kubernetes\s+([^\s{]+)', corefile)
-print((m.group(1).strip() if m else "cluster.local") or "cluster.local")
-PY
-}
 
 echo "[phase50] repo: ${repo_root}"
 echo "[phase50] checking cluster connectivity"
@@ -373,71 +246,8 @@ if [[ -z "${GITEA_INTERNAL_URL}" ]]; then
 fi
 echo "[phase50] kube service domain: ${KUBE_SERVICE_DOMAIN}"
 
-timeout_to_seconds() {
-  local raw="${1:-300s}"
-  local value="${raw//[[:space:]]/}"
-  if [[ "${value}" =~ ^([0-9]+)s$ ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-  elif [[ "${value}" =~ ^([0-9]+)m$ ]]; then
-    printf '%s' "$(( ${BASH_REMATCH[1]} * 60 ))"
-  elif [[ "${value}" =~ ^([0-9]+)h$ ]]; then
-    printf '%s' "$(( ${BASH_REMATCH[1]} * 3600 ))"
-  elif [[ "${value}" =~ ^[0-9]+$ ]]; then
-    printf '%s' "${value}"
-  else
-    printf '%s' "300"
-  fi
-}
 
-read_secret_file() {
-  local path="$1"
-  if [[ -f "${path}" ]]; then
-    tr -d '\n' <"${path}"
-  fi
-}
 
-read_k8s_secret_key() {
-  local namespace="$1"
-  local secret_name="$2"
-  local key="$3"
-  local raw=""
-  raw="$("${kubectl_bin}" -n "${namespace}" get secret "${secret_name}" -o "jsonpath={.data.${key}}" 2>/dev/null || true)"
-  if [[ -n "${raw}" ]]; then
-    printf '%s' "${raw}" | base64 -d 2>/dev/null || true
-  fi
-}
-
-write_secret_file() {
-  local name="$1"
-  local value="$2"
-  if [[ -z "${BOOTSTRAP_SECRET_DIR:-}" ]]; then
-    return 0
-  fi
-  mkdir -p "${BOOTSTRAP_SECRET_DIR}"
-  chmod 0700 "${BOOTSTRAP_SECRET_DIR}" 2>/dev/null || true
-  printf '%s\n' "${value}" > "${BOOTSTRAP_SECRET_DIR}/${name}"
-  chmod 0600 "${BOOTSTRAP_SECRET_DIR}/${name}" 2>/dev/null || true
-}
-
-generate_random_secret_value() {
-  local length="${1:-24}"
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -base64 "${length}" | tr -d '\r\n'
-    return 0
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY' "${length}"
-import secrets
-import string
-import sys
-length = int(sys.argv[1]) if len(sys.argv) > 1 else 24
-alphabet = string.ascii_letters + string.digits + "-_"
-print("".join(secrets.choice(alphabet) for _ in range(length)), end="")
-PY
-    return 0
-  fi
-  return 1
-}
 
 ensure_authentik_secret() {
   local secret_key="${1:-}"
@@ -445,18 +255,33 @@ ensure_authentik_secret() {
   local bootstrap_password="${3:-}"
   local bootstrap_token="${4:-}"
   if [[ -z "${secret_key}" || -z "${postgresql_password}" || -z "${bootstrap_password}" || -z "${bootstrap_token}" ]]; then
-    echo "[phase50] Authentik bootstrap secret is incomplete; cannot create authentik-secrets" >&2
+    echo "[phase50] Authentik bootstrap credentials are incomplete" >&2
     return 1
   fi
   "${kubectl_bin}" create namespace authentik --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  "${kubectl_bin}" -n authentik create secret generic authentik-secrets \
+  "${kubectl_bin}" -n authentik create secret generic authentik-encryption \
     --from-literal=secret_key="${secret_key}" \
+    --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
+  "${kubectl_bin}" -n authentik create secret generic authentik-postgresql \
     --from-literal=postgresql_password="${postgresql_password}" \
     --from-literal=password="${postgresql_password}" \
     --from-literal=postgres-password="${postgresql_password}" \
+    --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
+  "${kubectl_bin}" -n authentik create secret generic authentik-admin \
+    --from-literal=admin_username=akadmin \
     --from-literal=bootstrap_password="${bootstrap_password}" \
     --from-literal=bootstrap_token="${bootstrap_token}" \
     --dry-run=client -o yaml | "${kubectl_bin}" -n authentik apply -f - >/dev/null
+  seed_openbao_app_fields authentik/encryption "${openbao_token:-}" \
+    "secret_key=${secret_key}"
+  seed_openbao_app_fields authentik/postgresql "${openbao_token:-}" \
+    "postgresql_password=${postgresql_password}" \
+    "password=${postgresql_password}" \
+    "postgres-password=${postgresql_password}"
+  seed_openbao_app_fields authentik/admin "${openbao_token:-}" \
+    admin_username=akadmin \
+    "bootstrap_password=${bootstrap_password}" \
+    "bootstrap_token=${bootstrap_token}"
 }
 
 ensure_headlamp_admin_token() {
@@ -503,384 +328,11 @@ EOF
   return 1
 }
 
-patch_openbao_widget_fields_nonempty() {
-  local openbao_token="${1:-}"
-  shift || true
-  local pair=""
-  local patch_args=()
 
-  if [[ -z "${openbao_token}" || -z "${kubectl_bin}" ]]; then
-    return 0
-  fi
 
-  for pair in "$@"; do
-    [[ "${pair}" == *=* ]] || continue
-    if [[ -n "${pair#*=}" ]]; then
-      patch_args+=("${pair}")
-    fi
-  done
 
-  if (( ${#patch_args[@]} == 0 )); then
-    return 0
-  fi
 
-  retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-    bao kv patch secret/bootstrap/platform "${patch_args[@]}" >/dev/null 2>&1 || true
-}
 
-ensure_homepage_widget_secret() {
-  local grafana_admin_password=""
-  local cloudflare_account_id=""
-  local cloudflare_api_auth=""
-  local cloudflare_tunnel_id=""
-  local tailscale_api_auth=""
-  local tailscale_device_id=""
-  local existing_grafana_admin_password=""
-  local existing_cloudflare_account_id=""
-  local existing_cloudflare_api_auth=""
-  local existing_cloudflare_tunnel_id=""
-  local existing_tailscale_api_auth=""
-  local existing_tailscale_device_id=""
-
-  grafana_admin_password="${HOMEPAGE_GRAFANA_ADMIN_PASSWORD:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/grafana_admin_password")}"
-  cloudflare_account_id="${CLOUDFLARE_ACCOUNT_ID:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/cloudflare_account_id")}"
-  cloudflare_api_auth="${CLOUDFLARE_API_TOKEN:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/cloudflare_api_token")}"
-  cloudflare_tunnel_id="${RANCHER_CLOUDFLARED_TUNNEL_ID:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/rancher_cloudflared_tunnel_id")}"
-  tailscale_api_auth="${HOMEPAGE_TAILSCALE_API_AUTH:-${TAILSCALE_USER_API_TOKEN:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/homepage_tailscale_api_auth")}}"
-  tailscale_device_id="${HOMEPAGE_TAILSCALE_DEVICE_ID:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/homepage_tailscale_device_id")}"
-  if [[ -z "${tailscale_device_id}" ]] && command -v tailscale >/dev/null 2>&1; then
-    tailscale_device_id="$(
-      tailscale status --json 2>/dev/null | python3 - <<'PY'
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print("")
-    raise SystemExit(0)
-self_data = data.get("Self") or {}
-print((self_data.get("ID") or "").strip())
-PY
-    )"
-  fi
-  if [[ -z "${cloudflare_account_id}" && -n "${openbao_token:-}" ]]; then
-    cloudflare_account_id="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-        bao kv get -field=cloudflare_account_id secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  if [[ -z "${cloudflare_api_auth}" && -n "${openbao_token:-}" ]]; then
-    cloudflare_api_auth="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-        bao kv get -field=cloudflare_api_token secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  if [[ -z "${cloudflare_tunnel_id}" && -n "${openbao_token:-}" ]]; then
-    cloudflare_tunnel_id="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-      bao kv get -field=rancher_cloudflared_tunnel_id secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  if [[ -z "${tailscale_api_auth}" && -n "${openbao_token:-}" ]]; then
-    tailscale_api_auth="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-        bao kv get -field=homepage_tailscale_api_auth secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  if [[ -z "${tailscale_device_id}" && -n "${openbao_token:-}" ]]; then
-    tailscale_device_id="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-      bao kv get -field=homepage_tailscale_device_id secret/bootstrap/platform 2>/dev/null || true
-    )"
-  fi
-  existing_grafana_admin_password="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_GRAFANA_ADMIN_PASSWORD)"
-  existing_cloudflare_account_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_ACCOUNT_ID)"
-  existing_cloudflare_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_API_AUTH)"
-  existing_cloudflare_tunnel_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_CLOUDFLARE_TUNNEL_ID)"
-  existing_tailscale_api_auth="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_API_AUTH)"
-  existing_tailscale_device_id="$(read_k8s_secret_key homepage homepage-widget-secrets HOMEPAGE_TAILSCALE_DEVICE_ID)"
-
-  if [[ -z "${grafana_admin_password}" ]]; then
-    grafana_admin_password="${existing_grafana_admin_password}"
-  fi
-  if [[ -z "${cloudflare_account_id}" ]]; then
-    cloudflare_account_id="${existing_cloudflare_account_id}"
-  fi
-  if [[ -z "${cloudflare_api_auth}" ]]; then
-    cloudflare_api_auth="${existing_cloudflare_api_auth}"
-  fi
-  if [[ -z "${cloudflare_tunnel_id}" ]]; then
-    cloudflare_tunnel_id="${existing_cloudflare_tunnel_id}"
-  fi
-  if [[ -z "${tailscale_api_auth}" ]]; then
-    tailscale_api_auth="${existing_tailscale_api_auth}"
-  fi
-  if [[ -z "${tailscale_device_id}" ]]; then
-    tailscale_device_id="${existing_tailscale_device_id}"
-  fi
-
-  if [[ -z "${cloudflare_account_id}" || -z "${cloudflare_api_auth}" || -z "${cloudflare_tunnel_id}" ]]; then
-    cloudflare_account_id=""
-    cloudflare_api_auth=""
-    cloudflare_tunnel_id=""
-  fi
-
-  if [[ -z "${tailscale_api_auth}" || -z "${tailscale_device_id}" ]]; then
-    tailscale_api_auth=""
-    tailscale_device_id=""
-  fi
-
-  if [[ -n "${grafana_admin_password}" ]]; then
-    write_secret_file grafana_admin_password "${grafana_admin_password}"
-  fi
-  if [[ -n "${cloudflare_account_id}" ]]; then
-    write_secret_file cloudflare_account_id "${cloudflare_account_id}"
-  fi
-  if [[ -n "${cloudflare_api_auth}" ]]; then
-    write_secret_file cloudflare_api_token "${cloudflare_api_auth}"
-  fi
-  if [[ -n "${cloudflare_tunnel_id}" ]]; then
-    write_secret_file rancher_cloudflared_tunnel_id "${cloudflare_tunnel_id}"
-  fi
-  if [[ -n "${tailscale_api_auth}" ]]; then
-    write_secret_file homepage_tailscale_api_auth "${tailscale_api_auth}"
-  fi
-  if [[ -n "${tailscale_device_id}" ]]; then
-    write_secret_file homepage_tailscale_device_id "${tailscale_device_id}"
-  fi
-
-  if [[ -z "${grafana_admin_password}" && -z "${cloudflare_account_id}" && -z "${cloudflare_api_auth}" && -z "${cloudflare_tunnel_id}" && -z "${tailscale_api_auth}" && -z "${tailscale_device_id}" ]]; then
-    echo "[phase50] homepage widget secrets unavailable; skipping homepage-widget-secrets"
-    return 0
-  fi
-
-  "${kubectl_bin}" create namespace homepage --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  "${kubectl_bin}" -n homepage create secret generic homepage-widget-secrets \
-    --from-literal=HOMEPAGE_GRAFANA_ADMIN_PASSWORD="${grafana_admin_password}" \
-    --from-literal=HOMEPAGE_CLOUDFLARE_ACCOUNT_ID="${cloudflare_account_id}" \
-    --from-literal=HOMEPAGE_CLOUDFLARE_TUNNEL_ID="${cloudflare_tunnel_id}" \
-    --from-literal=HOMEPAGE_CLOUDFLARE_API_AUTH="${cloudflare_api_auth}" \
-    --from-literal=HOMEPAGE_TAILSCALE_API_AUTH="${tailscale_api_auth}" \
-    --from-literal=HOMEPAGE_TAILSCALE_DEVICE_ID="${tailscale_device_id}" \
-    --dry-run=client -o yaml | "${kubectl_bin}" -n homepage apply -f - >/dev/null
-
-  patch_openbao_widget_fields_nonempty "${openbao_token:-}" \
-    "grafana_admin_password=${grafana_admin_password}" \
-    "cloudflare_account_id=${cloudflare_account_id}" \
-    "cloudflare_api_token=${cloudflare_api_auth}" \
-    "rancher_cloudflared_tunnel_id=${cloudflare_tunnel_id}" \
-    "homepage_tailscale_api_auth=${tailscale_api_auth}" \
-    "homepage_tailscale_device_id=${tailscale_device_id}"
-}
-
-ansible_runner_image_effective() {
-  local registry_host=""
-  if [[ -n "${ANSIBLE_RUNNER_IMAGE:-}" ]]; then
-    registry_host="$(ansible_runner_registry_host_effective)"
-    python3 - <<'PY' "${ANSIBLE_RUNNER_IMAGE}" "${registry_host}"
-import sys
-image = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-registry_host = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
-if not image or not registry_host or "/" not in image:
-    print(image, end="")
-    raise SystemExit(0)
-parts = image.split("/", 1)
-print(f"{registry_host}/{parts[1]}", end="")
-PY
-    return 0
-  fi
-  registry_host="$(ansible_runner_registry_host_effective)"
-  printf '%s/%s/%s:latest' \
-    "${registry_host}" \
-    "${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
-    "${ANSIBLE_RUNNER_IMAGE_NAME:-ansible-runner}"
-}
-
-ansible_runner_registry_host_pull() {
-  local registry_host="${ANSIBLE_RUNNER_REGISTRY_HOST:-registry.${CLUSTER_DOMAIN}}"
-  printf '%s' "${registry_host}"
-}
-
-ansible_runner_registry_host_effective() {
-  local registry_host=""
-  registry_host="$(ansible_runner_registry_host_pull)"
-  printf '%s' "${registry_host}"
-}
-
-ansible_runner_registry_host_push() {
-  local registry_host=""
-  registry_host="$(ansible_runner_registry_host_pull)"
-  case "${registry_host}" in
-    ""|*".svc"|*".svc."*|*".cluster.local"*|*":3000")
-      printf '%s' "${registry_host}"
-      return 0
-      ;;
-  esac
-
-  if [[ -n "${GITEA_INTERNAL_SERVICE_HOST:-}" ]]; then
-    printf '%s' "${GITEA_INTERNAL_SERVICE_HOST}"
-    return 0
-  fi
-
-  if [[ -n "${GITEA_INTERNAL_SERVICE_NAME:-}" && -n "${KUBE_SERVICE_SUFFIX:-}" ]]; then
-    printf '%s.gitea.%s:3000' "${GITEA_INTERNAL_SERVICE_NAME}" "${KUBE_SERVICE_SUFFIX}"
-    return 0
-  fi
-
-  registry_host="$(gitea_service_cluster_ip)"
-  if [[ -n "${registry_host}" ]]; then
-    printf '%s:3000' "${registry_host}"
-    return 0
-  fi
-
-  printf '%s' "${ANSIBLE_RUNNER_REGISTRY_HOST:-registry.${CLUSTER_DOMAIN}}"
-}
-
-registry_base_url_for_host() {
-  local registry_host="${1:-}"
-  case "${registry_host}" in
-    *".svc"|*".svc."*|*".cluster.local"*|*":3000")
-      printf 'http://%s' "${registry_host}"
-      ;;
-    *)
-      printf 'https://%s' "${registry_host}"
-      ;;
-  esac
-}
-
-ansible_runner_registry_base_url() {
-  local registry_host=""
-  registry_host="$(ansible_runner_registry_host_effective)"
-  registry_base_url_for_host "${registry_host}"
-}
-
-ansible_runner_image_push_effective() {
-  local pull_image=""
-  local push_host=""
-  local remainder=""
-
-  pull_image="$(ansible_runner_image_effective)"
-  push_host="$(ansible_runner_registry_host_push)"
-  remainder="${pull_image#*/}"
-  printf '%s/%s' "${push_host}" "${remainder}"
-}
-
-argocd_gitea_repo_url() {
-  local owner="${1:-${GITEA_SEED_TARGET_OWNER:-gitea-admin}}"
-  local repo="${2:-${GITEA_SEED_TARGET_REPO:-cluster}}"
-  printf '%s%s/%s.git' "${GITEA_INTERNAL_URL}" "${owner}" "${repo}"
-}
-
-repo_url_is_github() {
-  python3 - <<'PY' "${1:-}"
-import sys
-from urllib.parse import urlparse
-
-value = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-host = ""
-if value:
-    try:
-        host = (urlparse(value).hostname or "").strip().lower()
-    except Exception:
-        host = ""
-raise SystemExit(0 if host in {"github.com", "www.github.com"} else 1)
-PY
-}
-
-find_ready_gitea_pod() {
-  local pod=""
-  local selector=""
-  for selector in \
-    'app.kubernetes.io/instance=gitea,app.kubernetes.io/name=gitea' \
-    'app=gitea'
-  do
-    pod="$("${kubectl_bin}" -n gitea get pod -l "${selector}" --field-selector=status.phase=Running \
-      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{"\n"}{end}{end}' 2>/dev/null \
-      | awk '$2 == "True" {print $1; exit}' || true)"
-    if [[ -n "${pod}" ]]; then
-      printf '%s' "${pod}"
-      return 0
-    fi
-  done
-  return 1
-}
-
-start_gitea_local_portforward() {
-  local pod=""
-  local pf_port=""
-  local pf_log=""
-  local pf_pid=""
-  local base_url=""
-  local attempts=0
-
-  pod="$(find_ready_gitea_pod)" || return 1
-  pf_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
-  pf_log="$(mktemp /tmp/gitea-registry-portforward.XXXXXX.log)"
-  "${kubectl_bin}" -n gitea port-forward "pod/${pod}" "${pf_port}:3000" >"${pf_log}" 2>&1 &
-  pf_pid=$!
-  base_url="http://127.0.0.1:${pf_port}"
-
-  for attempts in $(seq 1 30); do
-    if curl -fsS "${base_url}/api/v1/version" >/dev/null 2>&1; then
-      printf '%s|%s|%s' "${pf_pid}" "${pf_log}" "${base_url}"
-      return 0
-    fi
-    sleep 1
-  done
-
-  kill "${pf_pid}" >/dev/null 2>&1 || true
-  wait "${pf_pid}" >/dev/null 2>&1 || true
-  rm -f "${pf_log}" >/dev/null 2>&1 || true
-  return 1
-}
-
-stop_local_portforward() {
-  local pf_pid="${1:-}"
-  local pf_log="${2:-}"
-  if [[ -n "${pf_pid}" ]]; then
-    kill "${pf_pid}" >/dev/null 2>&1 || true
-    wait "${pf_pid}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${pf_log}" ]]; then
-    rm -f "${pf_log}" >/dev/null 2>&1 || true
-  fi
-}
-
-gitea_service_cluster_ip() {
-  local ip=""
-  ip="$("${kubectl_bin}" -n gitea get svc gitea-bootstrap-access -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
-  ip="$(printf '%s' "${ip}" | tr -d '\r\n[:space:]')"
-  if [[ -n "${ip}" && "${ip}" != "None" && "${ip}" != "<none>" ]]; then
-    printf '%s' "${ip}"
-    return 0
-  fi
-
-  ip="$("${kubectl_bin}" -n gitea get svc "${GITEA_INTERNAL_SERVICE_NAME}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
-  ip="$(printf '%s' "${ip}" | tr -d '\r\n[:space:]')"
-  if [[ -n "${ip}" && "${ip}" != "None" && "${ip}" != "<none>" ]]; then
-    printf '%s' "${ip}"
-    return 0
-  fi
-
-  ip="$("${kubectl_bin}" -n gitea get endpoints "${GITEA_INTERNAL_SERVICE_NAME}" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
-  ip="$(printf '%s' "${ip}" | tr -d '\r\n[:space:]')"
-  if [[ -n "${ip}" && "${ip}" != "None" && "${ip}" != "<none>" ]]; then
-    printf '%s' "${ip}"
-    return 0
-  fi
-
-  ip="$("${kubectl_bin}" -n gitea get pod -l 'app.kubernetes.io/instance=gitea,app.kubernetes.io/name=gitea' \
-    -o jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' 2>/dev/null | head -n1)"
-  ip="$(printf '%s' "${ip}" | tr -d '\r\n[:space:]')"
-  if [[ -n "${ip}" && "${ip}" != "None" && "${ip}" != "<none>" ]]; then
-    printf '%s' "${ip}"
-  fi
-}
 
 ensure_gitea_runtime_host_aliases() {
   local gitea_ip=""
@@ -963,18 +415,6 @@ PY
   echo "[phase50] ensured runtime host aliases for ${canonical_host:-<none>} ${local_host:-<none>} via ${gitea_ip}"
 }
 
-wait_for_kube_api_ready() {
-  local attempts="${1:-60}"
-  local delay="${2:-5}"
-  local i=""
-  for i in $(seq 1 "${attempts}"); do
-    if "${kubectl_bin}" get ns >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep "${delay}"
-  done
-  return 1
-}
 
 ensure_ansible_runner_registry_runtime() {
   local runner_image=""
@@ -1056,48 +496,6 @@ EOF
   fi
 }
 
-detect_gitea_internal_service_name() {
-  python3 - <<'PY' "${kubectl_bin}"
-import json, subprocess, sys
-kubectl = sys.argv[1]
-try:
-    out = subprocess.check_output([kubectl, "-n", "gitea", "get", "svc", "-o", "json"], text=True)
-    data = json.loads(out)
-except Exception:
-    print("")
-    raise SystemExit(0)
-
-def score(item):
-    md = item.get("metadata") or {}
-    spec = item.get("spec") or {}
-    name = (md.get("name") or "").strip()
-    ports = spec.get("ports") or []
-    selector = spec.get("selector") or {}
-    port_3000 = any(str(p.get("port", "")) == "3000" or str(p.get("targetPort", "")) == "3000" for p in ports)
-    if not port_3000:
-        return (-1, name)
-    s = 0
-    if selector.get("app.kubernetes.io/name") == "gitea":
-        s += 5
-    if selector.get("app.kubernetes.io/instance") == "gitea":
-        s += 3
-    if selector.get("app") == "gitea":
-        s += 2
-    if "http" in name:
-        s += 2
-    if "gitea" in name:
-        s += 1
-    return (s, name)
-
-items = data.get("items") or []
-candidates = [item for item in items if score(item)[0] >= 0]
-if not candidates:
-    print("")
-else:
-    candidates.sort(key=lambda item: score(item), reverse=True)
-    print(((candidates[0].get("metadata") or {}).get("name") or "").strip())
-PY
-}
 
 ensure_gitea_bootstrap_access_service() {
   local selector_yaml=""
@@ -1171,96 +569,9 @@ refresh_gitea_internal_service_url() {
   fi
 }
 
-ansible_runner_pull_secret_name() {
-  printf '%s' "${ANSIBLE_RUNNER_IMAGE_PULL_SECRET:-gitea-registry-creds}"
-}
 
-ansible_runner_image_parts() {
-  python3 - <<'PY' "${1:-}"
-import sys
-image = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-host, rest = image.split("/", 1)
-repo, ref = rest.rsplit(":", 1)
-print(host)
-print(repo)
-print(ref)
-PY
-}
 
-gitea_registry_token_effective() {
-  local token=""
-  token="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_registry_token")"
-  if [[ -n "${token}" ]]; then
-    printf '%s' "${token}"
-    return 0
-  fi
 
-  if [[ -n "${openbao_token:-}" ]]; then
-    token="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-        env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-        bao kv get -field=gitea_registry_token secret/bootstrap/platform 2>/dev/null || true
-    )"
-    if [[ -n "${token}" ]]; then
-      write_secret_file gitea_registry_token "${token}"
-      printf '%s' "${token}"
-      return 0
-    fi
-  fi
-
-  token="$("${kubectl_bin}" -n gitea exec deploy/gitea -c gitea -- sh -lc '
-    gitea admin user generate-access-token \
-      --username "'"${gitea_repo_username_effective}"'" \
-      --token-name "ansible-runner-registry" \
-      --scopes "all" \
-      --raw 2>/dev/null \
-    || gitea admin user generate-access-token \
-      --username "'"${gitea_repo_username_effective}"'" \
-      --token-name "ansible-runner-registry-$(date +%s)" \
-      --scopes "all" \
-      --raw 2>/dev/null
-  ' 2>/dev/null || true)"
-  if [[ -n "${token}" ]]; then
-    write_secret_file gitea_registry_token "${token}"
-    printf '%s' "${token}"
-    return 0
-  fi
-
-  # The same personal access token that works for Git over HTTP also works for
-  # the Gitea container registry in this bootstrap model. Reuse it instead of
-  # making registry auth depend on a second token mint path.
-  token="$(gitea_git_token_effective || true)"
-  if [[ -n "${token}" ]]; then
-    write_secret_file gitea_registry_token "${token}"
-    printf '%s' "${token}"
-  fi
-}
-
-gitea_git_token_effective() {
-  local token=""
-  token="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_git_token")"
-  if [[ -n "${token}" ]]; then
-    printf '%s' "${token}"
-    return 0
-  fi
-
-  token="$("${kubectl_bin}" -n gitea exec deploy/gitea -c gitea -- sh -lc '
-    gitea admin user generate-access-token \
-      --username "'"${gitea_repo_username_effective}"'" \
-      --token-name "argocd-bootstrap-git" \
-      --scopes "all" \
-      --raw 2>/dev/null \
-    || gitea admin user generate-access-token \
-      --username "'"${gitea_repo_username_effective}"'" \
-      --token-name "argocd-bootstrap-git-$(date +%s)" \
-      --scopes "all" \
-      --raw 2>/dev/null
-  ' 2>/dev/null || true)"
-  if [[ -n "${token}" ]]; then
-    write_secret_file gitea_git_token "${token}"
-    printf '%s' "${token}"
-  fi
-}
 
 ensure_ansible_runner_pull_secret() {
   local registry_host=""
@@ -1321,6 +632,11 @@ data:
   .dockerconfigjson: $(printf '%s' "${dockerconfigjson}" | base64 | tr -d '\r\n')
 EOF
 
+  seed_openbao_app_fields gitea/registry "${openbao_token:-}" \
+    "host=${registry_host}" \
+    "username=${registry_username}" \
+    "token=${registry_token}"
+
   if [[ "${push_host}" != "${registry_host}" ]]; then
     echo "[phase50] ensured ansible-runner imagePullSecret ${secret_name} for ${registry_host} and internal push host ${push_host}"
   else
@@ -1328,62 +644,7 @@ EOF
   fi
 }
 
-container_registry_image_exists() {
-  local runner_image="${1:-}"
-  local registry_host=""
-  local registry_base_url=""
-  local repo_path=""
-  local image_ref=""
-  local registry_username=""
-  local registry_token=""
-  local bearer_token=""
-  local status=""
-  local pf_state=""
-  local pf_pid=""
-  local pf_log=""
 
-  mapfile -t image_parts < <(ansible_runner_image_parts "${runner_image}")
-  registry_host="${image_parts[0]}"
-  repo_path="${image_parts[1]}"
-  image_ref="${image_parts[2]}"
-  registry_username="${ANSIBLE_RUNNER_REGISTRY_USERNAME:-${gitea_repo_username_effective:-gitea-admin}}"
-  registry_token="$(gitea_registry_token_effective)"
-
-  if [[ -z "${registry_token}" ]]; then
-    return 1
-  fi
-
-  registry_base_url="$(registry_base_url_for_host "${registry_host}")"
-  case "${registry_host}" in
-    ${GITEA_INTERNAL_SERVICE_NAME}.gitea.svc|${GITEA_INTERNAL_SERVICE_NAME}.gitea.svc.*|*.cluster.local*|*".svc:"*)
-      if pf_state="$(start_gitea_local_portforward 2>/dev/null)"; then
-        IFS='|' read -r pf_pid pf_log registry_base_url <<<"${pf_state}"
-      fi
-      ;;
-  esac
-
-  bearer_token="$(
-    curl -fsS -u "${registry_username}:${registry_token}" \
-      "${registry_base_url}/v2/token?service=container_registry&scope=repository:${repo_path}:pull" \
-      | python3 -c 'import sys, json; print(json.load(sys.stdin).get("token", ""))' 2>/dev/null || true
-  )"
-  if [[ -z "${bearer_token}" ]]; then
-    stop_local_portforward "${pf_pid}" "${pf_log}"
-    return 1
-  fi
-
-  status="$(
-    curl -sS -o /dev/null -w '%{http_code}' \
-      -H "Authorization: Bearer ${bearer_token}" \
-      "${registry_base_url}/v2/${repo_path}/manifests/${image_ref}" || true
-  )"
-  stop_local_portforward "${pf_pid}" "${pf_log}"
-  [[ "${status}" == "200" ]]
-}
-
-ansible_runner_image_exists() {
-  container_registry_image_exists "$(ansible_runner_image_effective)"
-}
 
 publish_ansible_runner_image() {
   local runner_image=""
@@ -1400,6 +661,7 @@ publish_ansible_runner_image() {
   local active=""
   local gitea_service_ip=""
   local host_alias_block=""
+  local registry_token_service_host=""
   local host_aliases=()
 
   runner_image="$(ansible_runner_image_effective)"
@@ -1425,6 +687,14 @@ publish_ansible_runner_image() {
     echo "[phase50] kaniko will push ansible-runner to internal registry endpoint ${push_image} while the deployment continues to use ${runner_image}"
     gitea_service_ip="$(gitea_service_cluster_ip)"
     if [[ -n "${gitea_service_ip}" ]]; then
+      # Gitea's registry challenge names its token service using Gitea's
+      # configured canonical host. During initial bootstrap that .local name
+      # may not resolve yet, so derive the exact host from the live challenge
+      # and reach it through the already-available in-cluster Service IP.
+      registry_token_service_host="$(curl -sSI --max-time 10 "http://${GITEA_INTERNAL_SERVICE_HOST}/v2/" 2>/dev/null | python3 "${script_dir}/registry-token-service-host.py" 2>/dev/null || true)"
+      if [[ -n "${registry_token_service_host}" ]]; then
+        host_aliases+=("${registry_token_service_host}")
+      fi
       if [[ -n "${CLUSTER_LOCAL_DOMAIN}" ]]; then
         host_aliases+=("gitea.${CLUSTER_LOCAL_DOMAIN}")
       fi
@@ -1557,7 +827,12 @@ ensure_external_dns_cloudflare_secret() {
   local token=""
   local token_source=""
 
-  if [[ -n "${CLOUDFLARE_ZONE_API_TOKEN:-}" ]]; then
+  token="$(read_openbao_app_field ingress/external-dns api_token "${openbao_token:-}" || true)"
+  if [[ -n "${token}" ]]; then
+    token_source="OpenBao apps/ingress/external-dns"
+  elif token="$(read_k8s_secret_key ingress external-dns-cloudflare api-token)" && [[ -n "${token}" ]]; then
+    token_source="existing OpenBao delivery Secret"
+  elif [[ -n "${CLOUDFLARE_ZONE_API_TOKEN:-}" ]]; then
     token="${CLOUDFLARE_ZONE_API_TOKEN}"
     token_source="CLOUDFLARE_ZONE_API_TOKEN"
   elif [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
@@ -1581,6 +856,7 @@ stringData:
   api-token: ${token}
 EOF
 
+  seed_openbao_app_fields ingress/external-dns "${openbao_token:-}" "api_token=${token}"
   write_secret_file external_dns_cloudflare_token_source "${token_source}"
   return 0
 }
@@ -1648,89 +924,9 @@ PY
   echo "[phase50] applied external-dns manifests with domain filter ${CLUSTER_DOMAIN}"
 }
 
-extract_ingress_lb_settings() {
-  local svc_namespace="$1"
-  local svc_name="$2"
-  local svc_json=""
-  svc_json="$("${kubectl_bin}" -n "${svc_namespace}" get svc "${svc_name}" -o json 2>/dev/null || true)"
-  python3 - <<'PY' "${svc_json}"
-import json,sys
-try:
-    svc=json.loads(sys.argv[1] if len(sys.argv) > 1 else "{}")
-except Exception:
-    print("|")
-    raise SystemExit(0)
-spec=svc.get("spec",{}) or {}
-meta=svc.get("metadata",{}) or {}
-ann=meta.get("annotations",{}) or {}
-status=svc.get("status",{}) or {}
-lb=status.get("loadBalancer",{}) or {}
-ing=lb.get("ingress",[]) or []
-vip=(spec.get("loadBalancerIP") or "").strip()
-if vip in ("0.0.0.0", "::"):
-    vip=""
-if not vip:
-    vip=(ann.get("kube-vip.io/loadbalancerIPs") or ann.get("kube-vip.io/loadbalancerIP") or "").strip()
-if vip in ("0.0.0.0", "::"):
-    vip=""
-status_ip=""
-if ing:
-    first=ing[0] or {}
-    status_ip=(first.get("ip") or first.get("hostname") or "").strip()
-print(f"{vip}|{status_ip}")
-PY
-}
 
-wait_for_concrete_ingress_vip() {
-  local svc_namespace="$1"
-  local svc_name="$2"
-  local timeout="${3:-180}"
-  local delay="${4:-5}"
-  local elapsed=0
-  local pair="" vip="" status_vip=""
 
-  while [[ "${elapsed}" -le "${timeout}" ]]; do
-    pair="$(extract_ingress_lb_settings "${svc_namespace}" "${svc_name}")"
-    vip="${pair%%|*}"
-    status_vip="${pair#*|}"
-    if [[ -n "${vip}" ]]; then
-      printf '%s' "${vip}"
-      return 0
-    fi
-    if [[ -n "${status_vip}" ]]; then
-      printf '%s' "${status_vip}"
-      return 0
-    fi
-    sleep "${delay}"
-    elapsed=$((elapsed + delay))
-  done
 
-  return 1
-}
-
-extract_ingress_lb_class() {
-  local svc_namespace="$1"
-  local svc_name="$2"
-  "${kubectl_bin}" -n "${svc_namespace}" get svc "${svc_name}" -o jsonpath='{.spec.loadBalancerClass}' 2>/dev/null \
-    | tr -d '\r\n' || true
-}
-
-detect_fallback_node_ip() {
-  local ip=""
-  if command -v ip >/dev/null 2>&1; then
-    ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
-  fi
-  if [[ -z "${ip}" ]] && command -v hostname >/dev/null 2>&1; then
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  fi
-  if [[ -z "${ip}" ]] && command -v ipconfig >/dev/null 2>&1; then
-    ip="$(ipconfig getifaddr en0 2>/dev/null || true)"
-    if [[ -z "${ip}" ]]; then
-      ip="$(ipconfig getifaddr en1 2>/dev/null || true)"
-    fi
-  fi
-  printf '%s' "${ip}"
-}
 
 apply_kube_vip_manifests() {
   local kube_vip_dir="${repo_root}/pods/ingress/kube-vip"
@@ -1864,11 +1060,10 @@ ensure_routing_frontdoor_vip() {
 
   cat <<EOF | "${kubectl_bin}" -n ingress apply -f - >/dev/null 2>&1 || true
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
   name: ingress-vip-config
-type: Opaque
-stringData:
+data:
   ingress_internal_vip: "${internal_vip_eff}"
   ingress_external_vip: "${external_vip_eff}"
   ingress_controller_service: "${routing_service_ref}"
@@ -1892,6 +1087,11 @@ reconcile_argocd_bootstrap_repo() {
   echo "[phase50] reconciling Argo CD bootstrap repo -> ${repo_url}"
 
   if [[ -n "${repo_token}" ]]; then
+    seed_openbao_app_fields argocd/repository "${openbao_token:-}" \
+      "url=${repo_url}" \
+      "username=${repo_username}" \
+      "password=${repo_token}" \
+      "branch=${repo_branch}"
     cat <<EOF | "${kubectl_bin}" -n argocd apply -f -
 apiVersion: v1
 kind: Secret
@@ -2074,92 +1274,7 @@ SH
   echo "[phase50] verified GitOps handoff: Gitea repo is seeded and Argo CD points at ${repo_url} (${repo_branch})"
 }
 
-gitea_repo_has_readable_refs() {
-  local repo_url="${1:-}"
-  local repo_username="${2:-}"
-  local repo_token="${3:-}"
-  local askpass=""
-  local refs_output=""
 
-  if [[ -z "${repo_url}" || -z "${repo_username}" || -z "${repo_token}" ]]; then
-    return 1
-  fi
-
-  askpass="$(mktemp /tmp/gitea-git-refs-askpass.XXXXXX)"
-  cat >"${askpass}" <<'SH'
-#!/bin/sh
-case "$1" in
-  *sername*) printf '%s\n' "${GIT_ASKPASS_USERNAME:-}" ;;
-  *) printf '%s\n' "${GIT_ASKPASS_PASSWORD:-}" ;;
-esac
-SH
-  chmod 0700 "${askpass}"
-  refs_output="$(
-    GIT_ASKPASS="${askpass}" \
-    GIT_ASKPASS_USERNAME="${repo_username}" \
-    GIT_ASKPASS_PASSWORD="${repo_token}" \
-    GIT_TERMINAL_PROMPT=0 \
-    git ls-remote "${repo_url}" "refs/heads/*" 2>/dev/null || true
-  )"
-  rm -f "${askpass}" >/dev/null 2>&1 || true
-
-  [[ -n "${refs_output}" ]]
-}
-
-gitea_repo_has_readable_refs_via_local_portforward() {
-  local repo_url="${1:-}"
-  local repo_username="${2:-}"
-  local repo_token="${3:-}"
-  local pod=""
-  local pf_port=""
-  local pf_log=""
-  local pf_pid=""
-  local repo_path=""
-  local local_repo_url=""
-
-  if [[ -z "${repo_url}" || -z "${repo_username}" || -z "${repo_token}" ]]; then
-    return 1
-  fi
-
-  for selector in \
-    'app.kubernetes.io/instance=gitea,app.kubernetes.io/name=gitea' \
-    'app=gitea'
-  do
-    pod="$("${kubectl_bin}" -n gitea get pod -l "${selector}" --field-selector=status.phase=Running \
-      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{"\n"}{end}{end}' 2>/dev/null \
-      | awk '$2 == "True" {print $1; exit}' || true)"
-    if [[ -n "${pod}" ]]; then
-      break
-    fi
-  done
-  if [[ -z "${pod}" ]]; then
-    return 1
-  fi
-
-  repo_path="$(printf '%s' "${repo_url}" | sed -E 's#^https?://[^/]+/?##')"
-  if [[ -z "${repo_path}" ]]; then
-    return 1
-  fi
-
-  pf_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
-  pf_log="$(mktemp /tmp/gitea-verify-portforward.XXXXXX.log)"
-  "${kubectl_bin}" -n gitea port-forward "pod/${pod}" "${pf_port}:3000" >"${pf_log}" 2>&1 &
-  pf_pid=$!
-  sleep 2
-  local_repo_url="http://127.0.0.1:${pf_port}/${repo_path}"
-
-  if gitea_repo_has_readable_refs "${local_repo_url}" "${repo_username}" "${repo_token}"; then
-    kill "${pf_pid}" >/dev/null 2>&1 || true
-    wait "${pf_pid}" >/dev/null 2>&1 || true
-    rm -f "${pf_log}" >/dev/null 2>&1 || true
-    return 0
-  fi
-
-  kill "${pf_pid}" >/dev/null 2>&1 || true
-  wait "${pf_pid}" >/dev/null 2>&1 || true
-  rm -f "${pf_log}" >/dev/null 2>&1 || true
-  return 1
-}
 
 ensure_gitea_admin_secret() {
   local admin_password="${1:-}"
@@ -2180,115 +1295,15 @@ stringData:
   password: ${admin_password}
   email: gitea-admin@example.com
 EOF
+  seed_openbao_app_fields gitea/admin "${openbao_token:-}" \
+    username=gitea-admin \
+    "password=${admin_password}" \
+    email=gitea-admin@example.com
 }
 
 configure_gitea_push_mirror() {
-  local target_owner="${1:?owner}"
-  local target_repo="${2:?repo}"
-  local mirror_repo_url="${3:-}"
-  local mirror_username="${4:-}"
-  local mirror_token="${5:-}"
-  local pod=""
-
-  if [[ -z "${mirror_repo_url}" || -z "${mirror_username}" || -z "${mirror_token}" ]]; then
-    echo "[phase50] Gitea push mirror is not fully configured; skipping" >&2
-    return 0
-  fi
-  if ! repo_url_is_github "${mirror_repo_url}"; then
-    echo "[phase50] Gitea push mirror target is not a GitHub repo; skipping auto push mirror for ${mirror_repo_url}" >&2
-    return 0
-  fi
-  if ! github_token_looks_like_pat "${mirror_token}"; then
-    echo "[phase50] Gitea push mirror requires a stable GitHub PAT-style token; skipping auto mirror setup" >&2
-    return 0
-  fi
-
-  pod="$(find_ready_gitea_pod)" || {
-    echo "[phase50] no ready Gitea pod found for push mirror setup" >&2
-    return 1
-  }
-
-  if ! "${kubectl_bin}" -n gitea exec -i "${pod}" -c gitea -- env \
-    TARGET_OWNER="${target_owner}" \
-    TARGET_REPO="${target_repo}" \
-    MIRROR_REPO_URL="${mirror_repo_url}" \
-    MIRROR_USERNAME="${mirror_username}" \
-    MIRROR_TOKEN="${mirror_token}" \
-    sh -s -- <<'EOF'
-set -eu
-
-target_owner="${TARGET_OWNER:?}"
-target_repo="${TARGET_REPO:?}"
-mirror_repo_url="${MIRROR_REPO_URL:?}"
-mirror_username="${MIRROR_USERNAME:?}"
-mirror_token="${MIRROR_TOKEN:?}"
-
-repo_path=""
-for candidate in \
-  "/data/git/repositories/${target_owner}/${target_repo}.git" \
-  "/data/git/gitea-repositories/${target_owner}/${target_repo}.git"
-do
-  if [ -d "${candidate}" ]; then
-    repo_path="${candidate}"
-    break
-  fi
-done
-if [ -z "${repo_path}" ]; then
-  repo_path="$(find /data/git -type d -path "*/${target_owner}/${target_repo}.git" 2>/dev/null | head -n 1 || true)"
-fi
-if [ -z "${repo_path}" ] || [ ! -d "${repo_path}" ]; then
-  echo "missing repo path ${repo_path}" >&2
-  exit 1
-fi
-
-hooks_dir="${repo_path}/hooks"
-mkdir -p "${hooks_dir}"
-
-printf '%s' "${mirror_username}" >"${hooks_dir}/.github-mirror.username"
-printf '%s' "${mirror_token}" >"${hooks_dir}/.github-mirror.password"
-printf '%s' "${mirror_repo_url}" >"${hooks_dir}/.github-mirror.url"
-chmod 0600 "${hooks_dir}/.github-mirror.username" "${hooks_dir}/.github-mirror.password" "${hooks_dir}/.github-mirror.url"
-
-cat >"${hooks_dir}/.github-mirror-askpass.sh" <<'EOF_ASKPASS'
-#!/bin/sh
-hooks_dir="$(dirname "$0")"
-case "$1" in
-  *sername*) cat "${hooks_dir}/.github-mirror.username" ;;
-  *) cat "${hooks_dir}/.github-mirror.password" ;;
-esac
-EOF_ASKPASS
-chmod 0700 "${hooks_dir}/.github-mirror-askpass.sh"
-
-cat >"${hooks_dir}/post-receive" <<'EOF_HOOK'
-#!/bin/sh
-set -eu
-(
-  hooks_dir="$(dirname "$0")"
-  repo_dir="$(dirname "${hooks_dir}")"
-  export GIT_TERMINAL_PROMPT=0
-  export GIT_ASKPASS="${hooks_dir}/.github-mirror-askpass.sh"
-  git -C "${repo_dir}" push --mirror "$(cat "${hooks_dir}/.github-mirror.url")" >>"${hooks_dir}/github-mirror.log" 2>&1 || true
-) &
-EOF_HOOK
-chmod 0700 "${hooks_dir}/post-receive"
-
-mirror_url="$(cat "${hooks_dir}/.github-mirror.url")"
-export GIT_TERMINAL_PROMPT=0
-export GIT_ASKPASS="${hooks_dir}/.github-mirror-askpass.sh"
-if ! git -C "${repo_path}" push --mirror "${mirror_url}" >>"${hooks_dir}/github-mirror.log" 2>&1; then
-  echo "initial mirror push failed for ${mirror_url}" >&2
-  tail -n 20 "${hooks_dir}/github-mirror.log" >&2 || true
-  exit 1
-fi
-EOF
-  then
-    echo "[phase50] failed to configure Gitea push mirror" >&2
-    return 1
-  fi
-
-  echo "[phase50] configured Gitea push mirror to ${mirror_repo_url}"
+  configure_gitea_push_mirror_from_openbao "phase50" "$@"
 }
-
 ensure_gitea_actions_runner() {
   local runner_token="${1:-}"
   local instance_url="${2:-${GITEA_INTERNAL_URL:-}}"
@@ -2323,6 +1338,8 @@ kind: Deployment
 metadata:
   name: gitea-actions-runner
   namespace: gitea
+  annotations:
+    secret.reloader.stakater.com/reload: gitea-actions-runner
 spec:
   replicas: 1
   selector:
@@ -2381,116 +1398,7 @@ EOF
   echo "[phase50] ensured Gitea actions runner deployment with labels ${runner_labels}"
 }
 
-apply_bootstrap_gitea_application() {
-  "${kubectl_bin}" create namespace gitea --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  cat <<EOF | "${kubectl_bin}" -n argocd apply -f -
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: gitea
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: ${GITEA_CHART_REPO}
-    chart: gitea
-    targetRevision: "12.5.0"
-    helm:
-      values: |
-        podSecurityContext:
-          fsGroup: 1000
-          fsGroupChangePolicy: OnRootMismatch
 
-        strategy:
-          type: Recreate
-
-        persistence:
-          enabled: true
-          accessModes:
-            - ReadWriteOnce
-          size: 10Gi
-          storageClass: longhorn
-          annotations:
-            helm.sh/resource-policy: keep
-
-        postgresql-ha:
-          enabled: false
-
-        postgresql:
-          enabled: true
-          persistence:
-            enabled: true
-            size: 10Gi
-            storageClass: longhorn
-            annotations:
-              helm.sh/resource-policy: keep
-
-        ingress:
-          enabled: false
-
-        gitea:
-          config:
-            cache:
-              ADAPTER: memory
-            session:
-              PROVIDER: memory
-            queue:
-              TYPE: level
-            server:
-              DOMAIN: $(python3 - "${GITEA_CANONICAL_URL}" <<'PY'
-import sys
-from urllib.parse import urlparse
-url = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-host = urlparse(url).hostname if url else ""
-print(host or "gitea.local")
-PY
-)
-              ROOT_URL: ${GITEA_CANONICAL_URL}
-          admin:
-            existingSecret: gitea-admin-secret
-            passwordMode: initialOnlyRequireReset
-
-        valkey-cluster:
-          enabled: false
-
-        valkey:
-          enabled: false
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: gitea
-  ignoreDifferences:
-    - group: ""
-      kind: PersistentVolumeClaim
-      name: gitea-shared-storage
-      namespace: gitea
-      jsonPointers:
-        - /spec/volumeName
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
-      - RespectIgnoreDifferences=true
-EOF
-}
-
-wait_for_gitea_application() {
-  local retries="${1:-60}"
-  local delay="${2:-5}"
-  local attempt=1
-
-  while (( attempt <= retries )); do
-    if "${kubectl_bin}" -n argocd get application gitea >/dev/null 2>&1 && \
-       "${kubectl_bin}" -n gitea get deployment gitea >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep "${delay}"
-    attempt=$((attempt + 1))
-  done
-
-  return 1
-}
 
 seed_gitea_bootstrap_repo() {
   local admin_password="${1:-}"
@@ -3294,21 +2202,6 @@ require_gitea_golden_path() {
   fi
 }
 
-resolve_host_ips() {
-  local host="${1:?host}"
-
-  if command -v getent >/dev/null 2>&1; then
-    getent ahostsv4 "${host}" 2>/dev/null | awk 'NF {print $1}' | sort -u
-    return 0
-  fi
-
-  if command -v host >/dev/null 2>&1; then
-    host "${host}" 2>/dev/null | awk '/has address/ {print $NF}' | sort -u
-    return 0
-  fi
-
-  fail_local_requirement "no DNS lookup tool available (need getent or host) to validate .local domain access"
-}
 
 require_local_domain_access() {
   local host="${1:?host}"
@@ -3443,53 +2336,7 @@ gitea_local_domain_retry_count() {
   printf '%s' "${retries}"
 }
 
-derive_local_domain() {
-  local domain="${1:-}"
-  python3 - <<'PY' "${domain}"
-import sys
-d=(sys.argv[1] if len(sys.argv) > 1 else "").strip().lower().strip(".")
-if not d:
-    print("local")
-    raise SystemExit(0)
-parts=[p for p in d.split(".") if p]
-if len(parts) <= 1:
-    print(f"{parts[0]}.local" if parts else "local")
-else:
-    print(".".join(parts[:-1] + ["local"]))
-PY
-}
 
-normalize_gitea_repo_url() {
-  local repo_url="${1:-}"
-  python3 - <<'PY' "${repo_url}" "${GITEA_INTERNAL_URL}" "${GITEA_INTERNAL_SERVICE_NAME}"
-import sys
-from urllib.parse import urlparse
-
-repo_url = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-internal_base = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
-service_name = (sys.argv[3] if len(sys.argv) > 3 else "").strip().lower()
-if not repo_url or not internal_base:
-    print(repo_url, end="")
-    raise SystemExit(0)
-
-parsed = urlparse(repo_url)
-host = (parsed.hostname or "").strip().lower()
-path = (parsed.path or "").lstrip("/")
-
-known_gitea_hosts = (
-    host.startswith("gitea.")
-    or host == f"{service_name}.gitea.svc"
-    or host.startswith(f"{service_name}.gitea.svc.")
-    or host == "127.0.0.1"
-    or all(part.isdigit() for part in host.split(".") if part) and host.count(".") == 3
-)
-
-if known_gitea_hosts and path.endswith(".git"):
-    print(internal_base.rstrip("/") + "/" + path, end="")
-else:
-    print(repo_url, end="")
-PY
-}
 
 if [[ -z "${CLUSTER_LOCAL_DOMAIN}" ]]; then
   CLUSTER_LOCAL_DOMAIN="$(derive_local_domain "${CLUSTER_DOMAIN}")"
@@ -3499,102 +2346,10 @@ if [[ -z "${GITEA_CANONICAL_URL}" ]]; then
   GITEA_CANONICAL_URL="http://gitea.${CLUSTER_LOCAL_DOMAIN}/"
 fi
 
-find_routing_frontdoor_service() {
-  if "${kubectl_bin}" -n kube-system get svc rke2-ingress-nginx-controller >/dev/null 2>&1; then
-    printf 'kube-system/rke2-ingress-nginx-controller'
-    return 0
-  fi
-  if "${kubectl_bin}" -n ingress-nginx get svc ingress-nginx-controller >/dev/null 2>&1; then
-    printf 'ingress-nginx/ingress-nginx-controller'
-    return 0
-  fi
-  local ns="" service_name=""
-  for ns in kube-system ingress-nginx; do
-    service_name="$(
-      "${kubectl_bin}" -n "${ns}" get svc \
-        -l 'app.kubernetes.io/name=ingress-nginx,app.kubernetes.io/component=controller' \
-        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
-        | head -n1 | tr -d '\r\n'
-    )"
-    if [[ -n "${service_name}" ]]; then
-      printf '%s/%s' "${ns}" "${service_name}"
-      return 0
-    fi
-  done
-  return 1
-}
 
-detect_ingress_controller_workload() {
-  local kind="" ns="" name="" line=""
-  for kind in ds deploy; do
-    line="$(
-      "${kubectl_bin}" get "${kind}" -A \
-        -l 'app.kubernetes.io/name=ingress-nginx,app.kubernetes.io/component=controller' \
-        -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"\n"}{end}' 2>/dev/null \
-        | head -n1 | tr -d '\r'
-    )"
-    if [[ -n "${line}" ]]; then
-      ns="${line%%|*}"
-      name="${line##*|}"
-      printf '%s|%s|%s' "${kind}" "${ns}" "${name}"
-      return 0
-    fi
-  done
-  return 1
-}
 
-detect_ingress_controller_pod() {
-  local line=""
-  line="$(
-    "${kubectl_bin}" get pods -A \
-      -l 'app.kubernetes.io/name=ingress-nginx,app.kubernetes.io/component=controller' \
-      -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"\n"}{end}' 2>/dev/null \
-      | head -n1 | tr -d '\r'
-  )"
-  if [[ -n "${line}" ]]; then
-    printf '%s' "${line}"
-    return 0
-  fi
 
-  line="$(
-    "${kubectl_bin}" get pods -A \
-      -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"\n"}{end}' 2>/dev/null \
-      | grep -E '^(kube-system|ingress-nginx)\|(rke2-)?ingress-nginx-controller([-].+)?$' \
-      | head -n1 | tr -d '\r'
-  )"
-  if [[ -n "${line}" ]]; then
-    printf '%s' "${line}"
-    return 0
-  fi
 
-  return 1
-}
-
-extract_ingress_controller_selector_yaml() {
-  local workload_kind="$1"
-  local workload_ns="$2"
-  local workload_name="$3"
-  "${kubectl_bin}" -n "${workload_ns}" get "${workload_kind}" "${workload_name}" \
-    -o jsonpath='{range $k,$v := .spec.selector.matchLabels}{"    "}{$k}{": "}{$v}{"\n"}{end}' 2>/dev/null \
-    | tr -d '\r'
-}
-
-extract_ingress_controller_selector_yaml_from_pod() {
-  local pod_ns="$1"
-  local pod_name="$2"
-  local key="" value="" selector_yaml=""
-  for key in app.kubernetes.io/name app.kubernetes.io/component app.kubernetes.io/instance app.kubernetes.io/part-of; do
-    value="$(
-      "${kubectl_bin}" -n "${pod_ns}" get pod "${pod_name}" \
-        -o jsonpath="{.metadata.labels['${key//./\\.}']}" 2>/dev/null \
-        | tr -d '\r'
-    )"
-    if [[ -n "${value}" ]]; then
-      selector_yaml="${selector_yaml}    ${key}: ${value}"$'\n'
-    fi
-  done
-  printf '%s' "${selector_yaml}"
-}
 
 ensure_routing_frontdoor_service() {
   local existing="" workload="" workload_kind="" workload_ns="" workload_name="" service_name="" selector_yaml="" pod_ref="" pod_ns="" pod_name=""
@@ -3782,9 +2537,22 @@ fi
 github_app_refresh_repo_auth
 
 if [[ "${PHASE50_MODE}" != "post-handoff" ]]; then
-argocd_admin_password="${ARGOCD_ADMIN_PASSWORD:-}"
+argocd_admin_password="$(read_openbao_app_field argocd/admin password "${openbao_token}" || true)"
+if [[ -z "${argocd_admin_password}" ]]; then
+  argocd_admin_password="${ARGOCD_ADMIN_PASSWORD:-}"
+fi
 if [[ -z "${argocd_admin_password}" && -n "${BOOTSTRAP_SECRET_DIR:-}" ]]; then
   argocd_admin_password="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_admin_password")"
+fi
+argocd_server_secret_key="$(read_openbao_app_field argocd/runtime server_secret_key "${openbao_token}" || true)"
+argocd_server_secret_key="${argocd_server_secret_key:-${ARGOCD_SERVER_SECRET_KEY:-}}"
+if [[ -z "${argocd_server_secret_key}" && -n "${BOOTSTRAP_SECRET_DIR:-}" ]]; then
+  argocd_server_secret_key="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_server_secret_key")"
+fi
+argocd_redis_password="$(read_openbao_app_field argocd/runtime redis_password "${openbao_token}" || true)"
+argocd_redis_password="${argocd_redis_password:-${ARGOCD_REDIS_PASSWORD:-}}"
+if [[ -z "${argocd_redis_password}" && -n "${BOOTSTRAP_SECRET_DIR:-}" ]]; then
+  argocd_redis_password="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/argocd_redis_password")"
 fi
 
 preferred_seed_repo_url="${GITEA_SEED_SOURCE_REPO_URL:-${ARGOCD_GITHUB_REPO_URL:-}}"
@@ -3794,8 +2562,14 @@ bootstrap_seed_repo_url="${preferred_seed_repo_url:-${ARGOCD_REPO_URL:-}}"
 bootstrap_seed_repo_branch="${preferred_seed_repo_branch:-${ARGOCD_REPO_BRANCH:-HEAD}}"
 bootstrap_seed_repo_token="${preferred_seed_repo_token:-}"
 
-gitea_repo_username_effective="$(read_k8s_secret_key gitea gitea-admin-secret username)"
-gitea_repo_password_effective="$(read_k8s_secret_key gitea gitea-admin-secret password)"
+gitea_repo_username_effective="$(read_openbao_app_field gitea/admin username "${openbao_token}" || true)"
+gitea_repo_password_effective="$(read_openbao_app_field gitea/admin password "${openbao_token}" || true)"
+if [[ -z "${gitea_repo_username_effective}" ]]; then
+  gitea_repo_username_effective="$(read_k8s_secret_key gitea gitea-admin-secret username)"
+fi
+if [[ -z "${gitea_repo_password_effective}" ]]; then
+  gitea_repo_password_effective="$(read_k8s_secret_key gitea gitea-admin-secret password)"
+fi
 if [[ -z "${gitea_repo_username_effective}" ]]; then
   gitea_repo_username_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_admin_username")"
 fi
@@ -3824,11 +2598,43 @@ fi
 if [[ -n "${RANCHER_CLOUDFLARED_TUNNEL_ID:-}" ]]; then
   write_secret_file rancher_cloudflared_tunnel_id "${RANCHER_CLOUDFLARED_TUNNEL_ID}"
 fi
-authentik_secret_key_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_secret_key")"
-authentik_postgresql_password_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_postgresql_password")"
-authentik_admin_username_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
-authentik_admin_password_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_password")"
-authentik_bootstrap_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_bootstrap_token")"
+# Database rotation is migration-gated, while Authentik's post-2023.6 signing
+# key and administrator credentials can safely follow OpenBao immediately.
+authentik_secret_key_effective="$(read_openbao_app_field authentik/encryption secret_key "${openbao_token}" || true)"
+authentik_postgresql_password_effective="$(read_k8s_secret_key authentik authentik-postgresql postgresql_password)"
+authentik_admin_username_effective="$(read_openbao_app_field authentik/admin admin_username "${openbao_token}" || true)"
+authentik_admin_password_effective="$(read_openbao_app_field authentik/admin bootstrap_password "${openbao_token}" || true)"
+authentik_bootstrap_token_effective="$(read_openbao_app_field authentik/admin bootstrap_token "${openbao_token}" || true)"
+if [[ -z "${authentik_secret_key_effective}" ]]; then
+  authentik_secret_key_effective="$(read_k8s_secret_key authentik authentik-encryption secret_key)"
+fi
+if [[ -z "${authentik_postgresql_password_effective}" ]]; then
+  authentik_postgresql_password_effective="$(read_openbao_app_field authentik/postgresql postgresql_password "${openbao_token}" || true)"
+fi
+if [[ -z "${authentik_admin_username_effective}" ]]; then
+  authentik_admin_username_effective="$(read_k8s_secret_key authentik authentik-admin admin_username)"
+fi
+if [[ -z "${authentik_admin_password_effective}" ]]; then
+  authentik_admin_password_effective="$(read_k8s_secret_key authentik authentik-admin bootstrap_password)"
+fi
+if [[ -z "${authentik_bootstrap_token_effective}" ]]; then
+  authentik_bootstrap_token_effective="$(read_k8s_secret_key authentik authentik-admin bootstrap_token)"
+fi
+if [[ -z "${authentik_secret_key_effective}" ]]; then
+  authentik_secret_key_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_secret_key")"
+fi
+if [[ -z "${authentik_postgresql_password_effective}" ]]; then
+  authentik_postgresql_password_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_postgresql_password")"
+fi
+if [[ -z "${authentik_admin_username_effective}" ]]; then
+  authentik_admin_username_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
+fi
+if [[ -z "${authentik_admin_password_effective}" ]]; then
+  authentik_admin_password_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_password")"
+fi
+if [[ -z "${authentik_bootstrap_token_effective}" ]]; then
+  authentik_bootstrap_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_bootstrap_token")"
+fi
 headlamp_admin_token_effective=""
 authentik_admin_source="local-backup"
 
@@ -3890,7 +2696,6 @@ if [[ -n "${authentik_secret_key_effective:-}" || -n "${authentik_admin_password
     "${authentik_bootstrap_token_effective}" || true
 fi
 
-ensure_homepage_widget_secret || true
 headlamp_admin_token_effective="$(ensure_headlamp_admin_token || true)"
 
 if [[ -n "${authentik_admin_username_effective:-}" ]]; then
@@ -4193,6 +2998,14 @@ if [[ -n "${argocd_admin_password}" ]]; then
 else
   echo "[phase50] ARGOCD_ADMIN_PASSWORD missing; Argo CD will use chart defaults." >&2
 fi
+if [[ -z "${argocd_server_secret_key}" ]]; then
+  fail_local_requirement "Argo CD server signing key is missing; rerun Phase 20 and Phase 40 before installing the control pair"
+fi
+if [[ -z "${argocd_redis_password}" ]]; then
+  fail_local_requirement "Argo CD Redis password is missing; rerun Phase 20 and Phase 40 before installing the control pair"
+fi
+export ARGOCD_SERVER_SECRET_KEY="${argocd_server_secret_key}"
+export ARGOCD_REDIS_PASSWORD="${argocd_redis_password}"
 
 if [[ "${PHASE50_RECONCILE_ONLY}" == "1" || "${PHASE50_RECONCILE_ONLY}" == "true" ]]; then
   echo "[phase50] reconcile-only mode: skipping Argo CD install playbook"
@@ -4225,7 +3038,10 @@ else
   run_or_fail \
     "failed configuring rke2 registry runtime for ansible-runner pulls" \
     ensure_ansible_runner_registry_runtime
-  gitea_runner_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
+  gitea_runner_token_effective="$(read_openbao_app_field gitea/actions-runner token "${openbao_token}" || true)"
+  if [[ -z "${gitea_runner_token_effective}" ]]; then
+    gitea_runner_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
+  fi
   run_or_fail \
     "failed ensuring Gitea actions runner deployment" \
     ensure_gitea_actions_runner \
@@ -4286,6 +3102,15 @@ else
   gitea_push_mirror_repo_url_effective="${GITEA_PUSH_MIRROR_REPO_URL:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_repo_url")}"
   gitea_push_mirror_username_effective="${GITEA_PUSH_MIRROR_USERNAME:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_username")}"
   gitea_push_mirror_token_effective="${GITEA_PUSH_MIRROR_TOKEN:-$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_push_mirror_token")}"
+  if [[ -n "${openbao_token}" ]]; then
+    openbao_push_mirror_token="$(read_openbao_app_field gitea/push-mirror token "${openbao_token}" || true)"
+    if [[ -n "${openbao_push_mirror_token}" ]]; then
+      gitea_push_mirror_token_effective="${openbao_push_mirror_token}"
+      gitea_push_mirror_repo_url_effective="$(read_openbao_app_field gitea/push-mirror remote_url "${openbao_token}" || true)"
+      gitea_push_mirror_username_effective="$(read_openbao_app_field gitea/push-mirror username "${openbao_token}" || true)"
+      gitea_push_mirror_enabled_effective="1"
+    fi
+  fi
   if [[ -z "${gitea_push_mirror_repo_url_effective}" ]] && [[ -n "${preferred_seed_repo_url:-}" ]] && repo_url_is_github "${preferred_seed_repo_url}"; then
     gitea_push_mirror_repo_url_effective="${preferred_seed_repo_url}"
   fi
@@ -4308,15 +3133,6 @@ else
       write_secret_file gitea_push_mirror_repo_url "${gitea_push_mirror_repo_url_effective}"
       write_secret_file gitea_push_mirror_username "${gitea_push_mirror_username_effective}"
       write_secret_file gitea_push_mirror_token "${gitea_push_mirror_token_effective}"
-      if [[ -n "${openbao_token}" ]]; then
-        retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-          env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-          bao kv patch secret/bootstrap/platform \
-            "gitea_push_mirror_enabled=1" \
-            "gitea_push_mirror_repo_url=${gitea_push_mirror_repo_url_effective}" \
-            "gitea_push_mirror_username=${gitea_push_mirror_username_effective}" \
-            "gitea_push_mirror_token=${gitea_push_mirror_token_effective}" >/dev/null 2>&1 || true
-      fi
       if ! configure_gitea_push_mirror \
         "${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
         "${GITEA_SEED_TARGET_REPO:-cluster}" \
@@ -4649,14 +3465,13 @@ EOF
     write_secret_file ingress_internal_vip "${internal_vip_eff}"
     write_secret_file ingress_external_vip "${external_vip_eff}"
 
-    # Store ingress VIP settings in-cluster as a normal Secret for audit/recovery export.
+    # Persist discovered network configuration without misclassifying it as a credential.
     cat <<EOF | "${kubectl_bin}" -n ingress apply -f - >/dev/null 2>&1 || true
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
   name: ingress-vip-config
-type: Opaque
-stringData:
+data:
   ingress_internal_vip: "${internal_vip_eff}"
   ingress_external_vip: "${external_vip_eff}"
   ingress_controller_service: "${routing_service_ref}"

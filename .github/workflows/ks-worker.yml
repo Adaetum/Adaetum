@@ -27,6 +27,10 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       KS_R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       KS_SHARED_TOKEN: ${{ secrets.KS_SHARED_TOKEN }}
       KS_UPLOAD_TOKEN: ${{ secrets.KS_UPLOAD_TOKEN }}
       KS_BASE_URL: ${{ secrets.KS_BASE_URL }}
@@ -118,7 +122,7 @@ jobs:
             '    };' \
             '' \
             '    const isoResolve = (file) => {' \
-            '      const allowed = [".ks", ".tar.gz", ".tgz", ".env"];' \
+            '      const allowed = [".iso", ".ks", ".tar.gz", ".tgz", ".env"];' \
             '      if (!allowed.some((ext) => file.endsWith(ext))) {' \
             '        return { error: "unsupported file type" };' \
             '      }' \
@@ -143,7 +147,9 @@ jobs:
             '        key = `${prefix}/${file}`;' \
             '      }' \
             '      let contentType = "application/octet-stream";' \
-            '      if (file.endsWith(".ks")) {' \
+            '      if (file.endsWith(".iso")) {' \
+            '        contentType = "application/x-iso9660-image";' \
+            '      } else if (file.endsWith(".ks")) {' \
             '        contentType = "text/plain";' \
             '      } else if (file.endsWith(".tar.gz") || file.endsWith(".tgz")) {' \
             '        contentType = "application/gzip";' \

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Trigger workflows that publish installer artifacts from the recovery repository.
+# It resolves credentials locally, then reports remote workflow results rather
+# than attempting to hide provider-side failures.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 

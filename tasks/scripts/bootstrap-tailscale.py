@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Create or validate the Tailscale tags, ACL ownership, and auth inputs for setup.
+
+The profile supplies the public tailnet/tag shape; this script performs the
+provider-side mutations needed to make a new break-glass node eligible to join.
+"""
 import argparse
 import base64
 import json
@@ -18,7 +23,6 @@ REQUIRED_TAG_OWNERS = {
   "tag:server": ["autogroup:admin", "tag:provisioner"],
   "tag:cluster": ["autogroup:admin", "tag:provisioner"],
   "tag:agent": ["autogroup:admin", "tag:provisioner"],
-  "tag:rke2": ["autogroup:admin", "tag:provisioner"],
   "tag:subnet-router": ["autogroup:admin", "tag:provisioner"],
   "tag:rancher": ["autogroup:admin", "tag:provisioner"],
 }
@@ -156,7 +160,7 @@ def ensure_required_tag_owners(
     policy_access = oauth_access_token(
       oauth_client_id,
       oauth_client_secret,
-      ["policy_file"],
+      ["policy_file", "devices:core:read", "devices:posture_attributes:read"],
     )
   elif user_token:
     policy_access = user_token
@@ -200,7 +204,7 @@ def oauth_access_token(client_id: str, client_secret: str, scopes):
   return token
 
 
-def validate_oauth_can_mint_key(client_id: str, client_secret: str, tags):
+def create_bootstrap_auth_key_with_oauth(client_id: str, client_secret: str, tags):
   access = oauth_access_token(client_id, client_secret, ["auth_keys"])
   key_payload = {
     "capabilities": {
@@ -213,8 +217,8 @@ def validate_oauth_can_mint_key(client_id: str, client_secret: str, tags):
         }
       }
     },
-    "expirySeconds": 120,
-    "description": "cluster setup oauth validation",
+    "expirySeconds": 86400,
+    "description": "Adaetum first-node bootstrap",
   }
   code, parsed, body = _request(
     "POST",
@@ -223,7 +227,33 @@ def validate_oauth_can_mint_key(client_id: str, client_secret: str, tags):
     payload=key_payload,
   )
   if code not in (200, 201) or not parsed.get("key"):
-    raise RuntimeError(f"OAuth key mint validation failed (HTTP {code}): {body[:600]}")
+    raise RuntimeError(f"OAuth bootstrap key creation failed (HTTP {code}): {body[:600]}")
+  return parsed["key"]
+
+
+def create_oauth_client_with_bearer(bearer_token: str, tailnet: str, tags):
+  payload = {
+    "keyType": "client",
+    "description": "Adaetum node enrollment",
+    "scopes": [
+      "auth_keys",
+      "policy_file",
+      "devices:core:read",
+      "devices:posture_attributes:read",
+    ],
+    "tags": tags,
+  }
+  code, parsed, body = _request(
+    "POST",
+    f"{TS_API_BASE}/api/v2/tailnet/{tailnet}/keys",
+    bearer_token=bearer_token,
+    payload=payload,
+  )
+  client_id = parsed.get("id", "")
+  client_secret = parsed.get("key", "")
+  if code not in (200, 201) or not client_id or not client_secret:
+    raise RuntimeError(f"OAuth client creation failed (HTTP {code}): {body[:600]}")
+  return client_id, client_secret
 
 
 def create_auth_key_with_bearer(bearer_token: str, tags):
@@ -258,28 +288,61 @@ def create_auth_key_with_bearer(bearer_token: str, tags):
 def main():
   p = argparse.ArgumentParser()
   p.add_argument("--user-token", default="")
+  p.add_argument("--user-token-stdin", action="store_true")
+  p.add_argument("--oauth-credentials-stdin", action="store_true")
   p.add_argument("--tailnet", default="")
   p.add_argument("--oauth-client-id", default="")
   p.add_argument("--oauth-client-secret", default="")
   p.add_argument("--cluster-tag", default="")
+  p.add_argument("--prepare-policy-only", action="store_true")
+  p.add_argument("--create-oauth-client", action="store_true")
+  p.add_argument("--validate-oauth-only", action="store_true")
   args = p.parse_args()
 
   tags = build_default_tags(args.cluster_tag)
   client_id = (args.oauth_client_id or "").strip()
   client_secret = (args.oauth_client_secret or "").strip()
+  stdin_value = sys.stdin.read() if args.user_token_stdin or args.oauth_credentials_stdin else ""
+  user_token = (stdin_value if args.user_token_stdin else args.user_token or "").strip()
+  if args.oauth_credentials_stdin:
+    credential_lines = stdin_value.splitlines()
+    if len(credential_lines) < 2:
+      raise RuntimeError("OAuth client ID and secret are required on stdin.")
+    client_id = credential_lines[0].strip()
+    client_secret = credential_lines[1].strip()
+
+  if args.validate_oauth_only:
+    if not client_id or not client_secret:
+      raise RuntimeError("OAuth client ID and secret are required for validation.")
+    oauth_access_token(client_id, client_secret, ["auth_keys"])
+    print(f"TAILSCALE_OAUTH_CLIENT_ID={client_id}")
+    return
 
   ensure_required_tag_owners(
     args.tailnet,
     oauth_client_id=client_id,
     oauth_client_secret=client_secret,
-    user_token=(args.user_token or "").strip(),
+    user_token=user_token,
   )
+
+  if args.prepare_policy_only:
+    print(f"TAILSCALE_CLUSTER_TAG={normalize_tag(args.cluster_tag or DEFAULT_CLUSTER_TAG)}")
+    print(f"TAILSCALE_ADVERTISE_TAGS={','.join(tags)}")
+    return
+
+  if args.create_oauth_client:
+    if not user_token:
+      raise RuntimeError("The temporary Tailscale API access token is required to create the OAuth client.")
+    client_id, client_secret = create_oauth_client_with_bearer(user_token, args.tailnet, tags)
+    print(f"TAILSCALE_OAUTH_CLIENT_ID={client_id}")
+    print(f"TAILSCALE_OAUTH_CLIENT_SECRET={client_secret}")
+    return
 
   output_authkey = ""
   if client_id and client_secret:
-    validate_oauth_can_mint_key(client_id, client_secret, tags)
-  elif (args.user_token or "").strip():
-    output_authkey = create_auth_key_with_bearer((args.user_token or "").strip(), tags)
+    output_authkey = create_bootstrap_auth_key_with_oauth(client_id, client_secret, tags)
+  elif user_token:
+    output_authkey = create_auth_key_with_bearer(user_token, tags)
   else:
     raise RuntimeError(
       "Missing OAuth credentials and TAILSCALE_USER_API_TOKEN. "

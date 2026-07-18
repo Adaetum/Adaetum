@@ -11,7 +11,7 @@ services, and disabling swap.
 - Applies Kubernetes networking sysctls via `/etc/sysctl.d/99-k8s.conf` and `sysctl -w`.
 - Disables firewalld to avoid pod network isolation on single-node bootstrap.
 - Starts and enables required services (chronyd, iscsid).
-- Ensures wired interfaces are managed by NetworkManager with persistent
+- Ensures physical wired interfaces are managed by NetworkManager with persistent
   DHCP/autoconnect profiles (`ks-ipv4-*`).
 - Disables swap and comments swap entries in `/etc/fstab` (optional).
 

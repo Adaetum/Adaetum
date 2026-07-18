@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Run Ansible syntax checks with the repository's own config and role paths."""
 
 import os
 import subprocess

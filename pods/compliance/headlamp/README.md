@@ -11,13 +11,17 @@ What it does
   through the shared nginx ingress manifests in `pods/ingress/nginx-routing`.
 
 Access
-- Public host: `headlamp.example.services`
-- Internal host: `headlamp.example.local`
+- Public host: `headlamp.<cluster domain>`
+- Internal host: `headlamp.<local domain>`
 - Authentication is token-based unless you later wire an OIDC provider in
   front of it.
 - Bootstrap exports a token for the chart-owned `headlamp` service account, stores it in the
   local bootstrap secret set, and persists it into OpenBao so it is included in
   exported recovery materials.
+
+The public and local domains are rendered from
+[`platform.yaml`](../../../platform.yaml). Change the profile and run
+`task platform:render`; do not edit rendered ingress files directly.
 
 Notes
 - The Argo CD app definition lives in [`../headlamp.app.yaml`](../headlamp.app.yaml).

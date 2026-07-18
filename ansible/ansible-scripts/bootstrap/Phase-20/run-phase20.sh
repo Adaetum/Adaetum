@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Phase 20 creates the temporary local secret authority required before OpenBao
+# is available. Existing non-empty files are intentionally preserved so reruns
+# do not desynchronize installed components from their bootstrap credentials.
+
 BOOTSTRAP_SECRET_DIR="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
 BOOTSTRAP_OWNER="${BOOTSTRAP_OWNER:-root:root}"
 
@@ -63,9 +67,18 @@ write_literal_secret() {
 write_secret "rke2_token" 48
 write_secret "rancher_admin_password" 24
 write_secret "argocd_admin_password" 24
+write_secret "argocd_server_secret_key" 48
+write_secret "argocd_redis_password" 24
 write_secret "gitea_admin_password" 24
 write_secret "gitea_runner_token" 32
+write_secret "gitea_secret_key" 48
+write_secret "gitea_internal_token" 48
+write_secret "gitea_jwt_secret" 48
 write_secret "grafana_admin_password" 24
+write_secret "grafana_secret_key" 48
+# Homepage uses a dedicated Grafana Viewer. Its password is independent of the
+# Grafana administrator so either identity can rotate without widening access.
+write_secret "homepage_grafana_password" 24
 write_secret "authentik_secret_key" 48
 write_secret "authentik_postgresql_password" 24
 write_secret "authentik_admin_password" 24

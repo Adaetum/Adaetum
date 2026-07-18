@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Interactively fetch and decrypt a recovery backup. This is intentionally a
+# recovery utility: it reads local credentials but never changes cluster state.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
+# shellcheck source=tasks/scripts/gum-ui.sh
+. "${repo_root}/tasks/scripts/gum-ui.sh"
+
+if adaetum_gum_enabled; then
+  adaetum_gum_heading "Backup recovery"
+  gum style --foreground 245 "Checkout: ${repo_root}"
+fi
 
 normalize_value() {
   local value="${1:-}"
@@ -25,6 +35,11 @@ choose_from_list() {
   if [ "${#items[@]}" -eq 0 ]; then
     echo "No options available for ${label}." >&2
     return 1
+  fi
+
+  if adaetum_gum_enabled; then
+    adaetum_gum_choose "${label}" "${items[@]}"
+    return 0
   fi
 
   echo "" >&2
@@ -84,8 +99,12 @@ resolve_passphrase() {
     pass="$(python3 -c 'import base64,sys; sys.stdout.write(base64.b64decode(sys.argv[1].strip().encode()).decode("utf-8"))' "${BOOTSTRAP_BACKUP_PASSPHRASE_B64}" 2>/dev/null || true)"
   fi
   if [ -z "${pass}" ]; then
-    read -r -s -p "Backup passphrase (input hidden): " pass
-    echo ""
+    if adaetum_gum_enabled; then
+      pass="$(adaetum_gum_input "Backup passphrase" "" 1)" || exit 1
+    else
+      read -r -s -p "Backup passphrase (input hidden): " pass
+      echo ""
+    fi
   fi
   if [ -z "${pass}" ]; then
     echo "Backup passphrase is required." >&2
@@ -110,6 +129,10 @@ find_7z_bin() {
   fi
   if command -v 7za >/dev/null 2>&1; then
     command -v 7za
+    return 0
+  fi
+  if command -v 7zz >/dev/null 2>&1; then
+    command -v 7zz
     return 0
   fi
   # Common native Windows install path (when running from Git Bash).

@@ -16,6 +16,26 @@ persistence:
   annotations:
     helm.sh/resource-policy: keep
 
+# The recovery mirror hook reads this projected delivery Secret for every
+# push. External Secrets refreshes it from OpenBao, so provider-token rotation
+# never writes a credential into the repository PVC or requires a pod restart.
+extraVolumes:
+  - name: push-mirror-credential
+    secret:
+      secretName: gitea-push-mirror
+      optional: true
+      items:
+        - key: remote_url
+          path: remote_url
+        - key: username
+          path: username
+        - key: token
+          path: token
+extraContainerVolumeMounts:
+  - name: push-mirror-credential
+    mountPath: /var/run/adaetum/push-mirror
+    readOnly: true
+
 # Make the bundled database persistence explicit as part of the desired state.
 # Do not rely on chart defaults for data retention.
 postgresql-ha:
@@ -38,6 +58,37 @@ ingress:
 # Keep these aligned with the Phase 50 local bootstrap install so Argo takeover
 # is a no-op instead of rolling Gitea onto a different inline config secret.
 gitea:
+  # Reconcile the internal admin account from the OpenBao-backed Secret on
+  # every pod start. Database delivery changes happen only after PostgreSQL is
+  # updated, then Reloader starts Gitea with both current credentials.
+  podAnnotations:
+    secret.reloader.stakater.com/reload: gitea-admin-secret,gitea-postgresql,gitea-encryption,gitea-runtime
+  additionalConfigFromEnvs:
+    - name: GITEA__DATABASE__PASSWD
+      valueFrom:
+        secretKeyRef:
+          name: gitea-postgresql
+          key: password
+    - name: GITEA__security__SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: gitea-encryption
+          key: secret_key
+    - name: GITEA__security__INTERNAL_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: gitea-runtime
+          key: internal_token
+    - name: GITEA__server__LFS_JWT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: gitea-runtime
+          key: jwt_secret
+    - name: GITEA__oauth2__JWT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: gitea-runtime
+          key: jwt_secret
   config:
     # Keep bootstrap on the single-node/local defaults. The bundled Valkey init
     # path has been failing before the gitea container starts, so avoid that
@@ -49,11 +100,15 @@ gitea:
     queue:
       TYPE: level
     server:
-      DOMAIN: gitea.example.local
-      ROOT_URL: http://gitea.example.local/
+      DOMAIN: gitea.mudazukai.cloud.local
+      ROOT_URL: http://gitea.mudazukai.cloud.local/
+    oauth2:
+      # A symmetric key makes OAuth signing state recoverable from OpenBao
+      # instead of leaving an auto-generated private key only on the PVC.
+      JWT_SIGNING_ALGORITHM: HS256
   admin:
     existingSecret: gitea-admin-secret
-    passwordMode: initialOnlyRequireReset
+    passwordMode: keepUpdated
 
 # Break-glass clusters are single-node initially. Keep the bootstrap install free
 # of external cache/session/queue dependencies so a fresh ISO install can converge

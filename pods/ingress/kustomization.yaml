@@ -1,6 +1,7 @@
 resources:
   - ingress-cluster-config.yaml
   - nginx-controller-config.yaml
+  - external-dns/external-secret.yaml
   - external-dns/deployment.yaml
   - external-dns/rbac.yaml
   - nginx-routing/gitea-ingress.yaml
@@ -122,16 +123,6 @@ replacements:
           name: authentik-outpost-hosts
         fieldPaths:
           - spec.rules.1.host
-  - source:
-      kind: ConfigMap
-      name: ingress-cluster-config
-      fieldPath: data.AUTHENTIK_LEGACY_LOCAL_HOST
-    targets:
-      - select:
-          kind: Ingress
-          name: authentik-ui
-        fieldPaths:
-          - spec.rules.2.host
   - source:
       kind: ConfigMap
       name: ingress-cluster-config

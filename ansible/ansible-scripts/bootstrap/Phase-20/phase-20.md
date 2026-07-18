@@ -40,12 +40,12 @@ The design rule for Phase 20 is:
 
 ## Current State
 
-Today, [`run-phase20.sh`](/c:/Users/James/Documents/GO/Cluster/ansible/ansible-scripts/bootstrap/Phase-20/run-phase20.sh)
+Today, [`run-phase20.sh`](run-phase20.sh)
 already behaves mostly like this intended design.
 
 It currently:
 
-- creates and permissions [`BOOTSTRAP_SECRET_DIR`](/c:/Users/James/Documents/GO/Cluster/ansible/ansible-scripts/bootstrap/Phase-20/run-phase20.sh)
+- creates and permissions [`BOOTSTRAP_SECRET_DIR`](run-phase20.sh)
 - generates a fixed set of bootstrap secrets into that directory
 - writes fixed literal values such as `authentik_admin_username`
 - skips existing non-empty files so reruns are stable
@@ -140,4 +140,3 @@ This Phase 20 design is successful when:
 - the doc explains that the local secret directory is how pre-OpenBao phases
   share state
 - the doc preserves the later handoff to OpenBao in Phase 40
-

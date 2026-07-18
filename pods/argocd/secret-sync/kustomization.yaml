@@ -1,0 +1,4 @@
+resources:
+  - external-secrets.yaml
+  - admin-external-secret.yaml
+  - admin-rotation.yaml

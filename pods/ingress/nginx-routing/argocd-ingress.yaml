@@ -14,7 +14,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: argocd.example.local
+    - host: argocd.mudazukai.cloud.local
       http:
         paths:
           - path: /

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Reject example placeholders from install artifacts unless a maintainer opts in."""
 from __future__ import annotations
 
 import os

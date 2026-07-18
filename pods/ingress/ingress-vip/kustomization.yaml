@@ -2,6 +2,6 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: ingress
 resources:
-  - ingress-vip-config-secret.yaml
+  - ingress-vip-config.yaml
   - rbac.yaml
   - cronjob.yaml

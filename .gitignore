@@ -6,6 +6,7 @@ ansible/node-inventory.yml
 *.log
 .fact_cache/
 .cache/
+.adaetum/
 
 # Build outputs
 dist/

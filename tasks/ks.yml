@@ -692,7 +692,8 @@ tasks:
     internal: true
     desc: Interactive R2 logs wizard (select node, download all logs to dist)
     cmds:
-      - cmd: ./tasks/scripts/download-logs-interactive.sh
+      # Invoke Bash explicitly: archives and some checkouts do not preserve script mode.
+      - cmd: bash ./tasks/scripts/download-logs-interactive.sh
         platforms: [linux, darwin]
       - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/download-logs-interactive.sh
         platforms: [windows]
@@ -962,6 +963,10 @@ tasks:
             command -v 7za
             return 0
           fi
+          if command -v 7zz >/dev/null 2>&1; then
+            command -v 7zz
+            return 0
+          fi
           if [ -x "/c/Program Files/7-Zip/7z.exe" ]; then
             printf '%s\n' "/c/Program Files/7-Zip/7z.exe"
             return 0
@@ -1054,6 +1059,10 @@ tasks:
           fi
           if command -v 7za >/dev/null 2>&1; then
             command -v 7za
+            return 0
+          fi
+          if command -v 7zz >/dev/null 2>&1; then
+            command -v 7zz
             return 0
           fi
           if [ -x "/c/Program Files/7-Zip/7z.exe" ]; then

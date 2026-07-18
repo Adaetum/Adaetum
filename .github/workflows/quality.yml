@@ -1,0 +1,42 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+      - name: Install quality tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          python3 -m pip install ansible-lint==25.1.3 pyyaml ruff==0.11.0 yamllint==1.35.1
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          go install github.com/gitleaks/gitleaks/v8@v8.24.3
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
+      - name: Enforced profile, secret, and workflow checks
+        run: |
+          python3 tasks/scripts/validate-platform-profile.py --profile platform.yaml --self-test
+          actionlint
+          gitleaks git --redact --no-banner
+      - name: Advisory broader quality baseline
+        continue-on-error: true
+        run: |
+          ruff check tasks .validator ansible
+          yamllint .
+          find ansible tasks -type f -name '*.sh' -print0 | xargs -0 -r shellcheck
+          ansible-lint ansible/playbooks
+          find pods -type f \( -name '*.yaml' -o -name '*.yml' \) ! -name '*.tmpl' -print0 | xargs -0 -r kubeconform -ignore-missing-schemas -summary

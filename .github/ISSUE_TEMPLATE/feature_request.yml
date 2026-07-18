@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a scoped improvement to Adaetum.
+labels: ["kind/feature", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and homelab use case
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and alternatives
+    validations:
+      required: true
+  - type: textarea
+    id: fit
+    attributes:
+      label: Why this belongs in Adaetum now
+      description: Identify the affected source of truth, the smallest useful scope, and why existing Adaetum or upstream tooling is insufficient.
+    validations:
+      required: true

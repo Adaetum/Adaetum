@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Ensure every rendered pod template is declared in the renderer inventory."""
 from __future__ import annotations
 
 import importlib.util
