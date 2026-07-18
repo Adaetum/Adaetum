@@ -369,8 +369,8 @@ mint_argocd_widget_key_phase90() {
     return 1
   fi
 
-  if ! retry_cmd 30 10 \
-    "${kubectl_bin}" -n argocd rollout status deploy/argocd-server --timeout=30s >/dev/null; then
+  if ! bootstrap_wait_for_deployment_rollout \
+    "${kubectl_bin}" argocd argocd-server argocd-server 'app.kubernetes.io/name=argocd-server'; then
     echo "[phase90] Argo CD widget token mint failed: argocd-server not ready in time" >&2
     return 1
   fi
@@ -422,8 +422,8 @@ mint_gitea_widget_auth_phase90() {
     return 1
   fi
 
-  if ! retry_cmd 30 10 \
-    "${kubectl_bin}" -n gitea rollout status deploy/gitea --timeout=30s >/dev/null; then
+  if ! bootstrap_wait_for_deployment_rollout \
+    "${kubectl_bin}" gitea gitea gitea 'app.kubernetes.io/name=gitea'; then
     echo "[phase90] Gitea widget token mint failed: gitea deployment not ready in time" >&2
     return 1
   fi
@@ -480,8 +480,8 @@ ensure_grafana_admin_password_phase90() {
     return 1
   fi
 
-  if ! retry_cmd 30 10 \
-    "${kubectl_bin}" -n observability rollout status deploy/grafana --timeout=30s >/dev/null; then
+  if ! bootstrap_wait_for_deployment_rollout \
+    "${kubectl_bin}" observability grafana grafana 'app.kubernetes.io/name=grafana'; then
     echo "[phase90] Grafana deployment did not become ready in time" >&2
     return 1
   fi
@@ -663,8 +663,10 @@ ensure_homepage_widget_secrets_phase90() {
 
   if [[ "${secret_before}" != "${secret_after}" ]]; then
     "${kubectl_bin}" -n homepage rollout restart deploy/homepage >/dev/null
-    retry_cmd 30 10 \
-      "${kubectl_bin}" -n homepage rollout status deploy/homepage --timeout=30s >/dev/null || true
+    if ! bootstrap_wait_for_deployment_rollout \
+      "${kubectl_bin}" homepage homepage homepage 'app.kubernetes.io/name=homepage'; then
+      echo "[phase90] Homepage restart did not become ready; diagnostics were captured" >&2
+    fi
     echo "[phase90] restarted Homepage deployment to pick up refreshed widget secrets"
   fi
 
@@ -745,8 +747,8 @@ ensure_authentik_admin_password_phase90() {
     return 1
   fi
 
-  if ! retry_cmd 30 10 \
-    "${kubectl_bin}" -n authentik rollout status "deploy/${deployment_name}" --timeout=30s >/dev/null; then
+  if ! bootstrap_wait_for_deployment_rollout \
+    "${kubectl_bin}" authentik "${deployment_name}" authentik 'app.kubernetes.io/name=authentik'; then
     echo "[phase90] Authentik deployment ${deployment_name} did not become ready in time" >&2
     return 1
   fi

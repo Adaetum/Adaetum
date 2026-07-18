@@ -74,6 +74,8 @@ export BOOTSTRAP_PHASE_STATUS_FILE
 BOOTSTRAP_PROGRESS_RUN_STARTED_AT="$(date +%s)"
 BOOTSTRAP_PROGRESS_CURRENT_PHASE_KEY=""
 BOOTSTRAP_PROGRESS_CURRENT_PHASE_STARTED_AT=""
+BOOTSTRAP_STATUS_LOG_MONITOR_PID=""
+BOOTSTRAP_STATUS_LOG_MONITOR_DONE_FILE=""
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/bootstrap" && pwd -P)"
 # shellcheck disable=SC1091
 . "${script_dir}/diagnostics.sh"
@@ -112,6 +114,41 @@ phase_position_for_id() {
   esac
 }
 
+# These are deliberately conservative first-run baselines, taken from a
+# completed single-node recovery run. They are estimates rather than deadlines:
+# slow hardware, image pulls, or provider APIs can legitimately exceed them.
+# The console subtracts live elapsed time, so its total ETA naturally improves
+# as earlier phases complete faster than this baseline.
+phase_baseline_seconds_for_id() {
+  case "${1:-}" in
+    10) printf '30' ;;   # local validation
+    20|30) printf '300' ;; # one Ansible playbook split into two visible gates
+    40) printf '600' ;;  # OpenBao initialization and synchronization
+    50) printf '420' ;;  # Argo CD and Gitea control pair
+    60) printf '600' ;;  # repository seed and GitOps handoff
+    70) printf '720' ;;  # application realization, image build, checks
+    90) printf '420' ;;  # late reconciliation
+    99) printf '120' ;;  # export and temporary-authority removal
+    *) printf '0' ;;
+  esac
+}
+
+phase_remaining_baseline_seconds_for_id() {
+  # Phase 20 and 30 are views of one playbook. Do not double-count them in the
+  # customer-facing total estimate.
+  case "${1:-}" in
+    10) printf '3210' ;;
+    20|30) printf '3180' ;;
+    40) printf '2880' ;;
+    50) printf '2280' ;;
+    60) printf '1860' ;;
+    70) printf '1260' ;;
+    90) printf '540' ;;
+    99) printf '120' ;;
+    *) printf '0' ;;
+  esac
+}
+
 phase_label_for_id() {
   case "${1:-}" in
     10) printf 'fast-fail validation gate' ;;
@@ -128,6 +165,31 @@ phase_label_for_id() {
   esac
 }
 
+phase_detail_for_status() {
+  local phase_id="${1:-0}"
+  local phase_state="${2:-STARTING}"
+
+  # The phase label is intentionally short because it is the stable "Now"
+  # line in the operator console. Keep this companion text action-oriented so
+  # the Detail line adds information instead of repeating the phase name.
+  case "${phase_id}:${phase_state}" in
+    0:STARTING|0:RUNNING) printf 'Preparing the bootstrap runtime and phase workspace' ;;
+    10:STARTING|10:RUNNING) printf 'Checking local prerequisites and required cluster tooling' ;;
+    20:STARTING|20:RUNNING) printf 'Establishing node-local bootstrap secrets and control access' ;;
+    30:STARTING|30:RUNNING) printf 'Applying operating-system and platform configuration through Ansible' ;;
+    40:STARTING|40:RUNNING) printf 'Initializing OpenBao, policies, and the secret-authority transition' ;;
+    50:STARTING|50:RUNNING) printf 'Starting the minimal Argo CD and Gitea control services' ;;
+    60:STARTING|60:RUNNING) printf 'Seeding the recovery repository and handing configuration to GitOps' ;;
+    70:STARTING|70:RUNNING) printf 'Waiting for GitOps applications to reconcile into the cluster' ;;
+    90:STARTING|90:RUNNING) printf 'Reconciling live cluster state and service readiness' ;;
+    99:STARTING|99:RUNNING) printf 'Exporting recovery material and removing temporary bootstrap authority' ;;
+    100:SUCCESS) printf 'First-boot bootstrap completed; finalizing the node for normal operation' ;;
+    *:SUCCESS) printf 'Phase completed successfully; preparing the next bootstrap stage' ;;
+    *:FAILED|*:ERROR) printf 'Phase stopped; inspect the phase log and recovery guidance below' ;;
+    *) printf 'Waiting for the next bootstrap status update' ;;
+  esac
+}
+
 bootstrap_phase_status_write() {
   local phase_id="${1:-0}"
   local phase_key="${2:-pre-bootstrap}"
@@ -137,6 +199,8 @@ bootstrap_phase_status_write() {
   local phase_log_path="${6:-}"
   local phase_total="10"
   local phase_position=""
+  local phase_baseline_seconds=""
+  local total_remaining_baseline_seconds=""
   local status_dir=""
   local tmp_file=""
   local now=""
@@ -148,16 +212,13 @@ bootstrap_phase_status_write() {
   fi
 
   phase_position="$(phase_position_for_id "${phase_id}")"
+  phase_baseline_seconds="$(phase_baseline_seconds_for_id "${phase_id}")"
+  total_remaining_baseline_seconds="$(phase_remaining_baseline_seconds_for_id "${phase_id}")"
   if [ -z "${phase_label}" ]; then
     phase_label="$(phase_label_for_id "${phase_id}")"
   fi
   if [ -z "${phase_detail}" ]; then
-    case "${phase_state}" in
-      RUNNING|STARTING) phase_detail="Running ${phase_label}" ;;
-      SUCCESS) phase_detail="Completed ${phase_label}" ;;
-      FAILED|ERROR) phase_detail="Failed ${phase_label}" ;;
-      *) phase_detail="${phase_label}" ;;
-    esac
+    phase_detail="$(phase_detail_for_status "${phase_id}" "${phase_state}")"
   fi
   if [ -z "${phase_log_path}" ]; then
     case "${phase_key}" in
@@ -174,6 +235,8 @@ bootstrap_phase_status_write() {
     printf 'BOOTSTRAP_PROGRESS_PHASE_KEY=%q\n' "${phase_key}"
     printf 'BOOTSTRAP_PROGRESS_PHASE_POSITION=%q\n' "${phase_position}"
     printf 'BOOTSTRAP_PROGRESS_PHASE_TOTAL=%q\n' "${phase_total}"
+    printf 'BOOTSTRAP_PROGRESS_PHASE_BASELINE_SECONDS=%q\n' "${phase_baseline_seconds}"
+    printf 'BOOTSTRAP_PROGRESS_TOTAL_REMAINING_BASELINE_SECONDS=%q\n' "${total_remaining_baseline_seconds}"
     printf 'BOOTSTRAP_PROGRESS_PHASE_STATE=%q\n' "${phase_state}"
     printf 'BOOTSTRAP_PROGRESS_PHASE_LABEL=%q\n' "${phase_label}"
     printf 'BOOTSTRAP_PROGRESS_PHASE_DETAIL=%q\n' "${phase_detail}"
@@ -187,6 +250,118 @@ bootstrap_phase_status_write() {
 
 bootstrap_phase_status_reset() {
   bootstrap_phase_status_write "0" "pre-bootstrap" "STARTING" "pre-bootstrap"
+}
+
+bootstrap_phase_status_detail_from_log() {
+  local log_path="${1:-}"
+  [ -r "${log_path}" ] || return 0
+
+  # Only promote controlled milestones into the customer-facing status. Ansible
+  # task names are useful, while arbitrary task output can include credentials,
+  # request payloads, or terminal controls and must remain in the phase log.
+  tail -n 240 "${log_path}" 2>/dev/null | awk '
+    /^TASK \[/ {
+      task = $0
+      sub(/^TASK \[/, "", task)
+      sub(/\][[:space:]]*$/, "", task)
+      latest = "Ansible task: " task
+      next
+    }
+    /^PLAY \[/ {
+      play = $0
+      sub(/^PLAY \[/, "", play)
+      sub(/\][[:space:]]*$/, "", play)
+      latest = "Ansible play: " play
+      next
+    }
+    /^\[phase[0-9]+\] / {
+      activity = $0
+      sub(/^\[phase[0-9]+\] /, "", activity)
+      if (activity ~ /^(checking cluster connectivity|waiting for |initializing OpenBao|installing Argo CD|bootstrapping Gitea through Argo CD|gitea golden-path health checks passed|restarting rke2-server|enforcing Argo CD proxy mode|GitOps handoff complete|running .*checks|minimal Argo CD \+ Gitea control pair installation complete|complete$)/) {
+        latest = "Phase activity: " activity
+      }
+    }
+    /^\[rollout\] / {
+      activity = $0
+      sub(/^\[rollout\] /, "", activity)
+      if (activity ~ /(watching |: Ready$|still progressing|terminal )/) {
+        latest = "Deployment progress: " activity
+      }
+    }
+    END { if (latest != "") print latest }
+  ' | LC_ALL=C tr -cd '\11\12\15\40-\176' | tr '\r\n' ' '
+}
+
+bootstrap_phase_status_phase30_reached() {
+  local log_path="${1:-}"
+  grep -Fq 'TASK [Ensure base packages are installed on RedHat family]' "${log_path}" 2>/dev/null || \
+    grep -Fq 'TASK [Ensure base packages are installed on non-RedHat families]' "${log_path}" 2>/dev/null
+}
+
+bootstrap_phase_status_refresh_from_log() {
+  local log_path="${1:-}"
+  local detail=""
+  [ -r "${BOOTSTRAP_PHASE_STATUS_FILE}" ] || return 0
+  # The runner writes this file atomically with %q-escaped shell values.
+  # shellcheck disable=SC1090
+  . "${BOOTSTRAP_PHASE_STATUS_FILE}" 2>/dev/null || return 0
+  [ "${BOOTSTRAP_PROGRESS_PHASE_STATE:-}" = "RUNNING" ] || return 0
+  if [ "${BOOTSTRAP_PROGRESS_PHASE_ID:-}" = "20" ] && [ "${BOOTSTRAP_PROGRESS_PHASE_KEY:-}" = "phase20" ] && \
+    bootstrap_phase_status_phase30_reached "${log_path}"; then
+    BOOTSTRAP_PROGRESS_PHASE_ID="30"
+    BOOTSTRAP_PROGRESS_PHASE_KEY="phase30"
+    BOOTSTRAP_PROGRESS_PHASE_LABEL="$(phase_label_for_id "30")"
+    detail="Base packages are ready; applying the platform bootstrap playbook"
+  else
+    detail="$(bootstrap_phase_status_detail_from_log "${log_path}")"
+  fi
+  [ -n "${detail}" ] || return 0
+  BOOTSTRAP_PROGRESS_CURRENT_PHASE_KEY="${BOOTSTRAP_PROGRESS_PHASE_KEY}"
+  BOOTSTRAP_PROGRESS_CURRENT_PHASE_STARTED_AT="${BOOTSTRAP_PROGRESS_PHASE_STARTED_AT}"
+  bootstrap_phase_status_write \
+    "${BOOTSTRAP_PROGRESS_PHASE_ID}" \
+    "${BOOTSTRAP_PROGRESS_PHASE_KEY}" \
+    "RUNNING" \
+    "${BOOTSTRAP_PROGRESS_PHASE_LABEL}" \
+    "${detail}" \
+    "${log_path}"
+}
+
+bootstrap_phase_status_stop_log_monitor() {
+  if [ -n "${BOOTSTRAP_STATUS_LOG_MONITOR_DONE_FILE:-}" ]; then
+    touch "${BOOTSTRAP_STATUS_LOG_MONITOR_DONE_FILE}" 2>/dev/null || true
+  fi
+  if [ -n "${BOOTSTRAP_STATUS_LOG_MONITOR_PID:-}" ]; then
+    kill "${BOOTSTRAP_STATUS_LOG_MONITOR_PID}" >/dev/null 2>&1 || true
+    wait "${BOOTSTRAP_STATUS_LOG_MONITOR_PID}" 2>/dev/null || true
+  fi
+  if [ -n "${BOOTSTRAP_STATUS_LOG_MONITOR_DONE_FILE:-}" ]; then
+    rm -f "${BOOTSTRAP_STATUS_LOG_MONITOR_DONE_FILE}" 2>/dev/null || true
+  fi
+  BOOTSTRAP_STATUS_LOG_MONITOR_PID=""
+  BOOTSTRAP_STATUS_LOG_MONITOR_DONE_FILE=""
+}
+
+bootstrap_phase_status_start_log_monitor() {
+  local log_path="${1:?phase log path}"
+  local done_file=""
+  bootstrap_phase_status_stop_log_monitor
+  done_file="$(mktemp "${BOOTSTRAP_PHASE_STATUS_FILE}.monitor.XXXXXX")"
+  rm -f "${done_file}"
+  (
+    local last_detail="" detail=""
+    while [ ! -e "${done_file}" ]; do
+      detail="$(bootstrap_phase_status_detail_from_log "${log_path}")"
+      if { [ -n "${detail}" ] && [ "${detail}" != "${last_detail}" ]; } || \
+        { grep -qx 'BOOTSTRAP_PROGRESS_PHASE_ID=20' "${BOOTSTRAP_PHASE_STATUS_FILE}" 2>/dev/null && bootstrap_phase_status_phase30_reached "${log_path}"; }; then
+        bootstrap_phase_status_refresh_from_log "${log_path}"
+        last_detail="${detail}"
+      fi
+      sleep 2
+    done
+  ) &
+  BOOTSTRAP_STATUS_LOG_MONITOR_PID=$!
+  BOOTSTRAP_STATUS_LOG_MONITOR_DONE_FILE="${done_file}"
 }
 
 is_true() {
@@ -303,11 +478,14 @@ run_bootstrap_phase() {
   local label="${1:?label}"
   shift
   bootstrap_phase_status_write "${phase_id}" "${key}" "RUNNING" "$(phase_label_for_id "${phase_id}")"
+  bootstrap_phase_status_start_log_monitor "$(phase_log_path "${key}")"
   if run_step "${key}" "${label}" "$@"; then
+    bootstrap_phase_status_stop_log_monitor
     bootstrap_phase_status_write "${phase_id}" "${key}" "SUCCESS" "$(phase_label_for_id "${phase_id}")"
     return 0
   fi
   local rc=$?
+  bootstrap_phase_status_stop_log_monitor
   bootstrap_phase_status_write "${phase_id}" "${key}" "FAILED" "$(phase_label_for_id "${phase_id}")"
   return "${rc}"
 }
@@ -337,7 +515,9 @@ run_bootstrap_playbook_phases() {
   : > "${step_log}"
   echo "[BOOTSTRAP] ${label}: phase log -> ${step_log}"
   start_ts="$(date +%s)"
-  bootstrap_phase_status_write "20" "phase20" "RUNNING" "$(phase_label_for_id "20")"
+  bootstrap_phase_status_write "20" "phase20" "RUNNING" "$(phase_label_for_id "20")" \
+    "Preparing the node-local secret authority before platform configuration"
+  bootstrap_phase_status_start_log_monitor "${step_log}"
   bootstrap_diag_record \
     "phase=${key}" \
     "step=${key}" \
@@ -352,7 +532,6 @@ run_bootstrap_playbook_phases() {
     while true; do
       if [ -f "${step_log}" ] && { grep -Fq "${phase30_marker_1}" "${step_log}" || grep -Fq "${phase30_marker_2}" "${step_log}"; }; then
         printf '1\n' > "${phase30_seen_file}"
-        bootstrap_phase_status_write "30" "phase30" "RUNNING" "$(phase_label_for_id "30")"
         break
       fi
       if [ -n "${BUNDLE_PLAYBOOK_PID:-}" ] && ! kill -0 "${BUNDLE_PLAYBOOK_PID}" 2>/dev/null; then
@@ -414,6 +593,7 @@ run_bootstrap_playbook_phases() {
   set -e
 
   wait "${phase30_monitor_pid}" 2>/dev/null || true
+  bootstrap_phase_status_stop_log_monitor
   split_bundle_playbook_phase_logs
 
   if [ "${rc}" -eq 0 ]; then
@@ -779,19 +959,25 @@ run_bootstrap_playbook_phases || exit $?
 patch_phase40_script
 
 if is_true "${BOOTSTRAP_RUN_PHASE40}"; then
-  bootstrap_phase_status_write "40" "phase40" "RUNNING" "$(phase_label_for_id "40")"
+  bootstrap_phase_status_write "40" "phase40" "RUNNING" "$(phase_label_for_id "40")" \
+    "Preparing the OpenBao authority transition and its recovery material"
   echo "[BOOTSTRAP] Running Phase 40 (OpenBao)"
   echo "[BOOTSTRAP] Phase 40 log -> $(phase_log_path "phase40")"
+  bootstrap_phase_status_start_log_monitor "$(phase_log_path "phase40")"
   phase40_secret_dir="${BOOTSTRAP_SECRET_DIR:-/var/lib/bootstrap-secrets}"
   phase40_init_file="${phase40_secret_dir}/openbao-init.json"
   set +e
   if should_skip "phase40"; then
     if [ -s "${phase40_init_file}" ]; then
       echo "[BOOTSTRAP] Phase 40: skip (done marker present)"
+      bootstrap_phase_status_write "40" "phase40" "RUNNING" "$(phase_label_for_id "40")" \
+        "Existing OpenBao initialization found; verifying the authority transition"
       phase40_rc=0
     else
       echo "[BOOTSTRAP] Phase 40: done marker present but ${phase40_init_file} is missing; re-running"
       rm -f "$(bootstrap_state_path "phase40")" 2>/dev/null || true
+      bootstrap_phase_status_write "40" "phase40" "RUNNING" "$(phase_label_for_id "40")" \
+        "Rebuilding the missing OpenBao initialization and secret synchronization state"
       PHASE40_LOG_FILE="${PHASE40_LOG_FILE:-$(phase_log_path "phase40")}" \
         BOOTSTRAP_PHASE40_MODE="${BOOTSTRAP_PHASE40_MODE:-all}" \
         BOOTSTRAP_INTRODUCE_OPENBAO="${BOOTSTRAP_INTRODUCE_OPENBAO:-1}" \
@@ -805,6 +991,8 @@ if is_true "${BOOTSTRAP_RUN_PHASE40}"; then
       fi
     fi
   else
+    bootstrap_phase_status_write "40" "phase40" "RUNNING" "$(phase_label_for_id "40")" \
+      "Configuring OpenBao policies, tokens, and secret synchronization"
     PHASE40_LOG_FILE="${PHASE40_LOG_FILE:-$(phase_log_path "phase40")}" \
       BOOTSTRAP_PHASE40_MODE="${BOOTSTRAP_PHASE40_MODE:-all}" \
       BOOTSTRAP_INTRODUCE_OPENBAO="${BOOTSTRAP_INTRODUCE_OPENBAO:-1}" \
@@ -818,6 +1006,7 @@ if is_true "${BOOTSTRAP_RUN_PHASE40}"; then
     fi
   fi
   set -e
+  bootstrap_phase_status_stop_log_monitor
 
   if [ "${phase40_rc}" -eq 3 ]; then
     bootstrap_phase_status_write "40" "phase40" "FAILED" "$(phase_label_for_id "40")"

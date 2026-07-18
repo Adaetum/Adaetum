@@ -1423,3 +1423,95 @@ extract_ingress_controller_selector_yaml_from_pod() {
   done
   printf '%s' "${selector_yaml}"
 }
+
+# A rollout timeout is not itself a failure signal: provisioning a first PVC,
+# pulling an image, or initializing a database can take very different amounts
+# of time on supported hardware. Keep watching while Kubernetes reports normal
+# progress, but stop immediately and preserve evidence once the Deployment
+# controller declares the rollout terminal.
+bootstrap_capture_deployment_rollout_diagnostics() {
+  local kubectl_path="${1:?kubectl path}"
+  local namespace="${2:?namespace}"
+  local deployment="${3:?deployment}"
+  local component="${4:-${deployment}}"
+  local pod_selector="${5:-}"
+  local evidence_path=""
+  local pod_name=""
+
+  evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "rollout")"
+  {
+    echo "[rollout] diagnostics for ${namespace}/deploy/${deployment} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+    echo "[rollout] deployment condition and replica status:"
+    "${kubectl_path}" -n "${namespace}" get deployment "${deployment}" -o wide || true
+    "${kubectl_path}" -n "${namespace}" describe deployment "${deployment}" || true
+    echo "[rollout] relevant pods:"
+    if [[ -n "${pod_selector}" ]]; then
+      "${kubectl_path}" -n "${namespace}" get pods --selector="${pod_selector}" -o wide || true
+    else
+      "${kubectl_path}" -n "${namespace}" get pods -o wide || true
+    fi
+    echo "[rollout] persistent-volume claims:"
+    "${kubectl_path}" -n "${namespace}" get pvc -o wide || true
+    echo "[rollout] recent namespace events:"
+    "${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp | tail -n 100 || true
+    while IFS= read -r pod_name; do
+      [[ -n "${pod_name}" ]] || continue
+      echo "[rollout] describe pod/${pod_name}:"
+      "${kubectl_path}" -n "${namespace}" describe pod "${pod_name}" || true
+      echo "[rollout] current logs for pod/${pod_name}:"
+      "${kubectl_path}" -n "${namespace}" logs "${pod_name}" --all-containers --tail=200 || true
+      echo "[rollout] previous logs for pod/${pod_name}:"
+      "${kubectl_path}" -n "${namespace}" logs "${pod_name}" --all-containers --previous --tail=200 || true
+    done < <(
+      if [[ -n "${pod_selector}" ]]; then
+        "${kubectl_path}" -n "${namespace}" get pods --selector="${pod_selector}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null
+      else
+        "${kubectl_path}" -n "${namespace}" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null
+      fi
+    )
+  } | tee "${evidence_path}" || true
+
+  bootstrap_diag_record_file_event \
+    "${component}" "${deployment}-rollout" "captured deployment, pod, PVC, event, and container-log diagnostics" \
+    "${evidence_path}" "error" "rollout"
+}
+
+bootstrap_wait_for_deployment_rollout() {
+  local kubectl_path="${1:?kubectl path}"
+  local namespace="${2:?namespace}"
+  local deployment="${3:?deployment}"
+  local component="${4:-${deployment}}"
+  local pod_selector="${5:-}"
+  local rollout_output=""
+  local progressing_reason=""
+  local replica_failure=""
+
+  echo "[rollout] watching ${namespace}/deploy/${deployment}; waiting for Kubernetes readiness"
+  while true; do
+    if rollout_output="$("${kubectl_path}" -n "${namespace}" rollout status "deploy/${deployment}" --timeout=45s 2>&1)"; then
+      echo "[rollout] ${namespace}/deploy/${deployment}: Ready"
+      return 0
+    fi
+
+    if ! "${kubectl_path}" -n "${namespace}" get deployment "${deployment}" >/dev/null 2>&1; then
+      echo "[rollout] ${namespace}/deploy/${deployment}: terminal deployment missing"
+      bootstrap_capture_deployment_rollout_diagnostics \
+        "${kubectl_path}" "${namespace}" "${deployment}" "${component}" "${pod_selector}"
+      return 1
+    fi
+
+    progressing_reason="$("${kubectl_path}" -n "${namespace}" get deployment "${deployment}" -o jsonpath='{range .status.conditions[?(@.type=="Progressing")]}{.reason}{" "}{.message}{end}' 2>/dev/null || true)"
+    replica_failure="$("${kubectl_path}" -n "${namespace}" get deployment "${deployment}" -o jsonpath='{range .status.conditions[?(@.type=="ReplicaFailure")]}{.status}{" "}{.reason}{" "}{.message}{end}' 2>/dev/null || true)"
+    if [[ "${rollout_output}" == *"exceeded its progress deadline"* || "${progressing_reason}" == *"ProgressDeadlineExceeded"* || "${replica_failure}" == True* ]]; then
+      echo "[rollout] ${namespace}/deploy/${deployment}: terminal ${progressing_reason:-${replica_failure:-failure}}"
+      bootstrap_capture_deployment_rollout_diagnostics \
+        "${kubectl_path}" "${namespace}" "${deployment}" "${component}" "${pod_selector}"
+      return 1
+    fi
+
+    echo "[rollout] ${namespace}/deploy/${deployment}: still progressing (${rollout_output:-no rollout response})"
+    if [[ -n "${pod_selector}" ]]; then
+      "${kubectl_path}" -n "${namespace}" get pods --selector="${pod_selector}" -o wide 2>/dev/null | tail -n +2 | head -n 3 || true
+    fi
+  done
+}

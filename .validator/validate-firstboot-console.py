@@ -5,6 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "ansible" / "ansible-scripts" / "bundle-bootstrap"
+PHASE90 = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-90" / "run-phase90.sh"
+CONTROL_PAIR_COMMON = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "control-pair-common.sh"
 CONSOLE = ROOT / "ks-src" / "fragments" / "shared" / "portable" / "11-tailscale-firstboot-lib.shfrag"
 FIRSTBOOT_FLOW = ROOT / "ks-src" / "fragments" / "shared" / "portable" / "12-tailscale-firstboot-flow.shfrag"
 ISO_BUILD = ROOT / "tasks" / "iso.yml"
@@ -14,6 +16,8 @@ ISO_WORKFLOW = ROOT / ".github" / "workflows" / "iso-build.yml"
 
 def main() -> int:
     runner = RUNNER.read_text(encoding="utf-8")
+    phase90 = PHASE90.read_text(encoding="utf-8")
+    control_pair_common = CONTROL_PAIR_COMMON.read_text(encoding="utf-8")
     console = CONSOLE.read_text(encoding="utf-8")
     firstboot_flow = FIRSTBOOT_FLOW.read_text(encoding="utf-8")
     iso_build = ISO_BUILD.read_text(encoding="utf-8")
@@ -25,6 +29,8 @@ def main() -> int:
         "BOOTSTRAP_PROGRESS_PHASE_STARTED_AT",
         "BOOTSTRAP_PROGRESS_UPDATED_AT",
         "BOOTSTRAP_PROGRESS_RUN_STARTED_AT",
+        "BOOTSTRAP_PROGRESS_PHASE_BASELINE_SECONDS",
+        "BOOTSTRAP_PROGRESS_TOTAL_REMAINING_BASELINE_SECONDS",
     )
     for field in fields:
         if f"printf '{field}=%q\\n'" not in runner:
@@ -32,9 +38,20 @@ def main() -> int:
         if field not in console:
             raise SystemExit(f"first-boot console contract failed: console does not consume {field}")
     for required in (
+        "phase_detail_for_status()",
+        "bootstrap_phase_status_detail_from_log()",
+        "bootstrap_phase_status_start_log_monitor",
+        "Ansible task:",
+    ):
+        if required not in runner:
+            raise SystemExit(f"first-boot console contract failed: runner does not publish detailed progress ({required})")
+    for required in (
         "gum_status_latest_activity()",
         "gum_status_log_freshness()",
         "gum_status_render()",
+        "GUM_STATUS_LOG_DUMPS",
+        "[GUM-STATUS] snapshot",
+        "Estimate:",
         '"${GUM_BIN}" style --border rounded',
     ):
         if required not in console:
@@ -47,6 +64,22 @@ def main() -> int:
     ):
         if forbidden in console:
             raise SystemExit(f"first-boot console contract failed: legacy renderer remains ({forbidden})")
+    for required in (
+        "bootstrap_wait_for_deployment_rollout",
+        "observability grafana grafana 'app.kubernetes.io/name=grafana'",
+    ):
+        if required not in phase90:
+            raise SystemExit(f"Grafana rollout recovery contract failed: missing {required}")
+    for required in (
+        "bootstrap_capture_deployment_rollout_diagnostics()",
+        'rollout status "deploy/${deployment}" --timeout=45s',
+        'get pvc -o wide',
+        'get events --sort-by=.lastTimestamp',
+        'logs "${pod_name}" --all-containers --previous --tail=200',
+        "ProgressDeadlineExceeded",
+    ):
+        if required not in control_pair_common:
+            raise SystemExit(f"deployment rollout recovery contract failed: missing {required}")
     for required in (
         "gum_status_start_monitor 15",
         "gum_status_stop_monitor",

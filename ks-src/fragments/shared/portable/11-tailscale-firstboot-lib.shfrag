@@ -38,6 +38,7 @@ fi
   exit 1
 }
 GUM_CONSOLE_BRAND="Adaetum"
+GUM_STATUS_LOG_DUMPS="${GUM_STATUS_LOG_DUMPS:-1}"
 
 if [[ "${LOG_UPLOAD_DEBUG}" == __*__ ]] || [ -z "${LOG_UPLOAD_DEBUG}" ]; then
   LOG_UPLOAD_DEBUG="0"
@@ -140,6 +141,8 @@ BOOTSTRAP_PROGRESS_PHASE_ID=""
 BOOTSTRAP_PROGRESS_PHASE_KEY=""
 BOOTSTRAP_PROGRESS_PHASE_POSITION=""
 BOOTSTRAP_PROGRESS_PHASE_TOTAL=""
+BOOTSTRAP_PROGRESS_PHASE_BASELINE_SECONDS=""
+BOOTSTRAP_PROGRESS_TOTAL_REMAINING_BASELINE_SECONDS=""
 BOOTSTRAP_PROGRESS_PHASE_STATE=""
 BOOTSTRAP_PROGRESS_PHASE_LABEL=""
 BOOTSTRAP_PROGRESS_PHASE_DETAIL=""
@@ -152,6 +155,8 @@ gum_status_reset_phase() {
   BOOTSTRAP_PROGRESS_PHASE_KEY=""
   BOOTSTRAP_PROGRESS_PHASE_POSITION=""
   BOOTSTRAP_PROGRESS_PHASE_TOTAL=""
+  BOOTSTRAP_PROGRESS_PHASE_BASELINE_SECONDS=""
+  BOOTSTRAP_PROGRESS_TOTAL_REMAINING_BASELINE_SECONDS=""
   BOOTSTRAP_PROGRESS_PHASE_STATE=""
   BOOTSTRAP_PROGRESS_PHASE_LABEL=""
   BOOTSTRAP_PROGRESS_PHASE_DETAIL=""
@@ -174,6 +179,13 @@ gum_status_load_phase() {
   if ! printf '%s' "${BOOTSTRAP_PROGRESS_PHASE_TOTAL:-}" | grep -Eq '^[0-9]+$'; then
     BOOTSTRAP_PROGRESS_PHASE_TOTAL=""
   fi
+  for estimate_var in \
+    BOOTSTRAP_PROGRESS_PHASE_BASELINE_SECONDS \
+    BOOTSTRAP_PROGRESS_TOTAL_REMAINING_BASELINE_SECONDS; do
+    if ! printf '%s' "${!estimate_var:-}" | grep -Eq '^[0-9]+$'; then
+      printf -v "${estimate_var}" '%s' ""
+    fi
+  done
   for timestamp_var in \
     BOOTSTRAP_PROGRESS_PHASE_STARTED_AT \
     BOOTSTRAP_PROGRESS_UPDATED_AT \
@@ -219,9 +231,9 @@ gum_status_latest_activity() {
   local line=""
   if [ -r "${log_path}" ]; then
     # The live stream remains authoritative; this is only a one-line preview.
-    # Keep it printable so a log line cannot inject terminal control sequences
-    # into the fixed status panel.
-    line="$(tail -n 8 "${log_path}" 2>/dev/null | sed -n '/[^[:space:]]/p' | tail -n 1 | LC_ALL=C tr -cd '\40-\176' || true)"
+    # Gum status dumps are retained for remote diagnostics but must never
+    # become their own "Latest" activity on the next refresh.
+    line="$(tail -n 80 "${log_path}" 2>/dev/null | grep -v '^\[GUM-STATUS\]' | sed -n '/[^[:space:]]/p' | tail -n 1 | LC_ALL=C tr -cd '\40-\176' || true)"
   fi
   if [ -z "${line}" ]; then
     line="Waiting for the next log entry"
@@ -262,7 +274,8 @@ gum_status_render() {
   local phase_position="" phase_total="" phase_id=""
   local phase_state="" phase_label="${CURRENT_STEP:-initializing}" detail="${STATUS_DETAIL:-Waiting for next update}"
   local phase_log="${STATUS_LOG_HINT#Logs: }" phase_started="" run_started="" updated="" now=""
-  local progress_text="Bootstrap phases pending" activity="" elapsed="" phase_elapsed="" freshness="" status_freshness=""
+  local phase_baseline="" total_remaining_baseline="" phase_remaining="" total_remaining=""
+  local progress_text="Bootstrap phases pending" activity="" elapsed="" phase_elapsed="" freshness="" status_freshness="" estimate_text="estimating" status_body=""
 
   if gum_status_load_phase; then
     phase_position="${BOOTSTRAP_PROGRESS_PHASE_POSITION:-}"
@@ -272,6 +285,8 @@ gum_status_render() {
     phase_label="${BOOTSTRAP_PROGRESS_PHASE_LABEL:-${phase_label}}"
     detail="${BOOTSTRAP_PROGRESS_PHASE_DETAIL:-${detail}}"
     phase_log="${BOOTSTRAP_PROGRESS_PHASE_LOG_PATH:-${phase_log}}"
+    phase_baseline="${BOOTSTRAP_PROGRESS_PHASE_BASELINE_SECONDS:-}"
+    total_remaining_baseline="${BOOTSTRAP_PROGRESS_TOTAL_REMAINING_BASELINE_SECONDS:-}"
     phase_started="${BOOTSTRAP_PROGRESS_PHASE_STARTED_AT:-}"
     run_started="${BOOTSTRAP_PROGRESS_RUN_STARTED_AT:-}"
     updated="${BOOTSTRAP_PROGRESS_UPDATED_AT:-}"
@@ -290,15 +305,36 @@ gum_status_render() {
   if [ -n "${updated}" ]; then status_freshness="status $(gum_status_duration "$((now - updated))") ago"; else status_freshness="status pending"; fi
   activity="$(gum_status_latest_activity "${phase_log}")"
   freshness="$(gum_status_log_freshness "${phase_log}")"
+  if [ -n "${phase_baseline}" ] && [ -n "${phase_started}" ]; then
+    phase_remaining=$((phase_baseline - (now - phase_started)))
+    if [ "${phase_remaining}" -gt 0 ]; then
+      estimate_text="~$(gum_status_duration "${phase_remaining}") left in phase"
+    else
+      estimate_text="phase is beyond its baseline; collecting live progress"
+    fi
+  fi
+  if [ -n "${total_remaining_baseline}" ] && [ -n "${phase_started}" ]; then
+    total_remaining=$((total_remaining_baseline - (now - phase_started)))
+    if [ "${total_remaining}" -gt 0 ]; then
+      estimate_text="${estimate_text} | ~$(gum_status_duration "${total_remaining}") total remaining"
+    fi
+  fi
+  printf -v status_body '%s first-boot status: %s\nHost: %s  |  %s\nNow: %s\nDetail: %s\nElapsed: %s total  |  %s in this phase  |  %s\nLatest: %s\nLogs: %s (%s)' \
+    "${GUM_CONSOLE_BRAND}" "${STATUS_STATE:-RUNNING}" "${HOSTNAME:-unknown}" "${progress_text}" \
+    "${phase_label}" "${detail}" "${elapsed}" "${phase_elapsed}" "${status_freshness}" \
+    "${activity}" "${phase_log}" "${freshness}"
+  status_body="${status_body}"$'\n'"Estimate: ${estimate_text}"
   "${GUM_BIN}" style --border rounded --border-foreground 39 --padding "0 1" --margin "1 0" \
     --foreground "$(gum_status_color "${STATUS_STATE:-RUNNING}")" \
-    "${GUM_CONSOLE_BRAND} first-boot status: ${STATUS_STATE:-RUNNING}
-Host: ${HOSTNAME:-unknown}  |  ${progress_text}
-Now: ${phase_label}
-Detail: ${detail}
-Elapsed: ${elapsed} total  |  ${phase_elapsed} in this phase  |  ${status_freshness}
-Latest: ${activity}
-Logs: ${phase_log} (${freshness})" >"${GUM_STATUS_TTY}" 2>/dev/null || true
+    "${status_body}" >"${GUM_STATUS_TTY}" 2>/dev/null || true
+  if [ "${GUM_STATUS_LOG_DUMPS}" = "1" ] || [ "${GUM_STATUS_LOG_DUMPS}" = "true" ]; then
+    {
+      printf '[GUM-STATUS] snapshot %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      "${GUM_BIN}" style --border rounded --border-foreground 39 --padding "0 1" --margin "1 0" \
+        --foreground "$(gum_status_color "${STATUS_STATE:-RUNNING}")" \
+        "${status_body}" | sed 's/^/[GUM-STATUS] /'
+    } >>"${log_file}" 2>/dev/null || true
+  fi
 }
 
 gum_status_result() {
