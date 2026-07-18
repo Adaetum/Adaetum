@@ -60,6 +60,7 @@ tasks:
         printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
         printf '  %stask initialize%s    Run or rerun the opinionated setup workflow\n' "${c_task}" "${c_reset}"
         printf '  %stask clean%s         Reset tracked public-safe config and remove derived installer artifacts\n' "${c_task}" "${c_reset}"
+        printf '  %stask reset%s         Clean generated state and return the checkout to public main\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-on%s Enable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-off%s Disable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
         printf '  %stask build-iso%s     Build the local kickstart-enabled ISO\n' "${c_task}" "${c_reset}"
@@ -134,6 +135,49 @@ tasks:
       - cmd: python3 ./tasks/scripts/clean-derived-setup-artifacts.py
         platforms: [linux, darwin]
       - cmd: python ./tasks/scripts/clean-derived-setup-artifacts.py
+        platforms: [windows]
+
+  reset:
+    desc: Clean generated state and return the checkout to public Adaetum main
+    cmds:
+      - task: clean
+      - cmd: |
+          set -euo pipefail
+          public_origin="https://github.com/Adaetum/Adaetum.git"
+          if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            echo "task reset must run inside a Git checkout." >&2
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "task reset will not discard remaining worktree changes. Commit, stash, or remove them, then rerun." >&2
+            exit 1
+          fi
+          git remote set-url origin "${public_origin}"
+          git remote set-url --push origin "${public_origin}"
+          git fetch origin main
+          if git show-ref --verify --quiet refs/heads/main; then
+            git switch main
+          else
+            git switch --track -c main origin/main
+          fi
+          git merge --ff-only origin/main
+          git branch --set-upstream-to=origin/main main >/dev/null
+          echo "Reset complete: $(git rev-parse --short HEAD) on public main."
+        platforms: [linux, darwin]
+      - cmd: |
+          $ErrorActionPreference = 'Stop'
+          $publicOrigin = 'https://github.com/Adaetum/Adaetum.git'
+          git rev-parse --is-inside-work-tree *> $null
+          if ($LASTEXITCODE -ne 0) { throw 'task reset must run inside a Git checkout.' }
+          if ((git status --porcelain)) { throw 'task reset will not discard remaining worktree changes. Commit, stash, or remove them, then rerun.' }
+          git remote set-url origin $publicOrigin
+          git remote set-url --push origin $publicOrigin
+          git fetch origin main
+          git show-ref --verify --quiet refs/heads/main
+          if ($LASTEXITCODE -eq 0) { git switch main } else { git switch --track -c main origin/main }
+          git merge --ff-only origin/main
+          git branch --set-upstream-to=origin/main main
+          Write-Output ("Reset complete: " + (git rev-parse --short HEAD) + ' on public main.')
         platforms: [windows]
 
   maintainer-on:
