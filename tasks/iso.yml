@@ -409,13 +409,13 @@ tasks:
             --output "${gum_rpm_partial}" "${gum_rpm_url}"
         fi
         gum_rpm_actual="$(python3 - "${gum_rpm_partial}" <<'PY'
-import hashlib
-import pathlib
-import sys
+        import hashlib
+        import pathlib
+        import sys
 
-print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
-PY
-)"
+        print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+        PY
+        )"
         if [ "${gum_rpm_actual}" != "${gum_rpm_sha256}" ]; then
           rm -f "${gum_rpm_partial}"
           echo "Gum RPM checksum mismatch for ${gum_rpm}" >&2
