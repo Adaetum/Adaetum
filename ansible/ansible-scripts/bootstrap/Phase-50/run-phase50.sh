@@ -272,6 +272,11 @@ ensure_authentik_secret() {
     admin_username=akadmin \
     "bootstrap_password=${bootstrap_password}" \
     "bootstrap_token=${bootstrap_token}"
+  # Phase 40 establishes ESO and the OpenBao store, but this app-specific
+  # declaration cannot arrive through the private GitOps repository until
+  # Phase 50 has finished creating Gitea. Apply only the desired delivery
+  # declaration now; ESO remains the sole writer of the Kubernetes Secret.
+  "${kubectl_bin}" apply -f "${repo_root}/pods/authentik/authentik-secret-sync/external-secret.yaml"
   bootstrap_wait_for_external_secret_delivery \
     "${kubectl_bin}" authentik authentik-postgresql-desired authentik-postgresql-desired authentik-postgresql
   if ! "${kubectl_bin}" -n authentik get secret authentik-postgresql >/dev/null 2>&1; then

@@ -24,7 +24,8 @@ PHASE40_CALICO_STABLE_PASSES="${PHASE40_CALICO_STABLE_PASSES:-3}"
 PHASE40_CALICO_REQUEST_TIMEOUT="${PHASE40_CALICO_REQUEST_TIMEOUT:-15s}"
 PHASE40_JOB_DISCOVERY_TIMEOUT="${PHASE40_JOB_DISCOVERY_TIMEOUT:-10m}"
 PHASE40_JOB_COMPLETE_TIMEOUT="${PHASE40_JOB_COMPLETE_TIMEOUT:-10m}"
-PHASE40_FAIL_ON_CONFIG_JOB_TIMEOUT="${PHASE40_FAIL_ON_CONFIG_JOB_TIMEOUT:-0}"
+PHASE40_ESO_ROLLOUT_TIMEOUT="${PHASE40_ESO_ROLLOUT_TIMEOUT:-5m}"
+PHASE40_ESO_STORE_TIMEOUT="${PHASE40_ESO_STORE_TIMEOUT:-5m}"
 LONGHORN_NAMESPACE="${LONGHORN_NAMESPACE:-longhorn-system}"
 BOOTSTRAP_INTRODUCE_OPENBAO="${BOOTSTRAP_INTRODUCE_OPENBAO:-}"
 BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET="${BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET:-}"
@@ -1506,48 +1507,32 @@ else
   echo "[phase40] no platform bootstrap secrets found to store in OpenBao; skipping."
 fi
 
-if [[ "${use_argo}" == true ]]; then
-  if wait_for_argo_application_crd "180s"; then
-    echo "[phase40] enabling post-OpenBao Argo CD app"
-    "${kubectl_bin}" -n argocd apply -f pods/argocd/platform/post-openbao/application.yaml
-  else
-    echo "[phase40] Argo CD Application CRD not ready; falling back to direct OpenBao post-init config." >&2
-    use_argo=false
-  fi
+echo "[phase40] applying OpenBao post-init config directly before GitOps handoff"
+policy_dir="${repo_root}/pods/secrets/openbao/policies"
+job_manifest="${config_dir}/job.yaml"
+if [[ ! -d "${policy_dir}" || ! -f "${job_manifest}" ]]; then
+  echo "[phase40] OpenBao post-init policy or Job manifest is missing; cannot establish secret delivery." >&2
+  exit 1
 fi
-
-if [[ "${use_argo}" != true ]]; then
-  echo "[phase40] applying OpenBao post-init config directly"
-  policy_dir="${repo_root}/pods/secrets/openbao/policies"
-  job_manifest="${config_dir}/job.yaml"
-  if [[ -d "${policy_dir}" ]]; then
-    "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" create configmap openbao-policies \
-      --from-file=ci.hcl="${policy_dir}/ci.hcl" \
-      --from-file=argo.hcl="${policy_dir}/argo.hcl" \
-      --from-file=config.hcl="${policy_dir}/config.hcl" \
-      --from-file=external-secrets.hcl="${policy_dir}/external-secrets.hcl" \
-      --from-file=apprise.hcl="${policy_dir}/apprise.hcl" \
-      --from-file=cloudflared.hcl="${policy_dir}/cloudflared.hcl" \
-      --from-file=external-dns.hcl="${policy_dir}/external-dns.hcl" \
-      --from-file=ansible-runner.hcl="${policy_dir}/ansible-runner.hcl" \
-      --from-file=homepage.hcl="${policy_dir}/homepage.hcl" \
-      --from-file=grafana.hcl="${policy_dir}/grafana.hcl" \
-      --from-file=authentik.hcl="${policy_dir}/authentik.hcl" \
-      --from-file=gitea.hcl="${policy_dir}/gitea.hcl" \
-      --dry-run=client -o yaml | "${kubectl_bin}" apply -f -
-  else
-    echo "[phase40] warning: policy directory missing at ${policy_dir}; skipping policy configmap" >&2
-  fi
-  if [[ -f "${job_manifest}" ]]; then
-    # A Job pod template is immutable. Configuration is idempotent, so replace
-    # the completed runner whenever policy or auth-role desired state changes.
-    "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" delete job openbao-bootstrap-config \
-      --ignore-not-found --wait=true
-    "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" apply -f "${job_manifest}"
-  else
-    echo "[phase40] warning: OpenBao config job manifest missing at ${job_manifest}" >&2
-  fi
-fi
+"${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" create configmap openbao-policies \
+  --from-file=ci.hcl="${policy_dir}/ci.hcl" \
+  --from-file=argo.hcl="${policy_dir}/argo.hcl" \
+  --from-file=config.hcl="${policy_dir}/config.hcl" \
+  --from-file=external-secrets.hcl="${policy_dir}/external-secrets.hcl" \
+  --from-file=apprise.hcl="${policy_dir}/apprise.hcl" \
+  --from-file=cloudflared.hcl="${policy_dir}/cloudflared.hcl" \
+  --from-file=external-dns.hcl="${policy_dir}/external-dns.hcl" \
+  --from-file=ansible-runner.hcl="${policy_dir}/ansible-runner.hcl" \
+  --from-file=homepage.hcl="${policy_dir}/homepage.hcl" \
+  --from-file=grafana.hcl="${policy_dir}/grafana.hcl" \
+  --from-file=authentik.hcl="${policy_dir}/authentik.hcl" \
+  --from-file=gitea.hcl="${policy_dir}/gitea.hcl" \
+  --dry-run=client -o yaml | "${kubectl_bin}" apply -f -
+# A Job pod template is immutable. Configuration is idempotent, so replace
+# the completed runner whenever policy or auth-role desired state changes.
+"${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" delete job openbao-bootstrap-config \
+  --ignore-not-found --wait=true
+"${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" apply -f "${job_manifest}"
 
 echo "[phase40] waiting for OpenBao bootstrap config job (if/when created)"
 job_seen=false
@@ -1564,17 +1549,80 @@ while (( SECONDS < job_discovery_deadline )); do
       "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get pods -l job-name=openbao-bootstrap-config -o wide >&2 || true
       echo "[phase40] diagnostics: job logs" >&2
       "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" logs job/openbao-bootstrap-config --all-containers --tail="${BOOTSTRAP_LOG_TAIL}" >&2 || true
-      if bool_is_true "${PHASE40_FAIL_ON_CONFIG_JOB_TIMEOUT}"; then
-        exit 1
-      fi
-      echo "[phase40] continuing despite OpenBao bootstrap config timeout (set PHASE40_FAIL_ON_CONFIG_JOB_TIMEOUT=1 to fail hard)." >&2
+      exit 1
     fi
     break
   fi
   sleep 10
 done
 if [[ "${job_seen}" != "true" ]]; then
-  echo "[phase40] OpenBao bootstrap config job was not observed within ${PHASE40_JOB_DISCOVERY_TIMEOUT}; continuing." >&2
+  echo "[phase40] OpenBao bootstrap config job was not observed within ${PHASE40_JOB_DISCOVERY_TIMEOUT}." >&2
+  exit 1
+fi
+
+# ESO is a structural Kubernetes-Secret adapter and must exist before Phase 50
+# requests an app-specific delivery Secret. It is installed from its pinned
+# public chart here because the private Gitea repository does not exist yet;
+# Argo's ApplicationSet adopts this same Application after the control-pair
+# handoff. No workload credential is created by this bridge.
+if ! wait_for_argo_application_crd "180s"; then
+  echo "[phase40] Argo CD Application CRD is unavailable; cannot establish ESO delivery." >&2
+  exit 1
+fi
+echo "[phase40] installing External Secrets Operator delivery foundation"
+cat <<'EOF' | "${kubectl_bin}" -n argocd apply -f -
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: external-secrets
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.external-secrets.io
+    chart: external-secrets
+    targetRevision: "2.7.0"
+    helm:
+      values: |
+        installCRDs: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: external-secrets
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+EOF
+eso_deadline="$((SECONDS + $(timeout_to_seconds "${PHASE40_ESO_ROLLOUT_TIMEOUT}")))"
+while (( SECONDS < eso_deadline )); do
+  if "${kubectl_bin}" -n external-secrets get deployment external-secrets >/dev/null 2>&1; then
+    break
+  fi
+  echo "[phase40] waiting for Argo CD to create the External Secrets Operator deployment"
+  sleep 5
+done
+if ! "${kubectl_bin}" -n external-secrets get deployment external-secrets >/dev/null 2>&1 || \
+   ! "${kubectl_bin}" -n external-secrets rollout status deployment/external-secrets --timeout="${PHASE40_ESO_ROLLOUT_TIMEOUT}"; then
+  echo "[phase40] External Secrets Operator did not become ready." >&2
+  "${kubectl_bin}" -n argocd get application external-secrets -o yaml >&2 || true
+  "${kubectl_bin}" -n external-secrets get pods -o wide >&2 || true
+  "${kubectl_bin}" -n external-secrets logs deploy/external-secrets --all-containers --tail="${BOOTSTRAP_LOG_TAIL}" >&2 || true
+  exit 1
+fi
+"${kubectl_bin}" apply -f "${repo_root}/pods/secrets/openbao-sync/store.yaml"
+if ! "${kubectl_bin}" wait --for=condition=Ready clustersecretstore/openbao --timeout="${PHASE40_ESO_STORE_TIMEOUT}"; then
+  echo "[phase40] OpenBao ClusterSecretStore did not become Ready." >&2
+  "${kubectl_bin}" describe clustersecretstore openbao >&2 || true
+  "${kubectl_bin}" -n external-secrets logs deploy/external-secrets --all-containers --tail="${BOOTSTRAP_LOG_TAIL}" >&2 || true
+  exit 1
+fi
+echo "[phase40] External Secrets Operator and OpenBao delivery store are ready"
+
+if [[ "${use_argo}" == true ]]; then
+  echo "[phase40] enabling post-OpenBao Argo CD app for post-control-pair reconciliation"
+  "${kubectl_bin}" -n argocd apply -f pods/argocd/platform/post-openbao/application.yaml
 fi
 
 if [[ "${use_argo}" == true ]] && bool_is_true "${BOOTSTRAP_DISABLE_PRE_OPENBAO}"; then

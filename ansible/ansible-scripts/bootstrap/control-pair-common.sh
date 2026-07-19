@@ -1503,6 +1503,17 @@ bootstrap_wait_for_external_secret_delivery() {
   local target_exists="false"
 
   echo "[secret-sync] watching ${namespace}/externalsecret/${external_secret} -> secret/${target_secret}"
+  if ! "${kubectl_path}" -n "${namespace}" get externalsecret "${external_secret}" >/dev/null 2>&1; then
+    echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: expected delivery declaration is absent" >&2
+    evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "external-secret")"
+    {
+      echo "[secret-sync] diagnostics for missing ${namespace}/externalsecret/${external_secret} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+      "${kubectl_path}" -n "${namespace}" get externalsecrets -o wide || true
+      "${kubectl_path}" get clustersecretstore openbao -o wide || true
+      "${kubectl_path}" -n external-secrets get pods -o wide || true
+    } | tee "${evidence_path}" || true
+    return 1
+  fi
   while true; do
     if "${kubectl_path}" -n "${namespace}" get secret "${target_secret}" >/dev/null 2>&1; then
       target_exists="true"
