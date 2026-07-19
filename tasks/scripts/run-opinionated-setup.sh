@@ -932,8 +932,8 @@ validate_required_inputs() {
   if [ -z "${ts_domain}" ]; then
     die "TAILSCALE_DOMAIN is required."
   fi
-  if [ -z "${ts_user_token}" ]; then
-    die "TAILSCALE_USER_API_TOKEN is required for bootstrap."
+  if [ -z "${ts_user_token}" ] && { [ -z "${default_ts_oauth_client_id}" ] || [ -z "${default_ts_oauth_client_secret}" ]; }; then
+    die "Tailscale OAuth credentials or TAILSCALE_USER_API_TOKEN are required for bootstrap."
   fi
 }
 
@@ -1059,10 +1059,16 @@ if step_enabled "1"; then
   else
     gh_token="$(prompt_value "GitHub setup token (GITHUB_SYNC_TOKEN, repo-capable and mirror-write-capable)" "${default_gh_token}" 1)"
   fi
-  sub_step "1.3" "Tailscale user API token"
+  sub_step "1.3" "Tailscale bootstrap credentials"
   if [ -n "${default_ts_user_token}" ]; then
     ts_user_token="${default_ts_user_token}"
     adaetum_ui_status info "Using the Tailscale access token authorized during provider setup."
+  elif [ -n "${default_ts_oauth_client_id}" ] && [ -n "${default_ts_oauth_client_secret}" ]; then
+    # The first-run preflight has already validated this durable client and
+    # prepared its tag ownership. Do not ask for the broader, temporary user
+    # token again merely to render the environment and installer.
+    ts_user_token=""
+    adaetum_ui_status info "Using the saved Tailscale OAuth client; a temporary user API token is not required."
   else
     prepare_tailscale_user_token
     ts_user_token="$(prompt_value "Tailscale user token (TAILSCALE_USER_API_TOKEN)" "${default_ts_user_token}" 1)"

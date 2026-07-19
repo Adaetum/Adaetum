@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import re
 from pathlib import Path
 
 
@@ -94,10 +95,21 @@ def main() -> int:
         if bad in rendered:
             failures.append(f"rendered ingress kustomize output still contains stale Authentik annotation value: {bad}")
 
+    # external-dns reads the rendered domain from an environment variable so
+    # its command remains stable across profile changes. Kubernetes expands
+    # that variable in args at container start; verify both halves of the
+    # contract rather than requiring the domain to be hard-coded in the arg.
+    if not re.search(
+        rf"(?ms)name:\s*EXTERNAL_DNS_DOMAIN_FILTER\s*\n\s*value:\s*{re.escape(cluster_domain)}\s*$",
+        rendered,
+    ):
+        failures.append(
+            f"rendered external-dns deployment is missing EXTERNAL_DNS_DOMAIN_FILTER={cluster_domain}"
+        )
     assert_contains(
         rendered,
-        f"--domain-filter={cluster_domain}",
-        f"rendered external-dns deployment is missing --domain-filter={cluster_domain}",
+        "--domain-filter=$(EXTERNAL_DNS_DOMAIN_FILTER)",
+        "rendered external-dns deployment is missing its domain-filter argument",
         failures,
     )
     assert_contains(

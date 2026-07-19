@@ -272,6 +272,10 @@ def main() -> int:
         fail("setup re-prompts for the Cloudflare token captured during first run")
     if 'Using the GitHub credential authorized during repository setup.' not in setup:
         fail("setup re-prompts for the GitHub credential captured during first run")
+    if 'Using the saved Tailscale OAuth client; a temporary user API token is not required.' not in setup:
+        fail("setup re-prompts for a temporary Tailscale user token after OAuth was captured")
+    if 'Tailscale OAuth credentials or TAILSCALE_USER_API_TOKEN are required for bootstrap.' not in setup:
+        fail("setup does not accept the durable Tailscale OAuth client as the bootstrap credential")
     if "ARGOCD_GITHUB_REPO_URL=${recovery_repo_url}" not in setup or "GITEA_SEED_SOURCE_REPO_URL=${recovery_repo_url}" not in setup:
         fail("environment rendering can retain a previous public repository URL")
     if 'platform_profile="${ADAETUM_PLATFORM_PROFILE:-${platform_profile}}"' not in setup:
