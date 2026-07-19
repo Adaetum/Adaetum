@@ -705,12 +705,12 @@ gitea_registry_token_effective() {
 
   token="$("${kubectl_bin}" -n gitea exec deploy/gitea -c gitea -- sh -lc '
     gitea admin user generate-access-token \
-      --username "'"${gitea_repo_username_effective}"'" \
+      --username "'"${gitea_repo_username_effective:-gitea-admin}"'" \
       --token-name "ansible-runner-registry" \
       --scopes "all" \
       --raw 2>/dev/null \
     || gitea admin user generate-access-token \
-      --username "'"${gitea_repo_username_effective}"'" \
+      --username "'"${gitea_repo_username_effective:-gitea-admin}"'" \
       --token-name "ansible-runner-registry-$(date +%s)" \
       --scopes "all" \
       --raw 2>/dev/null
@@ -747,12 +747,12 @@ gitea_git_token_effective() {
 
   token="$("${kubectl_bin}" -n gitea exec deploy/gitea -c gitea -- sh -lc '
     gitea admin user generate-access-token \
-      --username "'"${gitea_repo_username_effective}"'" \
+      --username "'"${gitea_repo_username_effective:-gitea-admin}"'" \
       --token-name "argocd-bootstrap-git" \
       --scopes "all" \
       --raw 2>/dev/null \
     || gitea admin user generate-access-token \
-      --username "'"${gitea_repo_username_effective}"'" \
+      --username "'"${gitea_repo_username_effective:-gitea-admin}"'" \
       --token-name "argocd-bootstrap-git-$(date +%s)" \
       --scopes "all" \
       --raw 2>/dev/null
@@ -1592,6 +1592,10 @@ bootstrap_wait_for_csi_secret_delivery() {
         "${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus -o wide || true
         "${kubectl_path}" -n kube-system get pods -o wide | grep -E 'secrets-store|openbao.*csi' || true
         "${kubectl_path}" -n kube-system logs -l app.kubernetes.io/component=csi --all-containers --tail=200 || true
+        while IFS= read -r pod_name; do
+          [[ -n "${pod_name}" ]] || continue
+          "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --previous --tail=200 || true
+        done < <("${kubectl_path}" -n kube-system get pods -o name | grep -E 'secrets-store|openbao.*csi' || true)
       } | tee "${evidence_path}" || true
       bootstrap_diag_record_file_event \
         "${component}" "${provider_class}-csi" "captured CSI class, mount, provider, and event diagnostics" \
@@ -1605,6 +1609,10 @@ bootstrap_wait_for_csi_secret_delivery() {
       "${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus -o wide || true
       "${kubectl_path}" -n kube-system get pods -o wide | grep -E 'secrets-store|openbao.*csi' || true
       "${kubectl_path}" -n kube-system logs -l app.kubernetes.io/component=csi --all-containers --tail=100 || true
+      while IFS= read -r pod_name; do
+        [[ -n "${pod_name}" ]] || continue
+        "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --previous --tail=100 || true
+      done < <("${kubectl_path}" -n kube-system get pods -o name | grep -E 'secrets-store|openbao.*csi' || true)
     } >"${evidence_path}" 2>&1 || true
     echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: waiting for first authenticated mount"
     sleep 15

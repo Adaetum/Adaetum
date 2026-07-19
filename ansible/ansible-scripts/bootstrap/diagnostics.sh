@@ -132,8 +132,10 @@ bootstrap_diag_capture_evidence_path() {
   local component="${1:-component}"
   local name="${2:-evidence}"
   local sanitized_component="" sanitized_name="" ts=""
-  sanitized_component="$(printf '%s' "${component}" | tr -cs '[:alnum:]._-:' '_')"
-  sanitized_name="$(printf '%s' "${name}" | tr -cs '[:alnum:]._-:' '_')"
+  # Keep the hyphen last so POSIX tr treats it literally rather than as a
+  # reverse character range on systems whose collation order differs.
+  sanitized_component="$(printf '%s' "${component}" | tr -cs '[:alnum:]._:-' '_')"
+  sanitized_name="$(printf '%s' "${name}" | tr -cs '[:alnum:]._:-' '_')"
   ts="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || date +%s)"
   printf '%s/%s-%s-%s.log' "${BOOTSTRAP_DIAGNOSTICS_RUN_DIR}" "${ts}" "${sanitized_component}" "${sanitized_name}"
 }
