@@ -71,11 +71,22 @@ case "${PHASE60_MODE}" in
     ;;
 esac
 
-# Realize mode checks the already-handed-off state without making it authoritative.
-PHASE60_WARNING_ONLY=0
-if [[ "${PHASE60_MODE}" == "realize" ]]; then
-  PHASE60_WARNING_ONLY=1
+# Realize mode is warning-only when run directly for observation. Phase 70
+# overrides this to strict because its job is to prove that the handoff works;
+# a warning-only subprocess must not make that critical gate report success.
+if [[ -z "${PHASE60_WARNING_ONLY+x}" ]]; then
+  PHASE60_WARNING_ONLY=0
+  if [[ "${PHASE60_MODE}" == "realize" ]]; then
+    PHASE60_WARNING_ONLY=1
+  fi
 fi
+case "${PHASE60_WARNING_ONLY}" in
+  0|1) ;;
+  *)
+    echo "invalid PHASE60_WARNING_ONLY=${PHASE60_WARNING_ONLY}; expected 0 or 1" >&2
+    exit 1
+    ;;
+esac
 BOOTSTRAP_DIAG_PHASE="phase60"
 BOOTSTRAP_DIAG_LOG_PATH="${PHASE60_LOG_FILE:-${BUNDLE_BOOTSTRAP_LOG_FILE:-}}"
 bootstrap_diag_init
@@ -1856,6 +1867,41 @@ gitea_debug_dump() {
     "rollout"
 }
 
+require_gitea_service_contract() {
+  local service_ip=""
+  local service_ports=""
+  local ready_endpoints=""
+
+  if ! "${kubectl_bin}" -n gitea get service "${GITEA_INTERNAL_SERVICE_NAME}" >/dev/null 2>&1; then
+    gitea_debug_dump "service-missing"
+    echo "[phase60] Gitea service discovery contract failed: service/gitea/${GITEA_INTERNAL_SERVICE_NAME} is missing" >&2
+    return 1
+  fi
+
+  service_ip="$("${kubectl_bin}" -n gitea get service "${GITEA_INTERNAL_SERVICE_NAME}" \
+    -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  service_ports="$("${kubectl_bin}" -n gitea get service "${GITEA_INTERNAL_SERVICE_NAME}" \
+    -o jsonpath='{range .spec.ports[*]}{.port}{" "}{end}' 2>/dev/null || true)"
+  if [[ -z "${service_ip}" || "${service_ip}" == "None" || " ${service_ports} " != *" 3000 "* ]]; then
+    gitea_debug_dump "service-contract-invalid"
+    echo "[phase60] Gitea service discovery contract failed: service/gitea/${GITEA_INTERNAL_SERVICE_NAME} must have a ClusterIP and port 3000 (cluster_ip=${service_ip:-<empty>} ports=${service_ports:-<empty>})" >&2
+    return 1
+  fi
+
+  # A Service DNS name can exist without ready backends, but Kaniko cannot use
+  # it in that state. Check the endpoint before creating a doomed build Job so
+  # the captured evidence points at Gitea rather than a downstream DNS error.
+  ready_endpoints="$("${kubectl_bin}" -n gitea get endpoints "${GITEA_INTERNAL_SERVICE_NAME}" \
+    -o jsonpath='{range .subsets[*].addresses[*]}{.ip}{" "}{end}' 2>/dev/null || true)"
+  if [[ -z "${ready_endpoints//[[:space:]]/}" ]]; then
+    gitea_debug_dump "service-has-no-ready-endpoint"
+    echo "[phase60] Gitea service discovery contract failed: service/gitea/${GITEA_INTERNAL_SERVICE_NAME} has no ready endpoint" >&2
+    return 1
+  fi
+
+  echo "[phase60] Gitea service discovery contract passed (service_ip=${service_ip}, ready_endpoints=${ready_endpoints% })"
+}
+
 cloudflared_debug_dump() {
   local reason="${1:-unknown}"
   local ts=""
@@ -3455,6 +3501,10 @@ fi
 run_or_fail \
   "failed ensuring ansible-runner image pull secret" \
   ensure_ansible_runner_pull_secret
+
+run_or_fail \
+  "Gitea service discovery does not resolve to a ready registry endpoint" \
+  require_gitea_service_contract
 
 run_or_fail \
   "failed publishing ansible-runner image to Gitea registry" \

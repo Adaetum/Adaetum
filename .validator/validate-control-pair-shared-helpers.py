@@ -197,6 +197,105 @@ configure_gitea_push_mirror_from_openbao \
     return [f"Gitea push-mirror helper behavior failed: {detail}"]
 
 
+def validate_phase70_realization_gate() -> list[str]:
+    """Keep the post-handoff proof strict, bounded, and non-restarting."""
+    phase_60 = PHASE_60.read_text(encoding="utf-8")
+    phase_70 = (
+        REPOSITORY_ROOT
+        / "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh"
+    ).read_text(encoding="utf-8")
+    failures: list[str] = []
+
+    for required in (
+        "require_gitea_service_contract()",
+        'get service "${GITEA_INTERNAL_SERVICE_NAME}"',
+        'get endpoints "${GITEA_INTERNAL_SERVICE_NAME}"',
+        "Gitea service discovery does not resolve to a ready registry endpoint",
+    ):
+        if required not in phase_60:
+            failures.append(
+                f"Phase 60 Gitea service preflight contract missing: {required}"
+            )
+
+    for required in (
+        "PHASE60_WARNING_ONLY=0",
+        'PHASE60_GITEA_ROLLOUT_TIMEOUT="${PHASE70_GITEA_ROLLOUT_TIMEOUT:-120s}"',
+        "PHASE60_GITEA_ROLLOUT_ATTEMPTS=1",
+        "PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL=0",
+        "GitOps handoff verification failed; stopping before realization checks",
+        "GitOps realization checks failed; stopping before secret-delivery reconciliation",
+    ):
+        if required not in phase_70:
+            failures.append(f"Phase 70 realization gate contract missing: {required}")
+
+    phase_60_functions = functions(PHASE_60)
+    service_check = phase_60_functions.get("require_gitea_service_contract")
+    if service_check:
+        script = service_check + r'''
+set -euo pipefail
+kubectl_bin=mock_kubectl
+GITEA_INTERNAL_SERVICE_NAME=gitea-http
+MOCK_STATE=healthy
+DEBUG_REASON=""
+
+gitea_debug_dump() {
+  DEBUG_REASON="$1"
+}
+
+mock_kubectl() {
+  if [[ " $* " == *" get service gitea-http "* ]]; then
+    if [[ "${MOCK_STATE}" == "missing" ]]; then
+      return 1
+    fi
+    if [[ "$*" == *".spec.clusterIP"* ]]; then
+      printf '%s' '10.43.66.127'
+    elif [[ "$*" == *".spec.ports"* ]]; then
+      printf '%s' '3000 '
+    fi
+    return 0
+  fi
+  if [[ " $* " == *" get endpoints gitea-http "* ]]; then
+    if [[ "${MOCK_STATE}" == "no-endpoint" ]]; then
+      return 0
+    fi
+    printf '%s' '10.42.148.10 '
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}
+
+require_gitea_service_contract
+
+MOCK_STATE=missing
+if require_gitea_service_contract; then
+  echo 'missing Gitea Service unexpectedly passed' >&2
+  exit 1
+fi
+[[ "${DEBUG_REASON}" == "service-missing" ]]
+
+MOCK_STATE=no-endpoint
+DEBUG_REASON=""
+if require_gitea_service_contract; then
+  echo 'Gitea Service without a ready endpoint unexpectedly passed' >&2
+  exit 1
+fi
+[[ "${DEBUG_REASON}" == "service-has-no-ready-endpoint" ]]
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            cwd=REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+            failures.append(f"Gitea service preflight behavior failed: {detail}")
+
+    return failures
+
+
 def main() -> int:
     phase_50_functions = functions(PHASE_50)
     phase_60_functions = functions(PHASE_60)
@@ -207,6 +306,7 @@ def main() -> int:
     )
     failures = validate_gitea_token_helpers()
     failures.extend(validate_push_mirror_helper())
+    failures.extend(validate_phase70_realization_gate())
     if duplicates:
         print("Move exact shared helpers into control-pair-common.sh:", file=sys.stderr)
         print("\n".join(f"- {name}" for name in duplicates), file=sys.stderr)
@@ -217,7 +317,7 @@ def main() -> int:
     print(
         "Control-pair helper ownership ok: "
         f"{len(phase_50_functions)} Phase 50 and {len(phase_60_functions)} Phase 60 helpers; "
-        "Gitea token and push-mirror behavior passed."
+        "Gitea token, push-mirror, and Phase 70 realization behavior passed."
     )
     return 0
 

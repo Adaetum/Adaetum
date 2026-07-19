@@ -485,7 +485,16 @@ run_gitops_realization_checks_phase70() {
     echo "[phase70] missing Phase 60 handoff script at ${phase60_script}" >&2
     return 1
   fi
-  PHASE60_MODE=realize PHASE60_RECONCILE_ONLY=1 bash "${phase60_script}"
+  # Phase 70 is the release gate for the handoff. Keep its observation path
+  # non-authoritative, but make failed requirements fatal and bounded. A health
+  # proof must not restart Gitea or wait through installer-length retries.
+  PHASE60_MODE=realize \
+    PHASE60_RECONCILE_ONLY=1 \
+    PHASE60_WARNING_ONLY=0 \
+    PHASE60_GITEA_ROLLOUT_TIMEOUT="${PHASE70_GITEA_ROLLOUT_TIMEOUT:-120s}" \
+    PHASE60_GITEA_ROLLOUT_ATTEMPTS=1 \
+    PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL=0 \
+    bash "${phase60_script}"
 }
 
 verify_openbao_secret_delivery_phase70() {
@@ -1039,7 +1048,15 @@ else
 fi
 
 run_phase70_step "verify GitOps handoff" critical verify_phase70_gitops_handoff
+if (( phase70_critical_failures > 0 )); then
+  echo "[phase70] GitOps handoff verification failed; stopping before realization checks" >&2
+  exit 1
+fi
 run_phase70_step "run GitOps realization checks" critical run_gitops_realization_checks_phase70
+if (( phase70_critical_failures > 0 )); then
+  echo "[phase70] GitOps realization checks failed; stopping before secret-delivery reconciliation" >&2
+  exit 1
+fi
 if ! verify_openbao_secret_delivery_phase70; then
   echo "[phase70] required OpenBao-backed workload secrets did not synchronize; stopping before realization work" >&2
   exit 1
