@@ -1560,16 +1560,13 @@ if [[ "${job_seen}" != "true" ]]; then
   exit 1
 fi
 
-# ESO is a structural Kubernetes-Secret adapter and must exist before Phase 50
-# requests an app-specific delivery Secret. It is installed from its pinned
-# public chart here because the private Gitea repository does not exist yet;
-# Argo's ApplicationSet adopts this same Application after the control-pair
-# handoff. No workload credential is created by this bridge.
-if ! wait_for_argo_application_crd "180s"; then
-  echo "[phase40] Argo CD Application CRD is unavailable; cannot establish ESO delivery." >&2
-  exit 1
-fi
-echo "[phase40] installing External Secrets Operator delivery foundation"
+# ESO is a structural Kubernetes-Secret adapter. When Argo CD is already
+# available, install its pinned public-chart bridge now; its ApplicationSet
+# adopts the same Application after the control-pair handoff. Break-glass
+# intentionally installs Argo CD in Phase 50, so Phase 40 must leave the
+# bridge to GitOps instead of failing on a CRD that cannot exist yet.
+if wait_for_argo_application_crd "180s"; then
+  echo "[phase40] installing External Secrets Operator delivery foundation"
 cat <<'EOF' | "${kubectl_bin}" -n argocd apply -f -
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -1619,6 +1616,9 @@ if ! "${kubectl_bin}" wait --for=condition=Ready clustersecretstore/openbao --ti
   exit 1
 fi
 echo "[phase40] External Secrets Operator and OpenBao delivery store are ready"
+else
+  echo "[phase40] Argo CD Application CRD is unavailable; deferring ESO delivery and OpenBao ClusterSecretStore reconciliation to Phase 50 GitOps." >&2
+fi
 
 if [[ "${use_argo}" == true ]]; then
   echo "[phase40] enabling post-OpenBao Argo CD app for post-control-pair reconciliation"

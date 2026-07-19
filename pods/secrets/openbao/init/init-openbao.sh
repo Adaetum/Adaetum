@@ -32,7 +32,7 @@ if [[ -f "${OUTFILE}" ]]; then
 fi
 
 "${KUBECTL_BIN}" -n "${NAMESPACE}" exec -i "${POD}" -- \
-  bao operator init -key-shares=5 -key-threshold=3 -format=json | tee "${OUTFILE}"
+  bao operator init -key-shares=5 -key-threshold=3 -format=json >"${OUTFILE}"
 
 chmod 0600 "${OUTFILE}"
 

@@ -11,8 +11,9 @@ Run on the first server (or any operator workstation with kubectl):
 pods/secrets/openbao/init/init-openbao.sh
 ```
 
-This writes init output to `/var/lib/bootstrap-secrets/openbao-init.json` and
-prints unseal key instructions.
+This writes init output only to `/var/lib/bootstrap-secrets/openbao-init.json`.
+The initializer must never print unseal material because bootstrap logs can be
+collected for recovery diagnostics.
 
 ## Unseal
 
