@@ -586,15 +586,37 @@ is_install_target_candidate() {
   return 0
 }
 
-while read -r name type rm size; do
-  is_install_target_candidate "${name}" "${type}" "${rm}" "${size}" || continue
-  if [ -n "${install_disk}" ] && [ "${name}" = "${install_disk}" ]; then
-    continue
+select_install_target() {
+  local name="" type="" rm="" size=""
+  target_disk=""
+  target_size=0
+  while read -r name type rm size; do
+    is_install_target_candidate "${name}" "${type}" "${rm}" "${size}" || continue
+    if [ -n "${install_disk}" ] && [ "${name}" = "${install_disk}" ]; then
+      continue
+    fi
+    target_disk="${name}"
+    target_size="${size}"
+    return 0
+  done < <(lsblk -dbn -o NAME,TYPE,RM,SIZE 2>/dev/null || true)
+  return 1
+}
+
+# Firmware-controlled NVMe/SATA controllers can publish their block devices
+# after Anaconda has started %pre. A single lsblk pass then leaves the included
+# partitioning file empty and Anaconda reports "Installation Destination is
+# mandatory." Wait for udev and retry discovery before declaring the host
+# unsuitable; the installer media exclusion above remains in force each time.
+if command -v udevadm >/dev/null 2>&1; then
+  udevadm settle --timeout=30 || true
+fi
+for attempt in $(seq 1 30); do
+  if select_install_target; then
+    break
   fi
-  target_disk="${name}"
-  target_size="${size}"
-  break
-done < <(lsblk -dbn -o NAME,TYPE,RM,SIZE 2>/dev/null || true)
+  echo "[KS] no install target visible yet (attempt ${attempt}/30); waiting for storage discovery"
+  sleep 2
+done
 
 if [ -z "${target_disk}" ]; then
   echo "[KS] ERROR: no suitable target disk found."

@@ -473,6 +473,13 @@ tasks:
           storage_args="rd.multipath=0 rd.md=0 rd.driver.pre=vmd"
         fi
         storage_args="$(sanitize_installer_args "${storage_args}")"
+        # Give Anaconda time to see firmware-managed disks before %pre runs.
+        # The matching %pre retry protects the target-selection boundary; this
+        # boot option covers its earlier storage inventory as well.
+        if ! printf ' %s ' "${storage_args}" | grep -qE '[[:space:]]inst\.wait_for_disks='; then
+          storage_args="${storage_args} inst.wait_for_disks=30"
+          storage_args="$(printf '%s' "${storage_args}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g')"
+        fi
         if [ -n "${storage_args}" ]; then
           ks_args="${ks_args} ${storage_args}"
         fi
