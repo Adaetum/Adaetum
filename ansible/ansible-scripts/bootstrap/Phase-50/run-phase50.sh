@@ -47,6 +47,8 @@ PHASE50_RANCHER_PROGRESS_DEADLINE_SECONDS="${PHASE50_RANCHER_PROGRESS_DEADLINE_S
 PHASE50_RANCHER_STARTUP_FAILURE_THRESHOLD="${PHASE50_RANCHER_STARTUP_FAILURE_THRESHOLD:-60}"
 PHASE50_RANCHER_STARTUP_PERIOD_SECONDS="${PHASE50_RANCHER_STARTUP_PERIOD_SECONDS:-5}"
 PHASE50_RANCHER_STARTUP_TIMEOUT_SECONDS="${PHASE50_RANCHER_STARTUP_TIMEOUT_SECONDS:-5}"
+PHASE50_RANCHER_ORIGIN_HEALTH_ATTEMPTS="${PHASE50_RANCHER_ORIGIN_HEALTH_ATTEMPTS:-12}"
+PHASE50_RANCHER_ORIGIN_HEALTH_DELAY="${PHASE50_RANCHER_ORIGIN_HEALTH_DELAY:-5}"
 PHASE50_DOMAIN_CHECK_STRICT="${PHASE50_DOMAIN_CHECK_STRICT:-0}"
 PHASE50_LOCAL_DOMAIN_CHECK_STRICT="${PHASE50_LOCAL_DOMAIN_CHECK_STRICT:-0}"
 PHASE50_DOMAIN_CHECK_RETRIES="${PHASE50_DOMAIN_CHECK_RETRIES:-18}"
@@ -2057,6 +2059,7 @@ tune_rancher_deployment() {
 }
 
 require_rancher_origin_ready() {
+  local attempt=0
   local eps_ips=""
   local svc_ip=""
   local probe_host=""
@@ -2094,8 +2097,17 @@ require_rancher_origin_ready() {
     fail_local_requirement "unable to determine probe host for rancher origin health check"
   fi
 
-  health_code="$(curl -k -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 20 \
-    "https://${probe_host}/healthz" || true)"
+  for ((attempt = 1; attempt <= PHASE50_RANCHER_ORIGIN_HEALTH_ATTEMPTS; attempt++)); do
+    health_code="$(curl -k -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 20 \
+      "https://${probe_host}/healthz" || true)"
+    if [[ "${health_code}" == "200" || "${health_code}" == "301" || "${health_code}" == "302" ]]; then
+      break
+    fi
+    if (( attempt < PHASE50_RANCHER_ORIGIN_HEALTH_ATTEMPTS )); then
+      echo "[phase50] rancher origin is still settling (attempt ${attempt}/${PHASE50_RANCHER_ORIGIN_HEALTH_ATTEMPTS}, http=${health_code:-<empty>}); retrying in ${PHASE50_RANCHER_ORIGIN_HEALTH_DELAY}s"
+      sleep "${PHASE50_RANCHER_ORIGIN_HEALTH_DELAY}"
+    fi
+  done
   if [[ "${health_code}" != "200" && "${health_code}" != "301" && "${health_code}" != "302" ]]; then
     rancher_debug_dump "healthz-http-${health_code:-empty}"
     fail_local_requirement \
@@ -3472,7 +3484,7 @@ else
 fi
 
 argocd_debug_dump
-require_rancher_origin_ready
-require_cloudflared_ready
+run_or_fail "Rancher origin did not become healthy after rollout" require_rancher_origin_ready
+run_or_fail "cloudflared did not become ready" require_cloudflared_ready
 
 echo "[phase50] complete"

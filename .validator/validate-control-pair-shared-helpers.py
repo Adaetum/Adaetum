@@ -819,6 +819,73 @@ fi
     return [f"Gitea registry token-service discovery failed: {detail}"]
 
 
+def validate_rancher_origin_settle() -> list[str]:
+    """Prove Rancher's origin gate tolerates endpoint handoff propagation."""
+    failures: list[str] = []
+    for phase, path in (("50", PHASE_50), ("60", PHASE_60)):
+        implementation = functions(path).get("require_rancher_origin_ready")
+        if not implementation:
+            failures.append(f"Phase {phase} is missing require_rancher_origin_ready")
+            continue
+        fixture = r'''
+set -euo pipefail
+kubectl_bin=mock_kubectl
+__PREFIX___RANCHER_ROLLOUT_TIMEOUT=1s
+__PREFIX___RANCHER_ORIGIN_HEALTH_ATTEMPTS=2
+__PREFIX___RANCHER_ORIGIN_HEALTH_DELAY=0
+STATUS_FILE="$(mktemp)"
+printf '%s' 0 >"${STATUS_FILE}"
+
+mock_kubectl() {
+  if [[ " $* " == *" get namespace cattle-system "* ]] \
+    || [[ " $* " == *" get deployment rancher "* ]] \
+    || [[ " $* " == *" rollout status deployment/rancher "* ]]; then
+    return 0
+  fi
+  if [[ " $* " == *" get endpoints rancher "* ]]; then
+    printf '%s' 10.42.0.10
+    return 0
+  fi
+  if [[ " $* " == *" get svc rancher "* ]]; then
+    printf '%s' 10.43.0.10
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}
+
+tune_rancher_deployment() { return 0; }
+rancher_debug_dump() { return 0; }
+fail_local_requirement() { echo "$*" >&2; return 1; }
+sleep() { return 0; }
+curl() {
+  count="$(cat "${STATUS_FILE}")"
+  count=$((count + 1))
+  printf '%s' "${count}" >"${STATUS_FILE}"
+  if [[ "${count}" == 1 ]]; then
+    printf '%s' 000
+  else
+    printf '%s' 200
+  fi
+}
+
+require_rancher_origin_ready
+[[ "$(cat "${STATUS_FILE}")" == 2 ]]
+rm -f "${STATUS_FILE}"
+'''.replace("__PREFIX__", f"PHASE{phase}")
+        result = subprocess.run(
+            ["bash", "-c", implementation + fixture],
+            cwd=REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+            failures.append(f"Phase {phase} Rancher origin settle behavior failed: {detail}")
+    return failures
+
+
 def validate_secret_foundation_handoff() -> list[str]:
     """Keep the narrowed source-of-truth ApplicationSet ahead of full handoff."""
     phase_60 = PHASE_60.read_text(encoding="utf-8")
@@ -876,6 +943,7 @@ def main() -> int:
     failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())
     failures.extend(validate_registry_token_service_discovery())
+    failures.extend(validate_rancher_origin_settle())
     failures.extend(validate_secret_foundation_handoff())
     if duplicates:
         print("Move exact shared helpers into control-pair-common.sh:", file=sys.stderr)
@@ -887,7 +955,8 @@ def main() -> int:
     print(
         "Control-pair helper ownership ok: "
         f"{len(phase_50_functions)} Phase 50 and {len(phase_60_functions)} Phase 60 helpers; "
-        "Gitea token, push-mirror, bounded secret delivery, and Phase 70 realization behavior passed."
+        "Gitea token, push-mirror, bounded secret delivery, Rancher origin settling, "
+        "and Phase 70 realization behavior passed."
     )
     return 0
 
