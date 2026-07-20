@@ -17,6 +17,7 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+PHASE_40 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh"
 PHASE_50 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh"
 PHASE_60 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh"
 SHARED_HELPERS = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/control-pair-common.sh"
@@ -129,6 +130,7 @@ set -euo pipefail
 source {source_path}
 
 openbao_token=bao-token
+repo_root={shlex.quote(str(REPOSITORY_ROOT))}
 kubectl_bin=mock_kubectl
 OPENBAO_NAMESPACE=openbao
 OPENBAO_POD=openbao-0
@@ -150,6 +152,16 @@ github_token_looks_like_pat() {{ return 0; }}
 find_ready_gitea_pod() {{ printf '%s' gitea-0; }}
 
 mock_kubectl() {{
+  if [[ " $* " == *" get crd externalsecrets.external-secrets.io "* ]]; then
+    return 0
+  fi
+  if [[ " $* " == *" get deployment external-secrets "* && " $* " == *".status.conditions"* ]]; then
+    printf '%s' True
+    return 0
+  fi
+  if [[ " $* " == *" apply -f "*"push-mirror-external-secret.yaml"* ]]; then
+    return 0
+  fi
   if [[ " $* " == *" exec -i gitea-0 "* ]]; then
     [[ " $* " == *" EXPECTED_REPO_URL=https://github.com/example/recovery.git "* ]]
     [[ " $* " == *" EXPECTED_USERNAME=openbao-user "* ]]
@@ -248,6 +260,94 @@ fi
     return [f"ExternalSecret timeout behavior failed: {detail}"]
 
 
+def validate_csi_secret_timeout() -> list[str]:
+    """Prove a missing CSI class cannot block the first boot indefinitely."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = rf'''
+set -euo pipefail
+source {source_path}
+
+BOOTSTRAP_CSI_SECRET_TIMEOUT_SECONDS=1
+BOOTSTRAP_CSI_SECRET_POLL_SECONDS=1
+DIAGNOSTICS_CAPTURED=0
+
+bootstrap_capture_secret_delivery_foundation_diagnostics() {{
+  [[ "$3" == "provider-class-missing" ]]
+  DIAGNOSTICS_CAPTURED=1
+}}
+
+mock_kubectl() {{
+  if [[ " $* " == *" get secretproviderclass missing-class "* ]]; then
+    return 1
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}}
+
+if bootstrap_wait_for_csi_secret_delivery \
+  mock_kubectl ansible missing-class stalled-component; then
+  echo 'missing SecretProviderClass unexpectedly passed' >&2
+  exit 1
+fi
+[[ "${{DIAGNOSTICS_CAPTURED}}" == 1 ]]
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"CSI secret timeout behavior failed: {detail}"]
+
+
+def validate_secret_foundation_ready() -> list[str]:
+    """Exercise the successful status contract used by Phases 60 and 70."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = rf'''
+set -euo pipefail
+source {source_path}
+
+mock_kubectl() {{
+  if [[ " $* " == *" -n argocd get application "* && " $* " == *".status.sync.status"* ]]; then
+    printf '%s' Synced
+    return 0
+  fi
+  if [[ " $* " == *" -n argocd get application "* && " $* " == *".status.health.status"* ]]; then
+    printf '%s' Healthy
+    return 0
+  fi
+  if [[ " $* " == *" get crd "* ]]; then
+    return 0
+  fi
+  if [[ " $* " == *" get clustersecretstore openbao "* ]]; then
+    printf '%s' True
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}}
+
+bootstrap_wait_for_secret_delivery_foundation mock_kubectl test-foundation
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"Secret-delivery foundation readiness behavior failed: {detail}"]
+
+
 def validate_phase70_realization_gate() -> list[str]:
     """Keep the post-handoff proof strict, bounded, and non-restarting."""
     phase_60 = PHASE_60.read_text(encoding="utf-8")
@@ -274,10 +374,23 @@ def validate_phase70_realization_gate() -> list[str]:
         "PHASE60_GITEA_ROLLOUT_ATTEMPTS=1",
         "PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL=0",
         "GitOps handoff verification failed; stopping before realization checks",
+        "verify_secret_delivery_foundation_phase70",
+        "secret-delivery foundation failed; stopping before workload realization checks",
         "GitOps realization checks failed; stopping before secret-delivery reconciliation",
     ):
         if required not in phase_70:
             failures.append(f"Phase 70 realization gate contract missing: {required}")
+
+    foundation_gate = phase_70.find(
+        'run_phase70_step "verify secret-delivery foundation"'
+    )
+    realization_gate = phase_70.find(
+        'run_phase70_step "run GitOps realization checks"'
+    )
+    if foundation_gate < 0 or realization_gate < 0 or foundation_gate > realization_gate:
+        failures.append(
+            "Phase 70 must prove the secret-delivery foundation before workload realization"
+        )
 
     phase_60_functions = functions(PHASE_60)
     service_check = phase_60_functions.get("require_gitea_service_contract")
@@ -348,6 +461,46 @@ fi
     return failures
 
 
+def validate_secret_foundation_handoff() -> list[str]:
+    """Keep the narrowed source-of-truth ApplicationSet ahead of full handoff."""
+    phase_60 = PHASE_60.read_text(encoding="utf-8")
+    phase_50 = PHASE_50.read_text(encoding="utf-8")
+    phase_40 = PHASE_40.read_text(encoding="utf-8")
+    failures: list[str] = []
+    for required in (
+        "applicationset-foundation.yaml",
+        "pods/secrets/csi-secrets-store.app.yaml",
+        "pods/secrets/openbao-csi-provider.app.yaml",
+        "pods/secrets/external-secrets.app.yaml",
+        "pods/secrets/openbao-sync.app.yaml",
+        "bootstrap_wait_for_secret_delivery_foundation",
+        "get applicationset apps",
+        "preserving its generator while checking foundation readiness",
+    ):
+        if required not in phase_60:
+            failures.append(f"Phase 60 secret-foundation handoff missing: {required}")
+    foundation_apply = phase_60.find(
+        'apply_secret_delivery_foundation_bridge "${rendered_dir}/applicationset-foundation.yaml"'
+    )
+    full_apply = phase_60.find('apply -f "${rendered_dir}/app-of-apps.yaml"')
+    if foundation_apply < 0 or full_apply < 0 or foundation_apply > full_apply:
+        failures.append(
+            "Phase 60 must prove its narrowed ApplicationSet before applying app-of-apps"
+        )
+    if 'wait_for_argo_application_crd "180s"' in phase_40:
+        failures.append(
+            "Phase 40 must not wait for the Argo CRD before the phase that installs Argo CD"
+        )
+    for phase_name, source in (("Phase 50", phase_50), ("Phase 60", phase_60)):
+        for required in (
+            "get crd externalsecrets.external-secrets.io",
+            "deferring admin token reconciliation to Phase 90",
+        ):
+            if required not in source:
+                failures.append(f"{phase_name} clean-install deferral missing: {required}")
+    return failures
+
+
 def main() -> int:
     phase_50_functions = functions(PHASE_50)
     phase_60_functions = functions(PHASE_60)
@@ -359,7 +512,10 @@ def main() -> int:
     failures = validate_gitea_token_helpers()
     failures.extend(validate_push_mirror_helper())
     failures.extend(validate_external_secret_timeout())
+    failures.extend(validate_csi_secret_timeout())
+    failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())
+    failures.extend(validate_secret_foundation_handoff())
     if duplicates:
         print("Move exact shared helpers into control-pair-common.sh:", file=sys.stderr)
         print("\n".join(f"- {name}" for name in duplicates), file=sys.stderr)
@@ -370,7 +526,7 @@ def main() -> int:
     print(
         "Control-pair helper ownership ok: "
         f"{len(phase_50_functions)} Phase 50 and {len(phase_60_functions)} Phase 60 helpers; "
-        "Gitea token, push-mirror, ExternalSecret timeout, and Phase 70 realization behavior passed."
+        "Gitea token, push-mirror, bounded secret delivery, and Phase 70 realization behavior passed."
     )
     return 0
 

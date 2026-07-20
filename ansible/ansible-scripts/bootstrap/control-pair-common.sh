@@ -1148,8 +1148,20 @@ configure_gitea_push_mirror_from_openbao() {
   fi
 
   # This remains an ESO adapter because Gitea's hook uses a projected native
-  # Secret. Once OpenBao is seeded, wait for the adapter instead of reviving a
-  # bootstrap writer on reruns.
+  # Secret. A clean install reaches this helper before ESO exists in Phase 50;
+  # seed OpenBao there, then let Phase 60 retry after its foundation gate.
+  if ! "${kubectl_bin}" get crd externalsecrets.external-secrets.io >/dev/null 2>&1 || \
+     [[ "$("${kubectl_bin}" -n external-secrets get deployment external-secrets \
+       -o jsonpath='{range .status.conditions[?(@.type=="Available")]}{.status}{end}' 2>/dev/null || true)" != "True" ]]; then
+    echo "[${phase_label}] External Secrets is not installed yet; deferring Gitea push-mirror hook delivery"
+    return 0
+  fi
+  if [[ ! -f "${repo_root}/pods/gitea/gitea-secret-sync/push-mirror-external-secret.yaml" ]]; then
+    echo "[${phase_label}] Gitea push-mirror ExternalSecret declaration is missing" >&2
+    return 1
+  fi
+  "${kubectl_bin}" apply -f \
+    "${repo_root}/pods/gitea/gitea-secret-sync/push-mirror-external-secret.yaml"
   bootstrap_wait_for_external_secret_delivery \
     "${kubectl_bin}" gitea gitea-push-mirror gitea-push-mirror gitea-push-mirror
 
@@ -1612,6 +1624,154 @@ bootstrap_wait_for_external_secret_delivery() {
   done
 }
 
+# The ApplicationSet creates independent Applications. Their sync-wave
+# annotations do not serialize those Applications, so bootstrap explicitly
+# proves the secret-delivery foundation before a workload may adopt CSI-backed
+# pod specs. Keep this check shared by the handoff and the final realization
+# gate so a regression fails with the dependency evidence, not as an unrelated
+# workload outage.
+bootstrap_capture_secret_delivery_foundation_diagnostics() {
+  local kubectl_path="${1:?kubectl path}"
+  local component="${2:-secret-delivery-foundation}"
+  local reason="${3:-not-ready}"
+  local evidence_path=""
+  local app=""
+  local pod_name=""
+
+  evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "foundation")"
+  {
+    echo "[secret-foundation] diagnostics (${reason}) ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+    echo "[secret-foundation] Argo CD applications"
+    "${kubectl_path}" -n argocd get applicationset apps -o yaml 2>/dev/null || true
+    for app in csi-secrets-store openbao-csi-provider external-secrets openbao-secret-sync; do
+      "${kubectl_path}" -n argocd get application "${app}" -o wide 2>/dev/null || true
+      "${kubectl_path}" -n argocd get application "${app}" \
+        -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.message}{"\n"}{end}' 2>/dev/null || true
+    done
+    "${kubectl_path}" -n argocd get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 120 || true
+    "${kubectl_path}" -n argocd logs deployment/argocd-repo-server \
+      --all-containers --tail=200 2>/dev/null || true
+    "${kubectl_path}" -n argocd logs statefulset/argocd-application-controller \
+      --all-containers --tail=200 2>/dev/null || true
+    "${kubectl_path}" -n argocd logs deployment/argocd-applicationset-controller \
+      --all-containers --tail=200 2>/dev/null || true
+    echo "[secret-foundation] required CRDs and OpenBao store"
+    "${kubectl_path}" get crd \
+      secretproviderclasses.secrets-store.csi.x-k8s.io \
+      secretproviderclasspodstatuses.secrets-store.csi.x-k8s.io \
+      externalsecrets.external-secrets.io \
+      clustersecretstores.external-secrets.io -o wide 2>/dev/null || true
+    "${kubectl_path}" get clustersecretstore openbao -o yaml 2>/dev/null || true
+    echo "[secret-foundation] CSI driver/provider resources"
+    "${kubectl_path}" -n kube-system get daemonset,pod -o wide 2>/dev/null | \
+      grep -E 'NAME|secrets-store|openbao.*csi' || true
+    "${kubectl_path}" -n kube-system get events --sort-by=.lastTimestamp 2>/dev/null | \
+      grep -E 'secrets-store|openbao.*csi|FailedMount|MountVolume' | tail -n 120 || true
+    while IFS= read -r pod_name; do
+      [[ -n "${pod_name}" ]] || continue
+      echo "[secret-foundation] describe kube-system/${pod_name}"
+      "${kubectl_path}" -n kube-system describe "${pod_name}" 2>/dev/null || true
+      echo "[secret-foundation] current logs kube-system/${pod_name}"
+      "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --tail=200 2>/dev/null || true
+      echo "[secret-foundation] previous logs kube-system/${pod_name}"
+      "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --previous --tail=200 2>/dev/null || true
+    done < <("${kubectl_path}" -n kube-system get pods -o name 2>/dev/null | \
+      grep -E 'secrets-store|openbao.*csi' || true)
+    echo "[secret-foundation] External Secrets resources"
+    "${kubectl_path}" -n external-secrets get deployment,pod -o wide 2>/dev/null || true
+    "${kubectl_path}" -n external-secrets get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 120 || true
+    "${kubectl_path}" -n external-secrets logs deployment/external-secrets \
+      --all-containers --tail=200 2>/dev/null || true
+  } | tee "${evidence_path}" || true
+  bootstrap_diag_record_file_event \
+    "${component}" "secret-delivery-foundation" \
+    "captured Argo application, CRD, provider, controller, and event diagnostics (${reason})" \
+    "${evidence_path}" "error" "secret-foundation"
+}
+
+bootstrap_wait_for_secret_delivery_foundation() {
+  local kubectl_path="${1:?kubectl path}"
+  local component="${2:-secret-delivery-foundation}"
+  local timeout_seconds="${BOOTSTRAP_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS:-600}"
+  local poll_seconds="${BOOTSTRAP_SECRET_DELIVERY_FOUNDATION_POLL_SECONDS:-10}"
+  local started_seconds="${SECONDS}"
+  local elapsed_seconds=0
+  local last_report_seconds=-60
+  local all_ready=""
+  local app=""
+  local sync_status=""
+  local health_status=""
+  local store_ready=""
+  local -a applications=(
+    csi-secrets-store
+    openbao-csi-provider
+    external-secrets
+    openbao-secret-sync
+  )
+  local -a required_crds=(
+    secretproviderclasses.secrets-store.csi.x-k8s.io
+    secretproviderclasspodstatuses.secrets-store.csi.x-k8s.io
+    externalsecrets.external-secrets.io
+    clustersecretstores.external-secrets.io
+  )
+  local crd=""
+
+  if ! [[ "${timeout_seconds}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[secret-foundation] invalid BOOTSTRAP_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS=${timeout_seconds}; using 600" >&2
+    timeout_seconds=600
+  fi
+  if ! [[ "${poll_seconds}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[secret-foundation] invalid BOOTSTRAP_SECRET_DELIVERY_FOUNDATION_POLL_SECONDS=${poll_seconds}; using 10" >&2
+    poll_seconds=10
+  fi
+
+  echo "[secret-foundation] waiting for CSI, OpenBao provider, External Secrets, and ClusterSecretStore readiness"
+  while true; do
+    all_ready=true
+    for app in "${applications[@]}"; do
+      sync_status="$("${kubectl_path}" -n argocd get application "${app}" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+      health_status="$("${kubectl_path}" -n argocd get application "${app}" -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+      if [[ "${sync_status}" != "Synced" || "${health_status}" != "Healthy" ]]; then
+        all_ready=false
+      fi
+    done
+    for crd in "${required_crds[@]}"; do
+      if ! "${kubectl_path}" get crd "${crd}" >/dev/null 2>&1; then
+        all_ready=false
+      fi
+    done
+    store_ready="$("${kubectl_path}" get clustersecretstore openbao \
+      -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}' 2>/dev/null || true)"
+    if [[ "${store_ready}" != "True" ]]; then
+      all_ready=false
+    fi
+    if [[ "${all_ready}" == "true" ]]; then
+      elapsed_seconds=$((SECONDS - started_seconds))
+      echo "[secret-foundation] ready after ${elapsed_seconds}s"
+      return 0
+    fi
+
+    elapsed_seconds=$((SECONDS - started_seconds))
+    if (( elapsed_seconds >= timeout_seconds )); then
+      echo "[secret-foundation] timed out after ${elapsed_seconds}s" >&2
+      bootstrap_capture_secret_delivery_foundation_diagnostics \
+        "${kubectl_path}" "${component}" "timeout"
+      return 1
+    fi
+    if (( elapsed_seconds - last_report_seconds >= 60 )); then
+      echo "[secret-foundation] still reconciling after ${elapsed_seconds}s"
+      for app in "${applications[@]}"; do
+        sync_status="$("${kubectl_path}" -n argocd get application "${app}" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+        health_status="$("${kubectl_path}" -n argocd get application "${app}" -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+        echo "[secret-foundation] argocd/application/${app}: sync=${sync_status:-missing} health=${health_status:-missing}"
+      done
+      echo "[secret-foundation] clustersecretstore/openbao: Ready=${store_ready:-missing}"
+      last_report_seconds="${elapsed_seconds}"
+    fi
+    sleep "${poll_seconds}"
+  done
+}
+
 # CSI is the direct OpenBao delivery path. A SecretProviderClass is declarative
 # intent; the PodStatus is the proof that kubelet mounted the value using the
 # requesting workload identity. Do not accept a similarly named Kubernetes
@@ -1625,12 +1785,32 @@ bootstrap_wait_for_csi_secret_delivery() {
   local status=""
   local mount_failure=""
   local evidence_path=""
+  local timeout_seconds="${BOOTSTRAP_CSI_SECRET_TIMEOUT_SECONDS:-600}"
+  local poll_seconds="${BOOTSTRAP_CSI_SECRET_POLL_SECONDS:-15}"
+  local started_seconds="${SECONDS}"
+  local elapsed_seconds=0
+
+  if ! [[ "${timeout_seconds}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[secret-csi] invalid BOOTSTRAP_CSI_SECRET_TIMEOUT_SECONDS=${timeout_seconds}; using 600" >&2
+    timeout_seconds=600
+  fi
+  if ! [[ "${poll_seconds}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[secret-csi] invalid BOOTSTRAP_CSI_SECRET_POLL_SECONDS=${poll_seconds}; using 15" >&2
+    poll_seconds=15
+  fi
 
   echo "[secret-csi] watching ${namespace}/secretproviderclass/${provider_class}"
   while true; do
     if ! "${kubectl_path}" -n "${namespace}" get secretproviderclass "${provider_class}" >/dev/null 2>&1; then
-      echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: waiting for GitOps apply"
-      sleep 15
+      elapsed_seconds=$((SECONDS - started_seconds))
+      if (( elapsed_seconds >= timeout_seconds )); then
+        echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: timed out waiting for GitOps apply after ${elapsed_seconds}s" >&2
+        bootstrap_capture_secret_delivery_foundation_diagnostics \
+          "${kubectl_path}" "${component}" "provider-class-missing"
+        return 1
+      fi
+      echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: waiting for GitOps apply (${elapsed_seconds}s/${timeout_seconds}s)"
+      sleep "${poll_seconds}"
       continue
     fi
     status="$("${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus \
@@ -1642,7 +1822,9 @@ bootstrap_wait_for_csi_secret_delivery() {
       echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: mounted by ${status//$'\n'/, }"
       return 0
     fi
-    mount_failure="$("${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp 2>/dev/null | grep -E 'FailedMount|MountVolume\.SetUp failed|permission denied|forbidden' | tail -n 1 || true)"
+    mount_failure="$("${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp 2>/dev/null | \
+      grep -E 'FailedMount|MountVolume\.SetUp failed|permission denied|forbidden' | \
+      grep -E "${expected_pod:-${provider_class}}" | tail -n 1 || true)"
     if [[ -n "${mount_failure}" ]]; then
       echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: terminal mount failure: ${mount_failure}" >&2
       evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "csi-secret")"
@@ -1663,20 +1845,28 @@ bootstrap_wait_for_csi_secret_delivery() {
         "${evidence_path}" "error" "secret-csi"
       return 1
     fi
-    evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "csi-secret")"
-    {
-      echo "[secret-csi] diagnostics for ${namespace}/secretproviderclass/${provider_class} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
-      "${kubectl_path}" -n "${namespace}" describe secretproviderclass "${provider_class}" || true
-      "${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus -o wide || true
-      "${kubectl_path}" -n kube-system get pods -o wide | grep -E 'secrets-store|openbao.*csi' || true
-      "${kubectl_path}" -n kube-system logs -l app.kubernetes.io/component=csi --all-containers --tail=100 || true
-      while IFS= read -r pod_name; do
-        [[ -n "${pod_name}" ]] || continue
-        "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --previous --tail=100 || true
-      done < <("${kubectl_path}" -n kube-system get pods -o name | grep -E 'secrets-store|openbao.*csi' || true)
-    } >"${evidence_path}" 2>&1 || true
+    elapsed_seconds=$((SECONDS - started_seconds))
+    if (( elapsed_seconds >= timeout_seconds )); then
+      echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: timed out waiting for an authenticated mount after ${elapsed_seconds}s" >&2
+      evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "csi-secret")"
+      {
+        echo "[secret-csi] timeout diagnostics for ${namespace}/secretproviderclass/${provider_class} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+        "${kubectl_path}" -n "${namespace}" describe secretproviderclass "${provider_class}" || true
+        "${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus -o wide || true
+        "${kubectl_path}" -n "${namespace}" get pods -o wide || true
+        "${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp | tail -n 120 || true
+        "${kubectl_path}" -n kube-system get daemonset,pod -o wide | grep -E 'NAME|secrets-store|openbao.*csi' || true
+      } | tee "${evidence_path}" || true
+      bootstrap_diag_record_file_event \
+        "${component}" "${provider_class}-csi-timeout" \
+        "captured CSI class, pod status, workload, provider, and event diagnostics after bounded wait" \
+        "${evidence_path}" "error" "secret-csi"
+      bootstrap_capture_secret_delivery_foundation_diagnostics \
+        "${kubectl_path}" "${component}" "authenticated-mount-timeout"
+      return 1
+    fi
     echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: waiting for first authenticated mount"
-    sleep 15
+    sleep "${poll_seconds}"
   done
 }
 

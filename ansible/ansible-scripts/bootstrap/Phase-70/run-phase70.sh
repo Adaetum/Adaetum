@@ -134,6 +134,17 @@ run_phase70_step() {
   fi
 
   echo "[phase70] step failed: ${label} (rc=${rc})" >&2
+  phase70_last_error_line="${BASH_LINENO[0]:-unknown}"
+  phase70_last_error_cmd="${label} (rc=${rc})"
+  bootstrap_diag_record \
+    "phase=phase70" \
+    "step=${label}" \
+    "component=phase70" \
+    "operation=step-failed" \
+    "severity=$([[ "${severity}" == "critical" ]] && echo error || echo warning)" \
+    "exit_code=${rc}" \
+    "summary=${label} failed" \
+    "log_path=${PHASE70_LOG_FILE}"
   phase70_failures=$((phase70_failures + 1))
   if [[ "${severity}" == "critical" ]]; then
     phase70_critical_failures=$((phase70_critical_failures + 1))
@@ -495,6 +506,16 @@ run_gitops_realization_checks_phase70() {
     PHASE60_GITEA_ROLLOUT_ATTEMPTS=1 \
     PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL=0 \
     bash "${phase60_script}"
+}
+
+verify_secret_delivery_foundation_phase70() {
+  if [[ -z "${kubectl_bin}" ]]; then
+    echo "[phase70] kubectl is unavailable; cannot verify secret-delivery foundation" >&2
+    return 1
+  fi
+  BOOTSTRAP_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS="${PHASE70_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS:-300}" \
+    bootstrap_wait_for_secret_delivery_foundation \
+      "${kubectl_bin}" "secret-delivery-foundation"
 }
 
 verify_openbao_secret_delivery_phase70() {
@@ -1050,6 +1071,11 @@ fi
 run_phase70_step "verify GitOps handoff" critical verify_phase70_gitops_handoff
 if (( phase70_critical_failures > 0 )); then
   echo "[phase70] GitOps handoff verification failed; stopping before realization checks" >&2
+  exit 1
+fi
+run_phase70_step "verify secret-delivery foundation" critical verify_secret_delivery_foundation_phase70
+if (( phase70_critical_failures > 0 )); then
+  echo "[phase70] secret-delivery foundation failed; stopping before workload realization checks" >&2
   exit 1
 fi
 run_phase70_step "run GitOps realization checks" critical run_gitops_realization_checks_phase70

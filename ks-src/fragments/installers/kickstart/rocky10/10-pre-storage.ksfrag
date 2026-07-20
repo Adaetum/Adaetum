@@ -39,7 +39,7 @@ while true; do
   # pull contains the first attempt, not only a later successful retry.
   if [ ! -f /tmp/ks-storage-failure-captured ] && [ -x /tmp/collect-storage-diag.sh ]; then
     if grep -Eiq \
-      'Installation Destination.*(mandatory|not complete)|No disks detected|No usable disks|storage.*configuration.*failed|failed to save storage configuration' \
+      'Installation Destination.*(mandatory|not complete|not ready)|mandatory spoke.*Installation Destination|No disks detected|No usable disks|storage.*configuration.*failed|failed to save storage configuration' \
       /tmp/anaconda.log /tmp/storage.log /tmp/program.log 2>/dev/null; then
       touch /tmp/ks-storage-failure-captured
       echo "[KS] detected incomplete installer storage; uploading diagnostics" >>"${watch_log}"

@@ -34,6 +34,7 @@ PHASE60_GITEA_PROGRESS_DEADLINE_SECONDS="${PHASE60_GITEA_PROGRESS_DEADLINE_SECON
 PHASE60_GITEA_ROLLOUT_ATTEMPTS="${PHASE60_GITEA_ROLLOUT_ATTEMPTS:-2}"
 PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL="${PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL:-1}"
 PHASE60_GITEA_DEBUG_LOG="${PHASE60_GITEA_DEBUG_LOG:-${PHASE60_LOG_FILE}}"
+PHASE60_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS="${PHASE60_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS:-600}"
 PHASE60_CLOUDFLARED_ROLLOUT_TIMEOUT="${PHASE60_CLOUDFLARED_ROLLOUT_TIMEOUT:-300s}"
 PHASE60_CLOUDFLARED_ROLLOUT_ATTEMPTS="${PHASE60_CLOUDFLARED_ROLLOUT_ATTEMPTS:-2}"
 PHASE60_CLOUDFLARED_ROLLOUT_RESTART_ON_FAIL="${PHASE60_CLOUDFLARED_ROLLOUT_RESTART_ON_FAIL:-1}"
@@ -281,6 +282,13 @@ ensure_authentik_secret() {
     admin_username=akadmin \
     "bootstrap_password=${bootstrap_password}" \
     "bootstrap_token=${bootstrap_token}"
+  if ! "${kubectl_bin}" get crd externalsecrets.external-secrets.io >/dev/null 2>&1 || \
+     [[ "$("${kubectl_bin}" -n external-secrets get deployment external-secrets \
+       -o jsonpath='{range .status.conditions[?(@.type=="Available")]}{.status}{end}' 2>/dev/null || true)" != "True" ]]; then
+    echo "[phase60] External Secrets is not ready yet; deferring Authentik delivery until the pre-handoff foundation is ready"
+    return 0
+  fi
+  "${kubectl_bin}" apply -f "${repo_root}/pods/authentik/authentik-secret-sync/external-secret.yaml"
   bootstrap_wait_for_external_secret_delivery \
     "${kubectl_bin}" authentik authentik-postgresql-desired authentik-postgresql-desired authentik-postgresql
   if ! "${kubectl_bin}" -n authentik get secret authentik-postgresql >/dev/null 2>&1; then
@@ -295,15 +303,10 @@ ensure_headlamp_admin_token() {
   local token=""
   local attempt=0
 
-  "${kubectl_bin}" create namespace headlamp --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  for attempt in $(seq 1 90); do
-    if "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 2
-  done
+  # Headlamp is created by the ApplicationSet later in this phase. Phase 90
+  # owns final token reconciliation, so a clean install must defer immediately.
   if ! "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
-    echo "[phase60] headlamp service account not ready yet; skipping token export" >&2
+    echo "[phase60] Headlamp is not installed yet; deferring admin token reconciliation to Phase 90"
     return 1
   fi
 
@@ -1037,6 +1040,56 @@ data:
 EOF
 }
 
+apply_secret_delivery_foundation_bridge() {
+  local foundation_appset="${1:?foundation ApplicationSet manifest}"
+
+  # BOOTSTRAP-ONLY structural bridge: start the real ApplicationSet with its
+  # Git generator narrowed to the four secret-delivery definitions. The same
+  # ApplicationSet owns those Applications when its full generator is applied
+  # below, avoiding a second chart-values or ownership contract.
+  echo "[phase60] installing secret-delivery foundation before ApplicationSet handoff"
+  bootstrap_diag_record \
+    "phase=phase60" \
+    "step=handoff" \
+    "component=secret-delivery-foundation" \
+    "operation=foundation-start" \
+    "severity=info" \
+    "summary=installing CSI driver, OpenBao provider, External Secrets, and OpenBao store before ApplicationSet handoff" \
+    "log_path=${BOOTSTRAP_DIAG_LOG_PATH}"
+  if "${kubectl_bin}" -n argocd get applicationset apps >/dev/null 2>&1; then
+    # Never contract an existing steady-state set: removing generator entries
+    # can delete its Applications. An interrupted first run already has the
+    # narrowed set, while a rerun has the full set; both can be observed safely.
+    echo "[phase60] ApplicationSet/apps already exists; preserving its generator while checking foundation readiness"
+  else
+    "${kubectl_bin}" -n argocd apply -f "${foundation_appset}"
+  fi
+
+  BOOTSTRAP_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS="${PHASE60_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS}" \
+    bootstrap_wait_for_secret_delivery_foundation \
+      "${kubectl_bin}" "secret-delivery-foundation"
+  if [[ "${gitea_push_mirror_enabled_effective:-0}" == "1" || \
+        "${gitea_push_mirror_enabled_effective:-0}" == "true" || \
+        "${gitea_push_mirror_enabled_effective:-0}" == "yes" ]]; then
+    if ! configure_gitea_push_mirror \
+      "${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
+      "${GITEA_SEED_TARGET_REPO:-cluster}" \
+      "${gitea_push_mirror_repo_url_effective:-}" \
+      "${gitea_push_mirror_username_effective:-}" \
+      "${gitea_push_mirror_token_effective:-}"; then
+      echo "[phase60] WARNING: failed configuring Gitea push mirror after secret-delivery foundation became ready" >&2
+    fi
+  fi
+  bootstrap_diag_record \
+    "phase=phase60" \
+    "step=handoff" \
+    "component=secret-delivery-foundation" \
+    "operation=foundation-ready" \
+    "severity=info" \
+    "summary=secret-delivery foundation ready before ApplicationSet handoff" \
+    "log_path=${BOOTSTRAP_DIAG_LOG_PATH}"
+}
+
 reconcile_argocd_bootstrap_repo() {
   local repo_url="${1:-}"
   local repo_username="${2:-}"
@@ -1133,8 +1186,31 @@ for name in ("app-of-apps.yaml", "applicationset.yaml"):
     elif name == "applicationset.yaml":
         text = re.sub(r"(^\s{8}revision:\s*).*$", r"\1" + repo_branch, text, count=1, flags=re.MULTILINE)
     (dst_dir / name).write_text(text, encoding="utf-8")
+    if name == "applicationset.yaml":
+        foundation_paths = "\n".join(
+            f"          - path: {path}"
+            for path in (
+                "pods/secrets/csi-secrets-store.app.yaml",
+                "pods/secrets/openbao-csi-provider.app.yaml",
+                "pods/secrets/external-secrets.app.yaml",
+                "pods/secrets/openbao-sync.app.yaml",
+            )
+        )
+        foundation_text, replacements = re.subn(
+            r"^\s{10}- path: pods/\*/\*\.app\.yaml\s*$",
+            foundation_paths,
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        if replacements != 1:
+            raise SystemExit("ApplicationSet app-definition generator path was not found")
+        (dst_dir / "applicationset-foundation.yaml").write_text(
+            foundation_text, encoding="utf-8"
+        )
 PY
 
+  apply_secret_delivery_foundation_bridge "${rendered_dir}/applicationset-foundation.yaml"
   "${kubectl_bin}" -n argocd apply -f "${rendered_dir}/app-of-apps.yaml"
   "${kubectl_bin}" -n argocd apply -f "${rendered_dir}/applicationset.yaml"
   rm -rf "${rendered_dir}"
@@ -1719,6 +1795,8 @@ fail_local_requirement() {
       "realization=$([[ "${PHASE60_MODE}" == "realize" ]] && echo true || echo false)"
     return 0
   fi
+  phase60_last_error_line="${BASH_LINENO[0]:-unknown}"
+  phase60_last_error_cmd="$*"
   echo "[phase60] ERROR: $*" >&2
   bootstrap_diag_record \
     "phase=phase60" \
@@ -1826,6 +1904,16 @@ gitea_debug_dump() {
     "${kubectl_bin}" -n gitea describe deploy gitea 2>/dev/null || true
     echo "[kubectl] recent events"
     "${kubectl_bin}" -n gitea get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 80 || true
+    echo "[kubectl] secret-delivery foundation status"
+    for app in csi-secrets-store openbao-csi-provider external-secrets openbao-secret-sync; do
+      "${kubectl_bin}" -n argocd get application "${app}" -o wide 2>/dev/null || true
+      "${kubectl_bin}" -n argocd get application "${app}" \
+        -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.message}{"\n"}{end}' 2>/dev/null || true
+    done
+    "${kubectl_bin}" -n kube-system get daemonset,pod -o wide 2>/dev/null | \
+      grep -E 'NAME|secrets-store|openbao.*csi' || true
+    "${kubectl_bin}" -n kube-system get events --sort-by=.lastTimestamp 2>/dev/null | \
+      grep -E 'secrets-store|openbao.*csi|FailedMount|MountVolume' | tail -n 80 || true
     for pod in $("${kubectl_bin}" -n gitea get pods -o name 2>/dev/null); do
       echo "[kubectl] describe ${pod}"
       "${kubectl_bin}" -n gitea describe "${pod}" 2>/dev/null || true
@@ -3134,14 +3222,7 @@ else
       write_secret_file gitea_push_mirror_repo_url "${gitea_push_mirror_repo_url_effective}"
       write_secret_file gitea_push_mirror_username "${gitea_push_mirror_username_effective}"
       write_secret_file gitea_push_mirror_token "${gitea_push_mirror_token_effective}"
-      if ! configure_gitea_push_mirror \
-        "${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
-        "${GITEA_SEED_TARGET_REPO:-cluster}" \
-        "${gitea_push_mirror_repo_url_effective}" \
-        "${gitea_push_mirror_username_effective}" \
-        "${gitea_push_mirror_token_effective}"; then
-        echo "[phase60] WARNING: failed configuring Gitea push mirror to GitHub; continuing bootstrap" >&2
-      fi
+      echo "[phase60] Gitea push-mirror hook will reconcile after the secret-delivery foundation is ready"
     else
       echo "[phase60] Gitea push mirror requested but repo URL, username, or token is missing; skipping" >&2
     fi

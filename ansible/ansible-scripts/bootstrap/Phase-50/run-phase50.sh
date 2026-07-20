@@ -272,10 +272,17 @@ ensure_authentik_secret() {
     admin_username=akadmin \
     "bootstrap_password=${bootstrap_password}" \
     "bootstrap_token=${bootstrap_token}"
-  # Phase 40 establishes ESO and the OpenBao store, but this app-specific
-  # declaration cannot arrive through the private GitOps repository until
-  # Phase 50 has finished creating Gitea. Apply only the desired delivery
-  # declaration now; ESO remains the sole writer of the Kubernetes Secret.
+  # Initial Phase 50 runs before the secret-delivery foundation. Seed OpenBao
+  # now, but do not emit a guaranteed-invalid ExternalSecret API request or
+  # wait for a controller that cannot exist until the Phase 60 handoff gate.
+  if ! "${kubectl_bin}" get crd externalsecrets.external-secrets.io >/dev/null 2>&1 || \
+     [[ "$("${kubectl_bin}" -n external-secrets get deployment external-secrets \
+       -o jsonpath='{range .status.conditions[?(@.type=="Available")]}{.status}{end}' 2>/dev/null || true)" != "True" ]]; then
+    echo "[phase50] External Secrets is not ready yet; deferring Authentik delivery to GitOps"
+    return 0
+  fi
+  # On a rerun the controller may already exist. Apply only desired delivery;
+  # ESO remains the sole writer of the Kubernetes Secret.
   "${kubectl_bin}" apply -f "${repo_root}/pods/authentik/authentik-secret-sync/external-secret.yaml"
   bootstrap_wait_for_external_secret_delivery \
     "${kubectl_bin}" authentik authentik-postgresql-desired authentik-postgresql-desired authentik-postgresql
@@ -291,15 +298,11 @@ ensure_headlamp_admin_token() {
   local token=""
   local attempt=0
 
-  "${kubectl_bin}" create namespace headlamp --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  for attempt in $(seq 1 90); do
-    if "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 2
-  done
+  # Headlamp is created only after the private ApplicationSet handoff. Phase 90
+  # owns final token reconciliation, so waiting three minutes here cannot make
+  # progress during a clean install.
   if ! "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
-    echo "[phase50] headlamp service account not ready yet; skipping token export" >&2
+    echo "[phase50] Headlamp is not installed yet; deferring admin token reconciliation to Phase 90"
     return 1
   fi
 
