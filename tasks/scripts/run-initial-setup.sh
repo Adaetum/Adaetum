@@ -1039,7 +1039,11 @@ print(json.dumps({"ref": ref, "inputs": inputs}))
 PY
 )"
 
-  if ! curl -fsS --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 \
+  # These publication workflows are declarative and tolerate a repeated
+  # dispatch. Give transient provider-side 5xx responses enough time to recover
+  # instead of failing the entire guided setup immediately; the run-id lookup
+  # below follows the first newly observed run.
+  if ! curl -fsS --connect-timeout 10 --max-time 30 --retry 5 --retry-delay 5 --retry-max-time 90 \
     -X POST \
     -H "Accept: application/vnd.github+json" \
     -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -1135,16 +1139,27 @@ run_workflow_step() {
   local workflow_file="$1"
   local branch="$2"
   local extra_input="${3:-}"
+  local workflow_name=""
+  workflow_name="$(workflow_short_name "${workflow_file}")"
   if compact_enabled; then
     if run_workflow "${workflow_file}" "${branch}" "${extra_input}" >>"${initial_setup_detail_log}" 2>&1; then
-      status_ok "$(workflow_short_name "${workflow_file}") triggered"
+      status_ok "${workflow_name} triggered"
       return 0
     fi
-    status_fail "$(workflow_short_name "${workflow_file}") could not be triggered — details: ${initial_setup_detail_log}"
+    status_fail "${workflow_name} could not be triggered — details: ${initial_setup_detail_log}"
+    if [ "${workflow_name}" = "ks-worker.yml" ] && [ "${bootstrap_bundle_uploaded}" -eq 1 ]; then
+      status_wait "Continuing because the live Worker bundle upload was already verified"
+      return 0
+    fi
     workflow_errors=1
     return 0
   fi
   if ! run_workflow "${workflow_file}" "${branch}" "${extra_input}"; then
+    if [ "${workflow_name}" = "ks-worker.yml" ] && [ "${bootstrap_bundle_uploaded}" -eq 1 ]; then
+      echo "Warning: ks-worker.yml could not be dispatched, but the live Worker bundle upload was already verified."
+      echo "Re-run the workflow separately if Worker code itself needs to be redeployed."
+      return 0
+    fi
     echo "Warning: workflow step failed for ${workflow_file}; continuing to collect failures."
     workflow_errors=1
   fi

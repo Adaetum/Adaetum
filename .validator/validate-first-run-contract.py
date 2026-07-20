@@ -376,6 +376,12 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("golden ISO upload silently ignores kickstart compiler failures")
     if "Details: ${setup_detail_log}" not in setup:
         fail("bootstrap failures omit the retained detail-log path")
+    if '--retry 5 --retry-delay 5 --retry-max-time 90' not in initial_setup:
+        fail("workflow dispatch does not tolerate transient GitHub API failures")
+    if initial_setup.count('[ "${workflow_name}" = "ks-worker.yml" ] && [ "${bootstrap_bundle_uploaded}" -eq 1 ]') < 2:
+        fail("verified Worker uploads do not tolerate both compact and plain dispatch failures")
+    if "Continuing because the live Worker bundle upload was already verified" not in initial_setup:
+        fail("compact setup does not explain why a Worker dispatch failure is nonfatal")
     if "first_run_ensure_github_actions" not in first_run or "GitHub Actions registration simulated for the private recovery repository" not in first_run:
         fail("private recovery repositories do not validate GitHub Actions registration")
     if "adaetum_github_repository_from_url" not in first_run:
