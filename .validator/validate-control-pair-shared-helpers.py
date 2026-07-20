@@ -260,6 +260,53 @@ fi
     return [f"ExternalSecret timeout behavior failed: {detail}"]
 
 
+def validate_external_secret_ready() -> list[str]:
+    """Prove a reconciled ExternalSecret is recognized without polling again."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = rf'''
+set -euo pipefail
+source {source_path}
+
+BOOTSTRAP_EXTERNAL_SECRET_TIMEOUT_SECONDS=1
+BOOTSTRAP_EXTERNAL_SECRET_POLL_SECONDS=1
+
+mock_kubectl() {{
+  if [[ " $* " == *" get secret ready-target "* ]]; then
+    return 0
+  fi
+  if [[ " $* " == *" get externalsecret ready "* && " $* " == *" -o jsonpath="* ]]; then
+    expected_jsonpath='{{range .status.conditions[?(@.type=="Ready")]}}{{.status}}{{"\t"}}{{.reason}}{{"\t"}}{{.message}}{{end}}'
+    if [[ " $* " != *"${{expected_jsonpath}}"* ]]; then
+      echo "unexpected Ready-condition JSONPath: $*" >&2
+      return 1
+    fi
+    printf 'True\tSecretSynced\tsecret synced'
+    return 0
+  fi
+  if [[ " $* " == *" get externalsecret ready "* ]]; then
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}}
+
+bootstrap_wait_for_external_secret_delivery \
+  mock_kubectl ansible ready ready-target ready-component
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"ExternalSecret ready behavior failed: {detail}"]
+
+
 def validate_csi_secret_timeout() -> list[str]:
     """Prove a missing CSI class cannot block the first boot indefinitely."""
     source_path = shlex.quote(str(SHARED_HELPERS))
@@ -639,6 +686,7 @@ def main() -> int:
     failures = validate_gitea_token_helpers()
     failures.extend(validate_push_mirror_helper())
     failures.extend(validate_external_secret_timeout())
+    failures.extend(validate_external_secret_ready())
     failures.extend(validate_csi_secret_timeout())
     failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())

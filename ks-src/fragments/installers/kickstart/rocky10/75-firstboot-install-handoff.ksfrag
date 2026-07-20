@@ -32,7 +32,6 @@ LOG_UPLOAD_DEBUG="__KS_LOG_UPLOAD_DEBUG__"
 TAILSCALE_ADVERTISE_TAGS="__TAILSCALE_ADVERTISE_TAGS__"
 TAILSCALE_OAUTH_CLIENT_ID="__TAILSCALE_OAUTH_CLIENT_ID__"
 TAILSCALE_OAUTH_TTL="__TAILSCALE_OAUTH_TTL__"
-TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR=""
 TAILSCALE_NODE_ROLE="__TAILSCALE_NODE_ROLE__"
 TAILSCALE_CLUSTER_TAG="__TAILSCALE_CLUSTER_TAG__"
 TAILSCALE_ENFORCE_EXIT_NODE="__TAILSCALE_ENFORCE_EXIT_NODE__"
@@ -69,13 +68,6 @@ esac
 {
   [ -n "${install_ks_role}" ] && printf 'KS_ROLE="%s"\n' "${install_ks_role}"
   [ -n "${install_ks_breakglass}" ] && printf 'KS_BREAKGLASS="%s"\n' "${install_ks_breakglass}"
-  if [ -z "${TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR:-}" ] && [ -n "${install_ks_breakglass}" ]; then
-    if [ "${install_ks_breakglass}" = "1" ]; then
-      printf 'TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR="1"\n'
-    else
-      printf 'TAILSCALE_KEY_EXPIRY_FAIL_ON_ERROR="0"\n'
-    fi
-  fi
 } >>/etc/tailscale-firstboot.env
 chmod 0600 /etc/tailscale-firstboot.env || true
 

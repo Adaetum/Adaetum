@@ -2689,7 +2689,7 @@ argocd_debug_dump() {
     echo "[kubectl] argocd-repo-server recent logs"
     "${kubectl_bin}" -n argocd logs deploy/argocd-repo-server --tail=200 2>/dev/null || true
     echo "[kubectl] argocd ingress/service"
-    "${kubectl_bin}" -n argocd get ingress argocd-ui -o yaml 2>/dev/null || true
+    "${kubectl_bin}" -n argocd get ingress argocd-ui-internal argocd-ui-public -o yaml 2>/dev/null || true
     "${kubectl_bin}" -n argocd get svc argocd-server -o yaml 2>/dev/null || true
     echo "[kubectl] ingress controllers"
     "${kubectl_bin}" -n kube-system get svc rke2-ingress-nginx-controller -o yaml 2>/dev/null || true
@@ -3489,82 +3489,6 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
       echo "[phase60] observability namespace not present yet; skipping pods/ingress/observability-routing"
     fi
   fi
-  # Normalize ingress hosts from env so we can keep one source of truth:
-  # CLUSTER_DOMAIN is primary; CLUSTER_LOCAL_DOMAIN is optional override for LAN/VPN DNS.
-  cat <<EOF | "${kubectl_bin}" apply -f - >/dev/null 2>&1 || true
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: gitea-ui
-  namespace: gitea
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: ${gitea_local_host}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: ${GITEA_INTERNAL_SERVICE_NAME}
-                port:
-                  number: 3000
-    - host: ${gitea_external_host}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: ${GITEA_INTERNAL_SERVICE_NAME}
-                port:
-                  number: 3000
-EOF
-
-  cat <<EOF | "${kubectl_bin}" apply -f - >/dev/null 2>&1 || true
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: argocd-ui
-  namespace: argocd
-  annotations:
-    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: ${argocd_local_host}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: argocd-server
-                port:
-                  number: 80
-    - host: ${argocd_external_host}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: argocd-server
-                port:
-                  number: 80
-EOF
-
-  run_or_fail \
-    "failed annotating argocd ingress (argocd/argocd-ui)" \
-    "${kubectl_bin}" -n argocd annotate ingress argocd-ui \
-      nginx.ingress.kubernetes.io/backend-protocol=HTTP \
-      nginx.ingress.kubernetes.io/ssl-redirect=false \
-      nginx.ingress.kubernetes.io/force-ssl-redirect=false \
-      --overwrite
-
   run_or_fail \
     "failed applying kube-vip manifests" \
     apply_kube_vip_manifests

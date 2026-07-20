@@ -1577,7 +1577,7 @@ bootstrap_wait_for_external_secret_delivery() {
       target_exists="true"
     fi
 
-    ready_status="$("${kubectl_path}" -n "${namespace}" get externalsecret "${external_secret}" -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{"\\t"}{.reason}{"\\t"}{.message}{end}' 2>/dev/null || true)"
+    ready_status="$("${kubectl_path}" -n "${namespace}" get externalsecret "${external_secret}" -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{"\t"}{.reason}{"\t"}{.message}{end}' 2>/dev/null || true)"
     if [[ "${ready_status}" == False$'\t'* ]]; then
       ready_reason="${ready_status#*$'\t'}"
       ready_reason="${ready_reason%%$'\t'*}"

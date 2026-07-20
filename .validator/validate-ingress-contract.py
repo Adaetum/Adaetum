@@ -11,6 +11,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_CONFIG = REPO_ROOT / "pods" / "cluster-config" / "cluster-config.env"
 INGRESS_APP = REPO_ROOT / "pods" / "ingress" / "ingress-routing.app.yaml"
+REALIZATION_PHASES = (
+    REPO_ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-50" / "run-phase50.sh",
+    REPO_ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-60" / "run-phase60.sh",
+)
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -170,6 +174,29 @@ def main() -> int:
         ("- /metadata/annotations", "ingress-routing app is missing ConfigMap /metadata/annotations ignore"),
     ):
         assert_contains(ingress_app_text, required_text, message, failures)
+
+    # pods/ingress owns the split internal/public routes. Bootstrap may apply
+    # the early-safe internal manifest, but must not recreate the retired
+    # combined resources or mutate them under a second name.
+    for phase_path in REALIZATION_PHASES:
+        phase_text = phase_path.read_text(encoding="utf-8")
+        assert_contains(
+            phase_text,
+            'pods/ingress/nginx-routing/argocd-ingress.yaml',
+            f"{phase_path.name} does not apply the intended Argo CD ingress manifest",
+            failures,
+        )
+        for legacy_contract in (
+            "name: gitea-ui\n",
+            "name: argocd-ui\n",
+            "annotate ingress argocd-ui",
+            "get ingress argocd-ui ",
+        ):
+            if legacy_contract in phase_text:
+                failures.append(
+                    f"{phase_path.name} still owns retired combined ingress contract "
+                    f"{legacy_contract.strip()}"
+                )
 
     if failures:
         for failure in failures:
