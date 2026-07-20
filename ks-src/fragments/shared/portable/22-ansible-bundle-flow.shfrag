@@ -212,6 +212,10 @@ fi
 upload_bundle_debug_artifacts() {
   upload_log_tree "/var/log/bootstrap-phases" bootstrap-phases || true
   upload_log_tree "/var/log/bootstrap-phases/diagnostics" diagnostics || true
+  # Installer-stage evidence is persisted specifically for disk selection
+  # failures; include it in the normal recovery bundle so operators do not
+  # need shell access to diagnose early storage warnings.
+  upload_log_tree "/root/bootstrap-storage-diag" installer-storage || true
 }
 
 export BUNDLE_BOOTSTRAP_LOG_FILE="${log_file}"

@@ -291,6 +291,19 @@ def render_manifest(manifest: Manifest) -> str:
         raise CompileError(f"{manifest.name}: unresolved internal assembly marker remains in output")
     if manifest.installer_type == "kickstart" and "# GOLDEN_ISO_KEY=" not in rendered:
         raise CompileError(f"{manifest.name}: rendered output is missing # GOLDEN_ISO_KEY=")
+    if manifest.name == "rocky10":
+        if re.search(r"(?m)^[ \t]*ignoredisk\s+--only-use=", rendered):
+            raise CompileError(
+                "rocky10: ignoredisk --only-use hides USB CD-ROM source media on RHEL 10.2"
+            )
+        for storage_guard in (
+            "clearpart --all --initlabel --drives=${target_disk}",
+            "part pv.01 --ondisk=${target_disk}",
+        ):
+            if storage_guard not in rendered:
+                raise CompileError(
+                    f"rocky10: rendered storage layout lost target-disk guard: {storage_guard}"
+                )
     return rendered
 
 

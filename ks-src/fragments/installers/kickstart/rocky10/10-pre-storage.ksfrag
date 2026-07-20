@@ -675,8 +675,35 @@ if [ ! -b "${target_dev}" ]; then
   exit 1
 fi
 
+ignored_disks=""
+while read -r disk_name disk_type disk_removable; do
+  [ "${disk_type}" = "disk" ] || continue
+  [ "${disk_removable}" = "0" ] || continue
+  [ "${disk_name}" != "${target_disk}" ] || continue
+  if [ -n "${install_disk}" ] && [ "${disk_name}" = "${install_disk}" ]; then
+    continue
+  fi
+  case "${disk_name}" in zram*|ram*|loop*|sr*) continue ;; esac
+  if [ -n "${ignored_disks}" ]; then
+    ignored_disks="${ignored_disks},${disk_name}"
+  else
+    ignored_disks="${disk_name}"
+  fi
+done < <(lsblk -dn -o NAME,TYPE,RM 2>/dev/null || true)
+
+# RHEL 10.2's Anaconda can lose USB CD-ROM installation media when
+# `ignoredisk --only-use` is present (RHEL-58829). Keep removable media and
+# the detected source visible, and ignore only other fixed disks. The wipe and
+# partition directives below still constrain all destructive writes to the
+# selected target.
+ignoredisk_directive=""
+if [ -n "${ignored_disks}" ]; then
+  ignoredisk_directive="ignoredisk --drives=${ignored_disks}"
+fi
+echo "[KS] fixed disks excluded from installation: ${ignored_disks:-<none>}"
+
 cat > /tmp/partitioning.ks <<EOF
-ignoredisk --only-use=${target_disk}
+${ignoredisk_directive}
 zerombr
 clearpart --all --initlabel --drives=${target_disk}
 # Use explicit partitioning instead of autopart to reduce blivet/anaconda
