@@ -33,6 +33,19 @@ while true; do
     tail -n 80 /tmp/anaconda.log 2>/dev/null || true
     echo
   } >>"${watch_log}"
+
+  # A failed destination spoke prevents every %post hook from running. Upload
+  # the installer-side evidence at the point of failure so the next recovery
+  # pull contains the first attempt, not only a later successful retry.
+  if [ ! -f /tmp/ks-storage-failure-captured ] && [ -x /tmp/collect-storage-diag.sh ]; then
+    if grep -Eiq \
+      'Installation Destination.*(mandatory|not complete)|No disks detected|No usable disks|storage.*configuration.*failed|failed to save storage configuration' \
+      /tmp/anaconda.log /tmp/storage.log /tmp/program.log 2>/dev/null; then
+      touch /tmp/ks-storage-failure-captured
+      echo "[KS] detected incomplete installer storage; uploading diagnostics" >>"${watch_log}"
+      /tmp/collect-storage-diag.sh /tmp >>"${watch_log}" 2>&1 || true
+    fi
+  fi
   sleep 5
 done
 EOF
@@ -650,30 +663,11 @@ if [ "${target_dtype}" != "disk" ]; then
   exit 1
 fi
 
-# Proactively clear stale partition/signature metadata so Anaconda does not
-# trip over prior layouts (common on recycled break-glass hardware).
-echo "[KS] sanitizing target device metadata: ${target_dev}"
-if command -v wipefs >/dev/null 2>&1; then
-  echo "[KS] wipefs before sanitize:"
-  wipefs "${target_dev}" || true
-  wipefs -af "${target_dev}"
-  echo "[KS] wipefs after sanitize:"
-  wipefs "${target_dev}" || true
-fi
-if command -v sgdisk >/dev/null 2>&1; then
-  sgdisk --zap-all "${target_dev}" || true
-fi
-if command -v partprobe >/dev/null 2>&1; then
-  partprobe "${target_dev}" || true
-fi
-if command -v udevadm >/dev/null 2>&1; then
-  udevadm settle || true
-fi
-if [ ! -b "${target_dev}" ]; then
-  echo "[KS] ERROR: target device disappeared after sanitize: ${target_dev}"
-  lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,PKNAME,MODEL,TRAN || true
-  exit 1
-fi
+# Do not mutate the partition table from %pre. Anaconda has already begun its
+# storage discovery by this boundary; changing the device underneath that
+# inventory can leave the destination spoke incomplete until a reboot forces a
+# fresh scan. The target-scoped clearpart below is the single owner for removing
+# old layouts and initializing the new disk label.
 
 ignored_disks=""
 while read -r disk_name disk_type disk_removable; do
@@ -693,7 +687,7 @@ done < <(lsblk -dn -o NAME,TYPE,RM 2>/dev/null || true)
 
 # RHEL 10.2's Anaconda can lose USB CD-ROM installation media when
 # `ignoredisk --only-use` is present (RHEL-58829). Keep removable media and
-# the detected source visible, and ignore only other fixed disks. The wipe and
+# the detected source visible, and ignore only other fixed disks. The clear and
 # partition directives below still constrain all destructive writes to the
 # selected target.
 ignoredisk_directive=""

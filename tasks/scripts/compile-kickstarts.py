@@ -296,9 +296,20 @@ def render_manifest(manifest: Manifest) -> str:
             raise CompileError(
                 "rocky10: ignoredisk --only-use hides USB CD-ROM source media on RHEL 10.2"
             )
+        for pre_storage_mutation in (
+            'wipefs -af "${target_dev}"',
+            'sgdisk --zap-all "${target_dev}"',
+        ):
+            if pre_storage_mutation in rendered:
+                raise CompileError(
+                    "rocky10: %pre must not mutate storage before Anaconda clearpart: "
+                    f"{pre_storage_mutation}"
+                )
         for storage_guard in (
             "clearpart --all --initlabel --drives=${target_disk}",
             "part pv.01 --ondisk=${target_disk}",
+            "ks-storage-failure-captured",
+            "detected incomplete installer storage; uploading diagnostics",
         ):
             if storage_guard not in rendered:
                 raise CompileError(
