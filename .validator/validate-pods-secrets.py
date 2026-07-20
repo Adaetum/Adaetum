@@ -212,6 +212,8 @@ ROTATION_CONTRACTS = {
         "kind: ExternalSecret",
         "key: apps/gitea/registry",
         "type: kubernetes.io/dockerconfigjson",
+        '"{{ .host }}"',
+        '"{{ .push_host }}"',
     ),
     "pods/secrets/openbao-sync/store.yaml": (
         "kind: ClusterSecretStore",
@@ -321,6 +323,8 @@ ROTATION_CONTRACTS = {
         "gitea_widget_token_has_required_scopes",
         "revoke_stale_gitea_widget_tokens",
         "seed_openbao_app_fields gitea/registry",
+        '"push_host=${push_host}"',
+        "bootstrap_request_external_secret_refresh",
         "gitea-registry-creds gitea-registry-creds ansible-runner",
     ),
     "ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh": (

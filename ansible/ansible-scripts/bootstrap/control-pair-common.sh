@@ -1545,6 +1545,7 @@ bootstrap_wait_for_external_secret_delivery() {
   local external_secret="${3:?ExternalSecret name}"
   local target_secret="${4:?target Secret name}"
   local component="${5:-${external_secret}}"
+  local initial_error_grace_seconds="${6:-0}"
   local ready_status=""
   local ready_reason=""
   local ready_message=""
@@ -1564,6 +1565,10 @@ bootstrap_wait_for_external_secret_delivery() {
     echo "[secret-sync] invalid BOOTSTRAP_EXTERNAL_SECRET_POLL_SECONDS=${poll_seconds}; using 15" >&2
     poll_seconds=15
   fi
+  if ! [[ "${initial_error_grace_seconds}" =~ ^[0-9]+$ ]]; then
+    echo "[secret-sync] invalid initial error grace ${initial_error_grace_seconds}; using 0" >&2
+    initial_error_grace_seconds=0
+  fi
 
   echo "[secret-sync] watching ${namespace}/externalsecret/${external_secret} -> secret/${target_secret}"
   if ! "${kubectl_path}" -n "${namespace}" get externalsecret "${external_secret}" >/dev/null 2>&1; then
@@ -1573,6 +1578,7 @@ bootstrap_wait_for_external_secret_delivery() {
     return 1
   fi
   while true; do
+    elapsed_seconds=$((SECONDS - started_seconds))
     if "${kubectl_path}" -n "${namespace}" get secret "${target_secret}" >/dev/null 2>&1; then
       target_exists="true"
     fi
@@ -1582,10 +1588,14 @@ bootstrap_wait_for_external_secret_delivery() {
       ready_reason="${ready_status#*$'\t'}"
       ready_reason="${ready_reason%%$'\t'*}"
       ready_message="${ready_status##*$'\t'}"
-      echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: terminal ${ready_reason}: ${ready_message}" >&2
-      bootstrap_capture_external_secret_diagnostics \
-        "${kubectl_path}" "${namespace}" "${external_secret}" "${component}" "secret-sync"
-      return 1
+      if (( elapsed_seconds < initial_error_grace_seconds )); then
+        echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: prior ${ready_reason} may predate source seeding; waiting through ${initial_error_grace_seconds}s grace" >&2
+      else
+        echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: terminal ${ready_reason}: ${ready_message}" >&2
+        bootstrap_capture_external_secret_diagnostics \
+          "${kubectl_path}" "${namespace}" "${external_secret}" "${component}" "secret-sync"
+        return 1
+      fi
     fi
 
     if [[ "${target_exists}" == "true" ]]; then
@@ -1610,7 +1620,6 @@ bootstrap_wait_for_external_secret_delivery() {
       return 1
     fi
 
-    elapsed_seconds=$((SECONDS - started_seconds))
     if (( elapsed_seconds >= timeout_seconds )); then
       echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: timed out after ${elapsed_seconds}s (controller Available=${controller_available:-unknown})" >&2
       bootstrap_capture_external_secret_diagnostics \
@@ -1622,6 +1631,50 @@ bootstrap_wait_for_external_secret_delivery() {
     fi
     sleep "${poll_seconds}"
   done
+}
+
+bootstrap_request_external_secret_refresh() {
+  local kubectl_path="${1:?kubectl path}"
+  local namespace="${2:?namespace}"
+  local external_secret="${3:?ExternalSecret name}"
+
+  # OpenBao writes do not emit a Kubernetes event. Bump the documented ESO
+  # force-sync annotation so a newly seeded source is reconciled immediately.
+  "${kubectl_path}" -n "${namespace}" annotate externalsecret "${external_secret}" \
+    "force-sync=$(date +%s)-${RANDOM}" --overwrite >/dev/null
+}
+
+bootstrap_apply_registry_secret_with_push_alias() {
+  local kubectl_path="${1:?kubectl path}"
+  local namespace="${2:?namespace}"
+  local secret_name="${3:?secret name}"
+  local registry_host="${4:?registry host}"
+  local push_host="${5:?push host}"
+  local username="${6:?registry username}"
+  local password="${7:?registry password}"
+
+  # kubectl creates the canonical pull credential. Copy that exact auth entry
+  # to Kaniko's in-cluster push hostname without handling the token in another
+  # command-line argument or creating a second Secret authority.
+  "${kubectl_path}" -n "${namespace}" create secret docker-registry "${secret_name}" \
+    --docker-server="${registry_host}" --docker-username="${username}" \
+    --docker-password="${password}" --dry-run=client -o json \
+    | python3 -c '
+import base64
+import json
+import sys
+
+document = json.load(sys.stdin)
+config = json.loads(base64.b64decode(document["data"][".dockerconfigjson"]))
+registry_host, push_host = sys.argv[1:3]
+if push_host != registry_host:
+    config["auths"][push_host] = dict(config["auths"][registry_host])
+document["data"][".dockerconfigjson"] = base64.b64encode(
+    json.dumps(config, separators=(",", ":")).encode()
+).decode()
+json.dump(document, sys.stdout)
+' "${registry_host}" "${push_host}" \
+    | "${kubectl_path}" -n "${namespace}" apply -f - >/dev/null
 }
 
 # The ApplicationSet creates independent Applications. Their sync-wave

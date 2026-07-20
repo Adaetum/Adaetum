@@ -725,19 +725,22 @@ ensure_ansible_runner_pull_secret() {
 
   seed_openbao_app_fields gitea/registry "${openbao_token:-}" \
     "host=${registry_host}" \
+    "push_host=${push_host}" \
     "username=${registry_username}" \
     "token=${registry_token}"
   if "${kubectl_bin}" -n ansible get externalsecret gitea-registry-creds >/dev/null 2>&1; then
-    bootstrap_wait_for_external_secret_delivery \
-      "${kubectl_bin}" ansible gitea-registry-creds "${secret_name}" ansible-runner
+    bootstrap_request_external_secret_refresh "${kubectl_bin}" ansible gitea-registry-creds
+    if ! bootstrap_wait_for_external_secret_delivery \
+      "${kubectl_bin}" ansible gitea-registry-creds "${secret_name}" ansible-runner 30; then
+      return 1
+    fi
   else
     # BOOTSTRAP-ONLY structural bridge: the runner image cannot pull until
     # GitOps has installed the ESO adapter that owns this copy thereafter.
     "${kubectl_bin}" create namespace ansible --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-    "${kubectl_bin}" -n ansible create secret docker-registry "${secret_name}" \
-      --docker-server="${registry_host}" --docker-username="${registry_username}" \
-      --docker-password="${registry_token}" --dry-run=client -o yaml \
-      | "${kubectl_bin}" -n ansible apply -f - >/dev/null
+    bootstrap_apply_registry_secret_with_push_alias \
+      "${kubectl_bin}" ansible "${secret_name}" "${registry_host}" "${push_host}" \
+      "${registry_username}" "${registry_token}"
   fi
 
   if [[ "${push_host}" != "${registry_host}" ]]; then

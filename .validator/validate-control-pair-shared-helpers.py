@@ -261,7 +261,7 @@ fi
 
 
 def validate_external_secret_ready() -> list[str]:
-    """Prove a reconciled ExternalSecret is recognized without polling again."""
+    """Prove a stale source error can settle before delivery becomes ready."""
     source_path = shlex.quote(str(SHARED_HELPERS))
     script = rf'''
 set -euo pipefail
@@ -269,18 +269,27 @@ source {source_path}
 
 BOOTSTRAP_EXTERNAL_SECRET_TIMEOUT_SECONDS=1
 BOOTSTRAP_EXTERNAL_SECRET_POLL_SECONDS=1
+STATUS_FILE="$(mktemp)"
+printf '%s' 0 >"${{STATUS_FILE}}"
 
 mock_kubectl() {{
   if [[ " $* " == *" get secret ready-target "* ]]; then
     return 0
   fi
   if [[ " $* " == *" get externalsecret ready "* && " $* " == *" -o jsonpath="* ]]; then
+    count="$(cat "${{STATUS_FILE}}")"
+    count=$((count + 1))
+    printf '%s' "${{count}}" >"${{STATUS_FILE}}"
     expected_jsonpath='{{range .status.conditions[?(@.type=="Ready")]}}{{.status}}{{"\t"}}{{.reason}}{{"\t"}}{{.message}}{{end}}'
     if [[ " $* " != *"${{expected_jsonpath}}"* ]]; then
       echo "unexpected Ready-condition JSONPath: $*" >&2
       return 1
     fi
-    printf 'True\tSecretSynced\tsecret synced'
+    if [[ "${{count}}" == 1 ]]; then
+      printf 'False\tSecretSyncedError\tsource not seeded yet'
+    else
+      printf 'True\tSecretSynced\tsecret synced'
+    fi
     return 0
   fi
   if [[ " $* " == *" get externalsecret ready "* ]]; then
@@ -291,7 +300,9 @@ mock_kubectl() {{
 }}
 
 bootstrap_wait_for_external_secret_delivery \
-  mock_kubectl ansible ready ready-target ready-component
+  mock_kubectl ansible ready ready-target ready-component 2
+[[ "$(cat "${{STATUS_FILE}}")" == 2 ]]
+rm -f "${{STATUS_FILE}}"
 '''
     result = subprocess.run(
         ["bash", "-c", script],
@@ -305,6 +316,56 @@ bootstrap_wait_for_external_secret_delivery \
         return []
     detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
     return [f"ExternalSecret ready behavior failed: {detail}"]
+
+
+def validate_registry_secret_alias() -> list[str]:
+    """Prove the bootstrap bridge authenticates pull and in-cluster push hosts."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = "source " + source_path + r'''
+set -euo pipefail
+CAPTURE="$(mktemp)"
+
+mock_kubectl() {
+  if [[ " $* " == *" create secret docker-registry "* ]]; then
+    printf '%s' '{"data":{".dockerconfigjson":"eyJhdXRocyI6eyJyZWdpc3RyeS5leGFtcGxlIjp7ImF1dGgiOiJkR1Z6ZERwMFpYTjAifX19"}}'
+    return 0
+  fi
+  if [[ " $* " == *" apply -f - "* ]]; then
+    cat >"${CAPTURE}"
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}
+
+bootstrap_apply_registry_secret_with_push_alias \
+  mock_kubectl ansible creds registry.example \
+  gitea-http.gitea.svc.cluster.local:3000 user password
+
+python3 - "${CAPTURE}" <<'PY'
+import base64
+import json
+import pathlib
+import sys
+
+document = json.loads(pathlib.Path(sys.argv[1]).read_text())
+config = json.loads(base64.b64decode(document["data"][".dockerconfigjson"]))
+auths = config["auths"]
+assert auths["registry.example"] == auths["gitea-http.gitea.svc.cluster.local:3000"]
+PY
+rm -f "${CAPTURE}"
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"Registry Secret push-host alias behavior failed: {detail}"]
 
 
 def validate_csi_secret_timeout() -> list[str]:
@@ -666,6 +727,7 @@ fi
 set -euo pipefail
 kubectl_bin=mock_kubectl
 SEEDED=0
+REFRESHED=0
 
 mock_kubectl() {
   if [[ " $* " == *" get configmap ansible-cluster-config "* ]]; then
@@ -683,16 +745,23 @@ read_phase70_bootstrap_field() {
   esac
 }
 
+ansible_runner_registry_host_push() {
+  printf '%s' gitea-http.gitea.svc.cluster.local:3000
+}
+
 seed_openbao_app_fields() {
   [[ " $* " == *" host=registry.mudazukai.cloud "* ]]
+  [[ " $* " == *" push_host=gitea-http.gitea.svc.cluster.local:3000 "* ]]
   [[ " $* " != *"cluster-"*"duck"* ]]
   SEEDED=1
 }
 
+bootstrap_request_external_secret_refresh() { REFRESHED=1; }
 bootstrap_wait_for_external_secret_delivery() { return 0; }
 
 ensure_ansible_runner_pull_secret_phase70 openbao-token
 [[ "${SEEDED}" == 1 ]]
+[[ "${REFRESHED}" == 1 ]]
 '''
         result = subprocess.run(
             ["bash", "-c", script],
@@ -802,6 +871,7 @@ def main() -> int:
     failures.extend(validate_push_mirror_helper())
     failures.extend(validate_external_secret_timeout())
     failures.extend(validate_external_secret_ready())
+    failures.extend(validate_registry_secret_alias())
     failures.extend(validate_csi_secret_timeout())
     failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())

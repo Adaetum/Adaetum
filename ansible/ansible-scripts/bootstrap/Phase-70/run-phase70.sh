@@ -303,6 +303,7 @@ ensure_ansible_runner_pull_secret_phase70() {
   local registry_username=""
   local registry_token=""
   local registry_host=""
+  local push_host=""
   local runner_image=""
 
   if [[ -z "${kubectl_bin}" ]]; then
@@ -321,6 +322,7 @@ ensure_ansible_runner_pull_secret_phase70() {
     echo "[phase70] ansible-runner pull secret reconcile failed: ansible-cluster-config does not declare ANSIBLE_RUNNER_IMAGE" >&2
     return 1
   fi
+  push_host="$(ansible_runner_registry_host_push)"
 
   registry_username="$(read_phase70_bootstrap_field argocd_repo_username "${openbao_token}")"
   if [[ -z "${registry_username}" ]]; then
@@ -344,10 +346,12 @@ ensure_ansible_runner_pull_secret_phase70() {
   # delivery copy directly.
   seed_openbao_app_fields gitea/registry "${openbao_token}" \
     "host=${registry_host}" \
+    "push_host=${push_host}" \
     "username=${registry_username}" \
     "token=${registry_token}"
+  bootstrap_request_external_secret_refresh "${kubectl_bin}" ansible gitea-registry-creds
   bootstrap_wait_for_external_secret_delivery \
-    "${kubectl_bin}" ansible gitea-registry-creds gitea-registry-creds ansible-runner
+    "${kubectl_bin}" ansible gitea-registry-creds gitea-registry-creds ansible-runner 30
 
   echo "[phase70] ensured ansible-runner image pull secret for ${registry_host}"
 }
