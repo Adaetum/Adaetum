@@ -20,13 +20,20 @@ spec:
     enabled: true
     updates:
       policy: full
-      onCalendar: "*-*-* 02:00:00"
+      onCalendar: '*-*-* 02:00:00'
       randomizedDelay: 1h
     reboots:
       enabled: true
-      days: [su, mo, tu, we, th, fr, sa]
-      startTime: "03:00"
-      endTime: "06:00"
+      days:
+      - su
+      - mo
+      - tu
+      - we
+      - th
+      - fr
+      - sa
+      startTime: 03:00
+      endTime: 06:00
       timeZone: America/Chicago
       period: 1h
       concurrency: 1
