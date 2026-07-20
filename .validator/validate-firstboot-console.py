@@ -68,6 +68,20 @@ def main() -> int:
     ):
         if required not in runner:
             raise SystemExit(f"first-boot console contract failed: runner does not publish detailed progress ({required})")
+    for required in (
+        'public_env_file="${bundle_repo_root}/pods/cluster-config/cluster-config.env"',
+        'while IFS= read -r public_env_line',
+        'printf -v "${public_env_key}"',
+        'export "${public_env_key}"',
+    ):
+        if required not in runner:
+            raise SystemExit(
+                f"first-boot public-profile contract failed: bundle runner is missing {required}"
+            )
+    if runner.find('while IFS= read -r public_env_line') < runner.find('. "${env_file}"'):
+        raise SystemExit(
+            "first-boot public-profile contract failed: public profile must override runtime defaults"
+        )
     failure_capture = re.compile(
         r'if run_step "\$\{key\}" "\$\{label\}" "\$@"; then.*?return 0\s*'
         r'else\s*(?:#.*\n\s*)*rc=\$\?\s*fi.*?'

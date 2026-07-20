@@ -7,6 +7,27 @@ if [ -f "${env_file}" ]; then
   . "${env_file}"
   set +a
 fi
+
+# Public cluster identity is rendered from platform.yaml into the bundle. Load
+# it after the secret-bearing runtime payload so scrubbed/default public values
+# can never override the private recovery repository's intended state.
+bundle_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+public_env_file="${bundle_repo_root}/pods/cluster-config/cluster-config.env"
+if [ -f "${public_env_file}" ]; then
+  while IFS= read -r public_env_line || [ -n "${public_env_line}" ]; do
+    case "${public_env_line}" in
+      ""|\#*) continue ;;
+    esac
+    public_env_key="${public_env_line%%=*}"
+    public_env_value="${public_env_line#*=}"
+    if [[ ! "${public_env_key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "[BOOTSTRAP] Invalid public profile key in ${public_env_file}: ${public_env_key}" >&2
+      exit 1
+    fi
+    printf -v "${public_env_key}" '%s' "${public_env_value}"
+    export "${public_env_key}"
+  done < "${public_env_file}"
+fi
 homebrew_shellenv="/etc/profile.d/homebrew.sh"
 if [ -f "${homebrew_shellenv}" ]; then
   # shellcheck disable=SC1090

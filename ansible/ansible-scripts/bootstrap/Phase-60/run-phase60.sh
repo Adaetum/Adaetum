@@ -422,15 +422,36 @@ PY
 
 
 discover_gitea_registry_token_service_host() {
+  local bootstrap_ip=""
+  local canonical_host=""
   local headers=""
 
   # The live challenge is authoritative. Gitea derives this hostname from its
   # canonical ROOT_URL, and bootstrap must bridge that identity without waiting
-  # for operator-managed DNS to exist.
-  headers="$(
-    curl -sS -D - -o /dev/null --noproxy '*' --max-time 10 \
-      "http://${GITEA_INTERNAL_SERVICE_HOST}/v2/" 2>/dev/null || true
-  )"
+  # for operator-managed DNS to exist. Send the canonical Host header through
+  # the port-80 bootstrap Service: probing the chart's internal service name can
+  # bypass Gitea's canonical registry route and omit the Bearer challenge.
+  bootstrap_ip="$(gitea_service_cluster_ip)"
+  canonical_host="$(python3 - <<'PY' "${GITEA_CANONICAL_URL:-}"
+import sys
+from urllib.parse import urlparse
+
+value = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+print((urlparse(value).hostname or "").strip() if value else "")
+PY
+)"
+  if [[ -n "${bootstrap_ip}" && -n "${canonical_host}" ]]; then
+    headers="$(
+      curl -sS -D - -o /dev/null --noproxy '*' --max-time 10 \
+        --resolve "${canonical_host}:80:${bootstrap_ip}" \
+        "http://${canonical_host}/v2/" 2>/dev/null || true
+    )"
+  else
+    headers="$(
+      curl -sS -D - -o /dev/null --noproxy '*' --max-time 10 \
+        "http://${GITEA_INTERNAL_SERVICE_HOST}/v2/" 2>/dev/null || true
+    )"
+  fi
   printf '%s' "${headers}" \
     | python3 "${script_dir}/registry-token-service-host.py" 2>/dev/null || true
 }
@@ -453,7 +474,7 @@ ensure_gitea_registry_bootstrap_path() {
 
   registry_token_service_host="$(discover_gitea_registry_token_service_host)"
   if [[ -z "${registry_token_service_host}" ]]; then
-    echo "[phase60] Gitea registry did not advertise a usable token-service hostname" >&2
+    echo "[phase60] Gitea registry did not advertise a usable token-service hostname through canonical URL ${GITEA_CANONICAL_URL:-<empty>}" >&2
     return 1
   fi
 

@@ -364,6 +364,8 @@ def validate_phase70_realization_gate() -> list[str]:
         "Gitea service discovery does not resolve to a ready registry endpoint",
         "ensure_gitea_registry_bootstrap_path()",
         "discover_gitea_registry_token_service_host",
+        '--resolve "${canonical_host}:80:${bootstrap_ip}"',
+        '"http://${canonical_host}/v2/"',
         'ensure_gitea_runtime_host_aliases "${registry_token_service_host}"',
         "registry-token-preflight",
         "Kaniko Job is missing the required",
@@ -544,6 +546,48 @@ ensure_ansible_runner_pull_secret_phase70 openbao-token
     return failures
 
 
+def validate_registry_token_service_discovery() -> list[str]:
+    """Prove registry discovery uses canonical identity over the Service bridge."""
+    discovery = functions(PHASE_60).get("discover_gitea_registry_token_service_host", "")
+    parser_dir = shlex.quote(str(PHASE_60.parent.parent))
+    script = rf'''
+set -euo pipefail
+script_dir={parser_dir}
+GITEA_CANONICAL_URL=http://gitea.mudazukai.cloud.local/
+GITEA_INTERNAL_SERVICE_HOST=gitea-http.gitea.svc.cluster.local:3000
+gitea_service_cluster_ip() {{ printf '%s' '10.43.53.138'; }}
+curl() {{
+  if [[ " $* " == *" --resolve gitea.mudazukai.cloud.local:80:10.43.53.138 "* ]] && \
+     [[ " $* " == *" http://gitea.mudazukai.cloud.local/v2/ "* ]]; then
+    printf '%s\r\n' \
+      'HTTP/1.1 401 Unauthorized' \
+      'Www-Authenticate: Bearer realm="http://gitea.mudazukai.cloud.local/v2/token",service="container_registry"'
+  else
+    printf '%s\r\n' \
+      'HTTP/1.1 401 Unauthorized' \
+      'Www-Authenticate: Bearer realm="http://wrong-bootstrap-path.invalid/v2/token",service="container_registry"'
+  fi
+}}
+{discovery}
+actual="$(discover_gitea_registry_token_service_host)"
+if [[ "${{actual}}" != "gitea.mudazukai.cloud.local" ]]; then
+  echo "unexpected discovered host: ${{actual:-<empty>}}" >&2
+  exit 1
+fi
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"Gitea registry token-service discovery failed: {detail}"]
+
+
 def validate_secret_foundation_handoff() -> list[str]:
     """Keep the narrowed source-of-truth ApplicationSet ahead of full handoff."""
     phase_60 = PHASE_60.read_text(encoding="utf-8")
@@ -598,6 +642,7 @@ def main() -> int:
     failures.extend(validate_csi_secret_timeout())
     failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())
+    failures.extend(validate_registry_token_service_discovery())
     failures.extend(validate_secret_foundation_handoff())
     if duplicates:
         print("Move exact shared helpers into control-pair-common.sh:", file=sys.stderr)
