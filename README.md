@@ -1,136 +1,214 @@
-# Adaetum
+# Adaetum `/uh-day-tum/`
 
-Adaetum is a security-first, self-hosted platform activation project for
-homelab operators. It turns a fresh Rocky Linux 10 machine into an
-RKE2-based cluster with GitOps, secrets, identity, recovery, and observability
-integrated from the beginning.
+<a href="./images/main.png">
+  <img src="./images/main-crop.png" alt="A chained and locked Adaetum operator's book in a stone sanctuary" width="100%">
+</a>
 
-Adaetum composes proven upstream products instead of building replacement
-control planes: Argo CD, Gitea, OpenBao, Authentik, Headlamp, Homepage,
-Prometheus, Grafana, and others remain the operator-facing tools.
+> Turn a fresh Rocky Linux machine into a security-first, self-hosted Kubernetes
+> platform—and keep the recipe needed to rebuild it.
 
-## Private recovery ownership
+Adaetum is an opinionated platform-activation project for homelab operators. It
+guides you from a new machine to an RKE2 cluster with GitOps, secrets, identity,
+recovery, observability, and host maintenance integrated from the beginning.
 
-Adaetum uses a standalone private GitHub repository where you choose the
-platform shape and build the break-glass bundle that instantiates a new
-cluster. Bootstrap seeds that configuration into the cluster's Gitea instance;
-from that point, the in-cluster Gitea repository is the authoritative
-operational source of truth and Argo CD reconciles it. The private repository
-remains an out-of-band configuration and recovery copy if the cluster is
-unavailable.
-Canonical Adaetum remains the public `upstream` remote. GitHub does not permit
-private forks of a public repository, so the recovery repository is deliberately
-standalone rather than a GitHub fork.
-`task init` establishes `main` as the private repository's default workflow
-branch while preserving and publishing the operator's current development branch.
-Adaetum does not promise an in-place upgrade API between major designs:
-upstream breaking changes are adopted deliberately in your recovery repository.
+The name is a play on *adytum*: the inner sanctuary of a Greek temple. The idea
+is simple—your infrastructure should have a protected source of truth, a clear
+ritual for change, and a recovery path that exists before you need it.
 
-## Platform contract
+Adaetum does not replace the tools you already want to use. It composes mature
+upstream projects into one operating model: Gitea holds the in-cluster desired
+state, Argo CD reconciles it, OpenBao owns application secrets, Authentik guards
+operator-facing services, and Ansible keeps the hosts aligned.
 
-[`platform.yaml`](platform.yaml) is Adaetum's single public, non-secret
-configuration contract. It defines the cluster shape and delivery settings
-owned by the recovery repository; the supported product stack is defined
-directly under [`pods/`](pods).
-The generated `.env`,
-`pods/cluster-config/cluster-config.env`, and rendered manifests are
-implementation outputs; do not hand-edit them.
+For its intended audience, Adaetum is an **OpenShift replacement**: a way to
+get an integrated, security-conscious application platform while retaining a
+smaller, inspectable stack built on RKE2 and upstream tools. It is an
+alternative operating model, not a drop-in or API-compatible OpenShift clone.
 
-| Area | Support |
+## Why Adaetum?
+
+Building a cluster is easy to demo. Owning one through failed disks, expired
+credentials, upgrades, and the next rebuild is the harder problem.
+
+Adaetum gives you:
+
+- **A guided first-node path.** `task init` prepares the recovery repository,
+  provider access, platform profile, verified Rocky Linux media, and unattended
+  installer.
+- **A real source-of-truth handoff.** Bootstrap seeds the new cluster's Gitea
+  repository; Argo CD then owns reconciliation inside the cluster.
+- **Recovery outside the failure domain.** A standalone private GitHub
+  repository remains the out-of-band configuration and break-glass copy.
+- **Secrets with an authority model.** Bootstrap credentials are temporary;
+  OpenBao and scoped Kubernetes integrations own steady-state delivery.
+- **Private and public access paths.** Tailscale, ingress-nginx, external-dns,
+  Cloudflare, cloudflared, and Authentik form the supported connectivity model.
+- **Day-2 operations included.** Health enforcement, observability, policy, and
+  one-node-at-a-time Rocky Linux maintenance are part of the platform contract.
+- **An OpenShift alternative you own.** GitOps, identity, secrets, policy,
+  storage, ingress, and observability arrive as one coherent platform without
+  making OpenShift itself the cluster distribution.
+
+This is for operators who want a cohesive, inspectable system—not a bag of
+installation snippets and not a new proprietary control plane.
+
+## One system, three operating moments
+
+<a href="./images/operating.png">
+  <img src="./images/operating-crop.png" alt="Adaetum operating model shown as Day 0, Day 1, and Day 2 plus" width="100%">
+</a>
+
+### Day 0 — Activate
+
+Run `task init` from a fresh checkout. Adaetum creates or reuses a standalone
+private recovery repository, reviews the public platform profile, authorizes
+the supported providers, verifies Rocky Linux media, and produces the installer
+for the first physical host or VM.
+
+The installed node moves through explicit bootstrap phases: input validation,
+temporary secret creation, RKE2 activation, OpenBao initialization, the
+Gitea/Argo CD control-pair handoff, GitOps realization, late live-state
+reconciliation, and encrypted recovery export.
+
+### Day 1 — Prove and grow
+
+Verify storage, ingress, identity, secrets, observability, and GitOps. Add
+server or workload nodes when the first node is stable. The initial install is
+deliberately single-node; availability grows with the cluster instead of being
+pretended into existence during bootstrap.
+
+### Day 2+ — Operate through Git
+
+Routine platform changes flow through the in-cluster Gitea repository and Argo
+CD. The packaged Ansible runner performs bounded host reconciliation, while
+`dnf-automatic` and Kured coordinate updates and reboots one node at a time by
+default. Gitea can push-mirror outward to the private GitHub recovery repository
+without turning GitHub into a second writable source of truth.
+
+Whether a change comes from a person, a script, or an AI assistant, the path is
+the same: edit desired state, review the diff, commit it, and let the cluster
+reconcile.
+
+## How the ownership model works
+
+| Boundary | Authority |
 | --- | --- |
-| Rocky Linux 10 installer | Stable target |
-| Ubuntu 24.04 installer | Experimental, disabled |
-| External bootstrap integrations | Cloudflare R2/edge, GitHub Actions, Tailscale |
-| In-cluster product stack | Argo CD, Gitea, OpenBao, Authentik, Homepage, Headlamp, Prometheus, Grafana |
+| Public cluster configuration | [`platform.yaml`](platform.yaml) in your private recovery repository |
+| Installer and bootstrap implementation | [`ks-src/`](ks-src) and [`ansible/`](ansible) |
+| In-cluster product stack | [`pods/`](pods) |
+| Day-2 desired state | The cluster's Gitea repository, reconciled by Argo CD |
+| Application secrets | OpenBao, delivered through scoped CSI or External Secrets paths |
+| Disaster recovery copy | Your standalone private GitHub repository and encrypted recovery export |
+
+`platform.yaml` is the single public, non-secret configuration contract.
+Generated `.env` values, `pods/cluster-config/cluster-config.env`, rendered
+manifests, installers, and recovery archives are outputs—not competing sources
+of truth.
+
+GitHub does not allow private forks of a public repository. Adaetum therefore
+uses a standalone private repository as `origin` and preserves canonical
+Adaetum as `upstream`.
+
+## Security is part of the architecture
+
+<a href="./images/security.png">
+  <img src="./images/security-crop.png" alt="Adaetum security model illustrated as protected systems and identities" width="100%">
+</a>
+
+Adaetum treats access, secrets, policy, patching, and recovery as platform
+concerns rather than cleanup work:
+
+- Tailscale provides the operator and node overlay, including Tailscale SSH.
+- Authentik protects the normal routed operator interfaces.
+- OpenBao becomes the authority for Adaetum-managed application credentials.
+- External Secrets and the Secrets Store CSI driver deliver scoped workload
+  copies without making Kubernetes Secrets the master record.
+- Gatekeeper and Kubescape provide policy and security feedback.
+- Prometheus, Grafana, and Alertmanager expose platform health.
+- `dnf-automatic` and Kured apply host updates with a cluster lock, drain
+  safety, maintenance controls, and a default reboot concurrency of one.
+- Phase 99 exports encrypted recovery material before removing transitional
+  bootstrap authority.
+
+Security-first does not mean magic. A single-node cluster will have downtime
+during a host reboot, and workload availability on a multi-node cluster still
+depends on replicas, storage placement, and valid PodDisruptionBudgets.
+
+## What gets deployed
+
+| Capability | Upstream projects |
+| --- | --- |
+| Host and Kubernetes foundation | Rocky Linux 10, Ansible, RKE2, Rancher, Longhorn, cert-manager |
+| GitOps and source control | Argo CD, Gitea, Gitea Actions |
+| Secrets, identity, and policy | OpenBao, External Secrets, Secrets Store CSI, Authentik, Gatekeeper, Kubescape |
+| Networking and edge | Tailscale, ingress-nginx, external-dns, Cloudflare, cloudflared, kube-vip |
+| Operations | Homepage, Headlamp, Prometheus, Grafana, Alertmanager, Kured |
+
+Adaetum is activation and integration code. Those upstream applications remain
+the operator-facing products, with their own APIs, interfaces, and release
+cycles.
 
 ## Quick start
 
-From a fresh checkout, run the guided first-run command:
+Clone the public project and start the guided setup:
 
 ```bash
+git clone https://github.com/Adaetum/Adaetum.git
+cd Adaetum
 task init
 ```
 
-`task init` creates or reuses your private recovery repository, collects and
-reviews the public platform profile, finds or downloads the verified Rocky installer ISO, guides
-provider authorization, selects the cluster domain from Cloudflare zones visible
-to the authorized token together with the zone's owning Cloudflare account, and
-then starts setup. The console carries one
-five-section journey throughout: Repository, Providers, Profile, Installer, and
-Bootstrap. At completion it prints the exact generated ISO path and tells you
-how to attach it to the first physical host or VM for the unattended install.
-It also offers to place a ready-to-use copy in your Downloads folder.
-Use `task initialize` only to rerun the setup workflow after the first run.
+The walkthrough has five sections—Repository, Providers, Profile, Installer,
+and Bootstrap—and finishes by printing the generated ISO path. Attach that ISO
+to the first machine and boot it.
 
-After one successful interactive setup, the same machine can replay the saved
-choices without questions:
+You will need:
 
-```bash
-task init:silent
-```
+- Git and Python 3
+- [Task](https://taskfile.dev/docs/installation)
+- accounts with GitHub, Cloudflare, and Tailscale
+- a supported Rocky Linux 10 Minimal or DVD installer image, which setup can
+  discover or download and verify
+- Docker only when building the ISO locally instead of reusing a published copy
 
-Silent replay validates and reuses the private recovery repository,
-`platform.yaml`, OS-protected provider credentials, generated runtime values,
-and verified installer media. It fails closed when required saved state is
-missing or expired; it never creates a plaintext answer file or bypasses
-provider validation.
+Useful setup paths:
 
-If the checkout still points at Adaetum upstream, `task init` installs GitHub
-CLI, authenticates in the browser, creates or reuses a standalone private
-repository, and updates `origin` after you confirm the action. It keeps this local checkout and
-preserves canonical Adaetum as the `upstream` remote; it does not clone a second
-copy. If your GitHub account already has an unrelated repository named
-`Adaetum-cluster`, setup explains the collision and suggests another private
-repository name. Existing GitHub CLI credentials are reused on later runs.
-Transient GitHub API failures are retried and reported without forcing another
-login; only an explicitly rejected credential enters GitHub's refresh flow.
+| Command | Purpose |
+| --- | --- |
+| `task init` | Supported guided first run |
+| `task init:silent` | Replay previously saved choices on the same workstation |
+| `task init:dryrun` | Rehearse the journey without provider calls or mutations |
+| `task init:clean` | Replace saved provider credentials and generated runtime values |
+| `task initialize` | Rerun bootstrap preparation without the first-run account walkthrough |
+| `task platform:validate` | Validate the public platform profile |
+| `task platform:render` | Regenerate profile-owned outputs |
 
-To rehearse that experience without installing tools, changing Git, collecting
-secrets, or contacting providers, run:
+For prerequisites, provider permissions, installation behavior, and recovery
+operations, follow the [Bootstrap and recovery guide](setup.md).
 
-```bash
-task init:dryrun
-```
+## Project status and boundaries
 
-It remains interactive and follows the same decision order as `task init`.
-It substitutes fixture credentials and no-op action adapters while preserving
-the same decision order and review screens.
-
-To deliberately replace saved Adaetum provider credentials and generated
-runtime values, run:
-
-```bash
-task init:clean
-```
-
-This keeps the authenticated GitHub session, private recovery repository, and
-verified Rocky installer media. It collects new Cloudflare and Tailscale
-credentials, overwrites their OS credential-store entries after validation,
-rebuilds `.env`, and replaces the corresponding GitHub secrets.
-
-Gum is an optional presentation layer outside `task init`: credential prompts,
-recovery pickers, and confirmations use it when available, but retain plain
-terminal behavior. Set `ADAETUM_GUM_UI=0` to force that fallback.
-
-Validate and render the recovery-repository-owned profile after changing it:
-
-```bash
-task platform:validate
-task platform:render
-```
-
-`task platform:setup` uses the recovery repository's `platform.yaml` to render
-public platform configuration while retaining `.env` only for runtime secrets.
+- Rocky Linux 10 is the stable installer target.
+- Ubuntu 24.04 support is experimental and disabled by default.
+- The supported external integrations are GitHub, Cloudflare, and Tailscale;
+  Adaetum does not claim an untested provider-plugin abstraction.
+- Bootstrap is optimized for one node at install time. Additional nodes and
+  higher availability come afterward.
+- Major design changes may require deliberate adoption in the private recovery
+  repository; Adaetum does not promise an in-place compatibility API between
+  every architecture generation.
+- Adaetum does not implement OpenShift-specific APIs, Operators, routes, or
+  enterprise support contracts; workloads depending on them require migration.
 
 ## Documentation
 
-- [Architecture and audit](docs/audit.md)
+- [Bootstrap and recovery guide](setup.md)
+- [Architecture and authority audit](docs/audit.md)
+- [Automatic host maintenance](docs/host-maintenance.md)
+- [External integration boundaries](docs/integrations.md)
 - [Release evidence](docs/release-evidence.md)
 - [Versioning policy](docs/versioning.md)
-- [External integration boundaries](docs/integrations.md)
-- [Automatic host maintenance](docs/host-maintenance.md)
 - [Maintainer triage and release process](docs/maintainer-process.md)
-- [Bootstrap and recovery guide](setup.md)
 - [Public roadmap](TODO.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md) and [support policy](SUPPORT.md)
@@ -139,7 +217,7 @@ public platform configuration while retaining `.env` only for runtime secrets.
 
 Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), use
 the issue templates for proposals and bugs, and keep pull requests focused.
-Please follow our [Code of Conduct](CODE_OF_CONDUCT.md).
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
