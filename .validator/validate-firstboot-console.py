@@ -82,6 +82,16 @@ def main() -> int:
         raise SystemExit(
             "first-boot public-profile contract failed: public profile must override runtime defaults"
         )
+    for required in (
+        'brew_attempt_log="$(mktemp)"',
+        'while [ "${brew_attempt}" -le 3 ]',
+        'brew install ${formula_name} >\\"${brew_attempt_log}\\" 2>&1',
+        'retrying (attempt $((brew_attempt + 1))/3)',
+    ):
+        if required not in runner:
+            raise SystemExit(
+                f"first-boot tooling contract failed: bounded Homebrew retry is missing ({required})"
+            )
     failure_capture = re.compile(
         r'if run_step "\$\{key\}" "\$\{label\}" "\$@"; then.*?return 0\s*'
         r'else\s*(?:#.*\n\s*)*rc=\$\?\s*fi.*?'
