@@ -410,6 +410,8 @@ def validate_phase70_realization_gate() -> list[str]:
         'get endpoints "${GITEA_INTERNAL_SERVICE_NAME}"',
         "Gitea service discovery does not resolve to a ready registry endpoint",
         "ensure_gitea_registry_bootstrap_path()",
+        "wait_for_gitea_registry_bootstrap_path()",
+        "wait_for_gitea_gitops_settle()",
         "discover_gitea_registry_token_service_host",
         '--resolve "${canonical_host}:80:${bootstrap_ip}"',
         '"http://${canonical_host}/v2/"',
@@ -429,24 +431,138 @@ def validate_phase70_realization_gate() -> list[str]:
         '"failed establishing internal Gitea registry bootstrap path"',
         realization_start,
     )
+    gitops_settle = phase_60.find(
+        '"Gitea GitOps application did not settle after handoff"',
+        realization_start,
+    )
+    golden_path = phase_60.find(
+        "require_gitea_golden_path",
+        gitops_settle,
+    )
+    service_contract = phase_60.find(
+        '"Gitea service discovery does not resolve to a ready registry endpoint"',
+        realization_start,
+    )
     image_publish = phase_60.find(
         '"failed publishing ansible-runner image to Gitea registry"',
         realization_start,
     )
     if (
         realization_start < 0
+        or gitops_settle < 0
+        or golden_path < 0
+        or service_contract < 0
         or bootstrap_path < 0
         or image_publish < 0
-        or bootstrap_path > image_publish
+        or not (
+            gitops_settle
+            < golden_path
+            < service_contract
+            < bootstrap_path
+            < image_publish
+        )
     ):
         failures.append(
-            "Phase 60 must establish the internal registry bootstrap path before "
+            "Phase 60 must wait for the adopted Gitea Application, prove its "
+            "rollout and Service, then establish the registry path before "
             "publishing ansible-runner during realization"
         )
+
+    phase_60_functions = functions(PHASE_60)
+    gitops_settle_helper = phase_60_functions.get("wait_for_gitea_gitops_settle")
+    registry_wait_helper = phase_60_functions.get(
+        "wait_for_gitea_registry_bootstrap_path"
+    )
+    if gitops_settle_helper:
+        script = gitops_settle_helper + r'''
+set -euo pipefail
+kubectl_bin=mock_kubectl
+PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS=30
+DEBUG_REASON=""
+STATE_FILE="$(mktemp)"
+printf '%s' 0 >"${STATE_FILE}"
+
+mock_kubectl() {
+  local field="${*: -1}"
+  local call_count=""
+  local observation=""
+  local state=""
+  call_count="$(cat "${STATE_FILE}")"
+  call_count=$((call_count + 1))
+  printf '%s' "${call_count}" >"${STATE_FILE}"
+  observation=$(((call_count - 1) / 3))
+  case "${observation}" in
+    0) state="Synced Healthy Succeeded" ;;
+    1) state="OutOfSync Progressing Running" ;;
+    *) state="Synced Healthy Succeeded" ;;
+  esac
+  if [[ "${field}" == *"sync.status"* ]]; then
+    printf '%s' "${state%% *}"
+  elif [[ "${field}" == *"health.status"* ]]; then
+    state="${state#* }"
+    printf '%s' "${state%% *}"
+  elif [[ "${field}" == *"operationState.phase"* ]]; then
+    printf '%s' "${state##* }"
+  else
+    return 1
+  fi
+}
+
+sleep() { :; }
+gitea_debug_dump() { DEBUG_REASON="$1"; }
+
+wait_for_gitea_gitops_settle
+[[ "$(cat "${STATE_FILE}")" -ge 12 ]]
+[[ -z "${DEBUG_REASON}" ]]
+rm -f "${STATE_FILE}"
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            cwd=REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+            failures.append(f"Gitea GitOps settle behavior failed: {detail}")
+
+    if registry_wait_helper:
+        script = registry_wait_helper + r'''
+set -euo pipefail
+PHASE60_GITEA_REGISTRY_ATTEMPTS=3
+PHASE60_GITEA_REGISTRY_RETRY_DELAY=0
+ATTEMPTS=0
+DEBUG_REASON=""
+
+ensure_gitea_registry_bootstrap_path() {
+  ATTEMPTS=$((ATTEMPTS + 1))
+  [[ "${ATTEMPTS}" -ge 3 ]]
+}
+sleep() { :; }
+gitea_debug_dump() { DEBUG_REASON="$1"; }
+
+wait_for_gitea_registry_bootstrap_path
+[[ "${ATTEMPTS}" == 3 ]]
+[[ -z "${DEBUG_REASON}" ]]
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            cwd=REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+            failures.append(f"Gitea registry convergence behavior failed: {detail}")
 
     for required in (
         "PHASE60_WARNING_ONLY=0",
         'PHASE60_GITEA_ROLLOUT_TIMEOUT="${PHASE70_GITEA_ROLLOUT_TIMEOUT:-120s}"',
+        'PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS="${PHASE70_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS:-180}"',
         "PHASE60_GITEA_ROLLOUT_ATTEMPTS=1",
         "PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL=0",
         "GitOps handoff verification failed; stopping before realization checks",
@@ -474,7 +590,6 @@ def validate_phase70_realization_gate() -> list[str]:
             "Phase 70 must prove the secret-delivery foundation before workload realization"
         )
 
-    phase_60_functions = functions(PHASE_60)
     service_check = phase_60_functions.get("require_gitea_service_contract")
     if service_check:
         script = service_check + r'''

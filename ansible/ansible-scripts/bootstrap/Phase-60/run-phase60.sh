@@ -33,6 +33,9 @@ PHASE60_GITEA_ROLLOUT_TIMEOUT="${PHASE60_GITEA_ROLLOUT_TIMEOUT:-600s}"
 PHASE60_GITEA_PROGRESS_DEADLINE_SECONDS="${PHASE60_GITEA_PROGRESS_DEADLINE_SECONDS:-1800}"
 PHASE60_GITEA_ROLLOUT_ATTEMPTS="${PHASE60_GITEA_ROLLOUT_ATTEMPTS:-2}"
 PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL="${PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL:-1}"
+PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS="${PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS:-180}"
+PHASE60_GITEA_REGISTRY_ATTEMPTS="${PHASE60_GITEA_REGISTRY_ATTEMPTS:-12}"
+PHASE60_GITEA_REGISTRY_RETRY_DELAY="${PHASE60_GITEA_REGISTRY_RETRY_DELAY:-5}"
 PHASE60_GITEA_DEBUG_LOG="${PHASE60_GITEA_DEBUG_LOG:-${PHASE60_LOG_FILE}}"
 PHASE60_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS="${PHASE60_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS:-600}"
 PHASE60_CLOUDFLARED_ROLLOUT_TIMEOUT="${PHASE60_CLOUDFLARED_ROLLOUT_TIMEOUT:-300s}"
@@ -425,6 +428,10 @@ discover_gitea_registry_token_service_host() {
   local bootstrap_ip=""
   local canonical_host=""
   local headers=""
+  local http_status=""
+  local token_service_host=""
+  local curl_error_file=""
+  local curl_error=""
 
   # The live challenge is authoritative. Gitea derives this hostname from its
   # canonical ROOT_URL, and bootstrap must bridge that identity without waiting
@@ -439,21 +446,35 @@ from urllib.parse import urlparse
 value = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
 print((urlparse(value).hostname or "").strip() if value else "")
 PY
-)"
+  )"
+  curl_error_file="$(mktemp /tmp/gitea-registry-challenge.XXXXXX.log)"
   if [[ -n "${bootstrap_ip}" && -n "${canonical_host}" ]]; then
-    headers="$(
+    if ! headers="$(
       curl -sS -D - -o /dev/null --noproxy '*' --max-time 10 \
         --resolve "${canonical_host}:80:${bootstrap_ip}" \
-        "http://${canonical_host}/v2/" 2>/dev/null || true
-    )"
+        "http://${canonical_host}/v2/" 2>"${curl_error_file}"
+    )"; then
+      headers=""
+    fi
   else
-    headers="$(
+    if ! headers="$(
       curl -sS -D - -o /dev/null --noproxy '*' --max-time 10 \
-        "http://${GITEA_INTERNAL_SERVICE_HOST}/v2/" 2>/dev/null || true
-    )"
+        "http://${GITEA_INTERNAL_SERVICE_HOST}/v2/" 2>"${curl_error_file}"
+    )"; then
+      headers=""
+    fi
   fi
-  printf '%s' "${headers}" \
-    | python3 "${script_dir}/registry-token-service-host.py" 2>/dev/null || true
+  token_service_host="$(
+    printf '%s' "${headers}" \
+      | python3 "${script_dir}/registry-token-service-host.py" 2>/dev/null || true
+  )"
+  if [[ -z "${token_service_host}" ]]; then
+    http_status="$(printf '%s\n' "${headers}" | awk 'toupper($1) ~ /^HTTP\// {status=$2} END {print status}')"
+    curl_error="$(tail -n 1 "${curl_error_file}" 2>/dev/null || true)"
+    echo "[phase60] Gitea registry challenge is not ready (http=${http_status:-none}, curl=${curl_error:-none})" >&2
+  fi
+  rm -f "${curl_error_file}" >/dev/null 2>&1 || true
+  printf '%s' "${token_service_host}"
 }
 
 
@@ -497,6 +518,30 @@ ensure_gitea_registry_bootstrap_path() {
   GITEA_REGISTRY_TOKEN_SERVICE_HOST="${registry_token_service_host}"
   export GITEA_REGISTRY_TOKEN_SERVICE_HOST
   echo "[phase60] internal Gitea registry path ready: token_host=${registry_token_service_host} service_ip=${bootstrap_ip}"
+}
+
+
+wait_for_gitea_registry_bootstrap_path() {
+  local attempts="${PHASE60_GITEA_REGISTRY_ATTEMPTS}"
+  local delay="${PHASE60_GITEA_REGISTRY_RETRY_DELAY}"
+  local attempt=1
+
+  [[ "${attempts}" =~ ^[0-9]+$ ]] && (( attempts > 0 )) || attempts=1
+  [[ "${delay}" =~ ^[0-9]+$ ]] || delay=5
+
+  while (( attempt <= attempts )); do
+    if ensure_gitea_registry_bootstrap_path; then
+      return 0
+    fi
+    if (( attempt < attempts )); then
+      echo "[phase60] Gitea registry path still converging; retry ${attempt}/${attempts} in ${delay}s" >&2
+      sleep "${delay}"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  gitea_debug_dump "registry-bootstrap-path-timeout"
+  return 1
 }
 
 
@@ -1171,18 +1216,9 @@ apply_secret_delivery_foundation_bridge() {
   BOOTSTRAP_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS="${PHASE60_SECRET_DELIVERY_FOUNDATION_TIMEOUT_SECONDS}" \
     bootstrap_wait_for_secret_delivery_foundation \
       "${kubectl_bin}" "secret-delivery-foundation"
-  if [[ "${gitea_push_mirror_enabled_effective:-0}" == "1" || \
-        "${gitea_push_mirror_enabled_effective:-0}" == "true" || \
-        "${gitea_push_mirror_enabled_effective:-0}" == "yes" ]]; then
-    if ! configure_gitea_push_mirror \
-      "${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
-      "${GITEA_SEED_TARGET_REPO:-cluster}" \
-      "${gitea_push_mirror_repo_url_effective:-}" \
-      "${gitea_push_mirror_username_effective:-}" \
-      "${gitea_push_mirror_token_effective:-}"; then
-      echo "[phase60] WARNING: failed configuring Gitea push mirror after secret-delivery foundation became ready" >&2
-    fi
-  fi
+  # The full ApplicationSet applied after this bridge adds Gitea's projected
+  # credential volume and intentionally recreates its single-writer pod. The
+  # realization gate installs the hook only after that rollout is healthy.
   bootstrap_diag_record \
     "phase=phase60" \
     "step=handoff" \
@@ -2182,6 +2218,46 @@ wait_for_gitea_rollout() {
     attempt=$((attempt + 1))
   done
 
+  return 1
+}
+
+
+wait_for_gitea_gitops_settle() {
+  local timeout_seconds="${PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS}"
+  local poll_seconds=5
+  local elapsed=0
+  local stable_observations=0
+  local sync_status=""
+  local health_status=""
+  local operation_phase=""
+
+  [[ "${timeout_seconds}" =~ ^[0-9]+$ ]] && (( timeout_seconds > 0 )) || timeout_seconds=180
+
+  # Argo can briefly retain the previous Healthy status while it observes the
+  # ApplicationSet takeover. Require two consecutive settled observations so
+  # deployment readiness is checked against the adopted desired state.
+  while (( elapsed < timeout_seconds )); do
+    sync_status="$("${kubectl_bin}" -n argocd get application gitea -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+    health_status="$("${kubectl_bin}" -n argocd get application gitea -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+    operation_phase="$("${kubectl_bin}" -n argocd get application gitea -o jsonpath='{.status.operationState.phase}' 2>/dev/null || true)"
+
+    if [[ "${sync_status}" == "Synced" && "${health_status}" == "Healthy" && "${operation_phase}" != "Running" ]]; then
+      stable_observations=$((stable_observations + 1))
+      if (( stable_observations >= 2 )); then
+        echo "[phase60] Gitea GitOps application settled (sync=${sync_status}, health=${health_status})"
+        return 0
+      fi
+    else
+      stable_observations=0
+      echo "[phase60] waiting for Gitea GitOps takeover (sync=${sync_status:-missing}, health=${health_status:-missing}, operation=${operation_phase:-none})"
+    fi
+
+    sleep "${poll_seconds}"
+    elapsed=$((elapsed + poll_seconds))
+  done
+
+  echo "[phase60] Gitea GitOps application did not settle within ${timeout_seconds}s (sync=${sync_status:-missing}, health=${health_status:-missing}, operation=${operation_phase:-none})" >&2
+  gitea_debug_dump "gitops-application-not-settled"
   return 1
 }
 
@@ -3229,7 +3305,7 @@ else
   require_gitea_golden_path
   run_or_fail \
     "failed establishing internal Gitea registry bootstrap path" \
-    ensure_gitea_registry_bootstrap_path
+    wait_for_gitea_registry_bootstrap_path
   gitea_runner_token_effective="$(read_openbao_app_field gitea/actions-runner token "${openbao_token}" || true)"
   if [[ -z "${gitea_runner_token_effective}" ]]; then
     gitea_runner_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
@@ -3606,16 +3682,33 @@ else
 fi
 
 run_or_fail \
-  "failed establishing internal Gitea registry bootstrap path" \
-  ensure_gitea_registry_bootstrap_path
+  "Gitea GitOps application did not settle after handoff" \
+  wait_for_gitea_gitops_settle
 
-run_or_fail \
-  "failed ensuring ansible-runner image pull secret" \
-  ensure_ansible_runner_pull_secret
+if [[ "${BOOTSTRAP_GITEA_GOLDEN_PATH_REQUIRED}" == "1" || "${BOOTSTRAP_GITEA_GOLDEN_PATH_REQUIRED}" == "true" ]]; then
+  require_gitea_golden_path
+fi
 
 run_or_fail \
   "Gitea service discovery does not resolve to a ready registry endpoint" \
   require_gitea_service_contract
+
+# Installing the hook before the full Gitea Application sync races its
+# Recreate rollout and leaves the projected credential volume unavailable.
+# OpenBao is authoritative here, so a disabled/unconfigured mirror is a no-op.
+if ! configure_gitea_push_mirror \
+  "${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
+  "${GITEA_SEED_TARGET_REPO:-cluster}"; then
+  echo "[phase60] WARNING: failed configuring Gitea push mirror after the final Gitea rollout" >&2
+fi
+
+run_or_fail \
+  "failed establishing internal Gitea registry bootstrap path" \
+  wait_for_gitea_registry_bootstrap_path
+
+run_or_fail \
+  "failed ensuring ansible-runner image pull secret" \
+  ensure_ansible_runner_pull_secret
 
 run_or_fail \
   "failed publishing ansible-runner image to Gitea registry" \
@@ -3627,10 +3720,6 @@ run_or_fail \
 
 if [[ -z "${gitea_local_host}" || -z "${argocd_local_host}" ]]; then
   fail_local_requirement "local ingress hosts were not computed"
-fi
-
-if [[ "${BOOTSTRAP_GITEA_GOLDEN_PATH_REQUIRED}" == "1" || "${BOOTSTRAP_GITEA_GOLDEN_PATH_REQUIRED}" == "true" ]]; then
-  require_gitea_golden_path
 fi
 
 domain_rc=0
