@@ -98,6 +98,8 @@ def main() -> int:
         fail("reused recovery repositories do not restore branch tracking")
     if 'git merge --no-edit "origin/${current_branch}"' not in first_run:
         fail("reused recovery repositories do not reconcile existing cluster history")
+    if 'git push origin "${current_branch}"' not in first_run or "Publishing local recovery updates" not in first_run:
+        fail("first-run retries do not publish validated local commits that are ahead of recovery origin")
     if "this checkout has uncommitted changes" not in first_run:
         fail("recovery branch reconciliation can overwrite an uncommitted worktree")
     if "git remote rename origin upstream" in first_run:
@@ -108,6 +110,44 @@ def main() -> int:
         fail("repository migration strands credentials in the previous secure-store namespace")
     if 'git remote add upstream "https://github.com/Adaetum/Adaetum.git"' not in first_run:
         fail("first-run does not preserve canonical Adaetum as the upstream remote")
+    if 'git remote set-url --push origin "${recovery_url}"' not in first_run:
+        fail("first-run does not replace a stale public push URL on origin")
+    reuse_private_origin = first_run.split(
+        'if [ "${visibility}" = private ] && [ "${can_admin}" = true ] && [ "${is_fork}" = false ]; then',
+        1,
+    )[1].split('first_run_heading "Private recovery repository required"', 1)[0]
+    if 'first_run_set_recovery_origin "${origin}"' not in reuse_private_origin:
+        fail("first-run does not normalize origin when reusing a private recovery checkout")
+    with tempfile.TemporaryDirectory() as directory:
+        remote_fixture = subprocess.run(
+            [
+                "bash",
+                "-c",
+                """
+set -euo pipefail
+git init -q "${fixture_repo}"
+cd "${fixture_repo}"
+git remote add origin https://github.com/Binglesworth/Adaetum-cluster.git
+git remote set-url --push origin https://github.com/Adaetum/Adaetum.git
+repo_root="${source_root}"
+. "${source_root}/tasks/scripts/first-run-preflight.sh"
+first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.git
+[ "$(git remote get-url origin)" = https://github.com/Binglesworth/Adaetum-cluster.git ]
+[ "$(git remote get-url --push origin)" = https://github.com/Binglesworth/Adaetum-cluster.git ]
+[ "$(git remote get-url upstream)" = https://github.com/Adaetum/Adaetum.git ]
+""",
+            ],
+            env={
+                **os.environ,
+                "fixture_repo": str(Path(directory) / "checkout"),
+                "source_root": str(ROOT),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if remote_fixture.returncode:
+            fail(f"recovery origin normalization failed: {remote_fixture.stderr.strip()}")
     if "first_run_select_tailscale_domain" not in first_run:
         fail("first-run does not discover the Tailscale tailnet")
     load_profile_body = first_run.split("first_run_load_profile() {", 1)[1].split("\n}", 1)[0]

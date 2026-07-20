@@ -217,6 +217,10 @@ first_run_set_recovery_origin() {
   fi
   if git remote get-url origin >/dev/null 2>&1; then
     git remote set-url origin "${recovery_url}"
+    # Git supports a separate push URL. `task reset` deliberately points both
+    # directions at public upstream, so first-run must replace both values or a
+    # recovered checkout can fetch privately and still push to Adaetum/Adaetum.
+    git remote set-url --push origin "${recovery_url}"
   else
     git remote add origin "${recovery_url}"
   fi
@@ -241,6 +245,13 @@ first_run_track_recovery_branch() {
       fi
     fi
     git branch --set-upstream-to="origin/${current_branch}" "${current_branch}" >/dev/null
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/${current_branch}")" ]; then
+      # A failed setup can leave validated local commits ahead of the private
+      # branch. Publish them during recovery instead of waiting for a later
+      # profile change that may not exist on the retry.
+      first_run_with_progress "Publishing local recovery updates..." \
+        git push origin "${current_branch}"
+    fi
     first_run_status success "Reusing ${current_branch} from the private recovery repository."
   else
     first_run_with_progress "Publishing the current development branch..." git push --set-upstream origin HEAD
@@ -362,7 +373,9 @@ first_run_configure_recovery_repository() {
       if [ "${visibility}" = private ] && [ "${can_admin}" = true ] && [ "${is_fork}" = false ]; then
         repository_size="$(gh api "repos/${current_repository}" --jq '.size // 0' 2>/dev/null || printf '0')"
         if [ "${repository_size}" -eq 0 ] || gh api "repos/${current_repository}/contents/Taskfile.yml" >/dev/null 2>&1; then
-          git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "https://github.com/Adaetum/Adaetum.git"
+          # Normalize both fetch and push URLs on every retry. A checkout can
+          # have a private fetch URL but retain a public push URL from reset.
+          first_run_set_recovery_origin "${origin}"
           first_run_heading "Private recovery repository"
           first_run_status success "Using private origin: ${origin}"
           first_run_track_recovery_branch
