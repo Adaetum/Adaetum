@@ -875,6 +875,9 @@ def main() -> int:
     csi_driver_app = (
         REPO_ROOT / "pods/secrets/csi-secrets-store.app.yaml"
     ).read_text(encoding="utf-8")
+    external_secrets_app = (
+        REPO_ROOT / "pods/secrets/external-secrets.app.yaml"
+    ).read_text(encoding="utf-8")
     provider_socket_dir = "providersDir: /var/run/secrets-store-csi-providers"
     if provider_socket_dir not in csi_driver_app:
         failures.append(
@@ -884,6 +887,7 @@ def main() -> int:
     for required in (
         provider_socket_dir,
         "securityContext:",
+        "privileged: true",
         "runAsUser: 0",
         "runAsNonRoot: false",
     ):
@@ -892,6 +896,11 @@ def main() -> int:
                 "pods/secrets/openbao-csi-provider.app.yaml: "
                 f"CSI provider socket identity contract is missing {required!r}"
             )
+    if "ServerSideApply=true" not in external_secrets_app:
+        failures.append(
+            "pods/secrets/external-secrets.app.yaml: "
+            "ESO CRDs must use Argo CD server-side apply"
+        )
     for path in iter_files():
         failures.extend(validate_file(path))
     failures.extend(validate_rotation_contracts())
