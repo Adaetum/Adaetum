@@ -14,6 +14,50 @@ source_helm_values: |
   alertmanager:
     enabled: false
 
+  # Kured queries Prometheus before taking the next cluster-wide reboot lock.
+  # These alerts express only host-maintenance blockers so unrelated product
+  # alerts do not permanently prevent security maintenance.
+  additionalPrometheusRulesMap:
+    adaetum-host-maintenance:
+      groups:
+        - name: adaetum-host-maintenance
+          rules:
+            - alert: AdaetumMaintenanceNodeNotReady
+              expr: max by (node) (kube_node_status_condition{condition="Ready",status="true"}) < 1
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: Node is not Ready; rolling host maintenance is blocked
+            - alert: AdaetumMaintenanceNodePressure
+              expr: max by (node, condition) (kube_node_status_condition{condition=~"DiskPressure|MemoryPressure|PIDPressure",status="true"}) > 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: Node pressure is active; rolling host maintenance is blocked
+            - alert: AdaetumMaintenanceKubeletUnavailable
+              expr: up{job="kubelet"} == 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: Kubelet metrics are unavailable; rolling host maintenance is blocked
+            - alert: AdaetumMaintenanceDaemonSetUnavailable
+              expr: kube_daemonset_status_number_unavailable > 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: A required DaemonSet has unavailable pods; rolling host maintenance is blocked
+            - alert: AdaetumMaintenanceNodeStillCordoned
+              expr: kube_node_spec_unschedulable == 1
+              for: 15m
+              labels:
+                severity: critical
+              annotations:
+                summary: A node remains unschedulable; rolling host maintenance is blocked
+
   # RKE2 binds these control-plane metrics endpoints to 127.0.0.1 by default.
   # The kube-prometheus-stack chart assumes kubeadm-style node-reachable ports,
   # which leaves these ServiceMonitors permanently down on this cluster.

@@ -1882,9 +1882,12 @@ require_gitea_service_contract() {
     -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
   service_ports="$("${kubectl_bin}" -n gitea get service "${GITEA_INTERNAL_SERVICE_NAME}" \
     -o jsonpath='{range .spec.ports[*]}{.port}{" "}{end}' 2>/dev/null || true)"
-  if [[ -z "${service_ip}" || "${service_ip}" == "None" || " ${service_ports} " != *" 3000 "* ]]; then
+  # The Gitea chart intentionally publishes gitea-http as a headless Service.
+  # DNS still resolves its ready Endpoint addresses, so clusterIP=None is valid;
+  # the endpoint check below is the actual reachability contract for Kaniko.
+  if [[ -z "${service_ip}" || " ${service_ports} " != *" 3000 "* ]]; then
     gitea_debug_dump "service-contract-invalid"
-    echo "[phase60] Gitea service discovery contract failed: service/gitea/${GITEA_INTERNAL_SERVICE_NAME} must have a ClusterIP and port 3000 (cluster_ip=${service_ip:-<empty>} ports=${service_ports:-<empty>})" >&2
+    echo "[phase60] Gitea service discovery contract failed: service/gitea/${GITEA_INTERNAL_SERVICE_NAME} must publish port 3000 (cluster_ip=${service_ip:-<empty>} ports=${service_ports:-<empty>})" >&2
     return 1
   fi
 

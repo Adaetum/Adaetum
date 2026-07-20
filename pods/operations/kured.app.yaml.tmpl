@@ -1,0 +1,66 @@
+name: kured
+project: default
+annotations:
+  # Host reboot coordination is useful only after the monitoring API exists.
+  argocd.argoproj.io/sync-wave: "5"
+source_type: helm
+source_repo_url: https://kubereboot.github.io/charts
+source_chart: kured
+source_target_revision: "5.12.0"
+ignore_differences:
+  - group: apps
+    kind: DaemonSet
+    name: kured
+    namespace: kube-system
+    jsonPointers:
+      # Kured itself owns this live lock. Argo must not remove it while a node
+      # is drained or rebooting.
+      - /metadata/annotations/weave.works~1kured-node-lock
+sync_options:
+  - RespectIgnoreDifferences=true
+source_helm_values: |
+  configuration:
+    useRebootSentinelHostPath: false
+    rebootSentinelCommand: __HOST_MAINTENANCE_SENTINEL_COMMAND__
+    rebootDays: __HOST_MAINTENANCE_REBOOT_DAYS__
+    startTime: "__HOST_MAINTENANCE_REBOOT_START_TIME__"
+    endTime: "__HOST_MAINTENANCE_REBOOT_END_TIME__"
+    timeZone: "__HOST_MAINTENANCE_TIME_ZONE__"
+    period: "__HOST_MAINTENANCE_REBOOT_PERIOD__"
+    concurrency: __HOST_MAINTENANCE_CONCURRENCY__
+    drainTimeout: "__HOST_MAINTENANCE_DRAIN_TIMEOUT__"
+    drainGracePeriod: __HOST_MAINTENANCE_DRAIN_GRACE_PERIOD__
+    forceReboot: __HOST_MAINTENANCE_FORCE_REBOOT__
+    lockTtl: "__HOST_MAINTENANCE_LOCK_TTL__"
+    lockReleaseDelay: "__HOST_MAINTENANCE_LOCK_RELEASE_DELAY__"
+    rebootDelay: "__HOST_MAINTENANCE_REBOOT_DELAY__"
+    blockingPodSelector: __HOST_MAINTENANCE_BLOCKING_POD_SELECTORS__
+    prometheusUrl: __HOST_MAINTENANCE_PROMETHEUS_URL__
+    # Only Adaetum's explicit maintenance blockers stop the next reboot. This
+    # avoids unrelated informational alerts permanently deadlocking patching.
+    alertFilterRegexp: "^AdaetumMaintenance"
+    alertFilterMatchOnly: true
+    alertFiringOnly: true
+    annotateNodes: __HOST_MAINTENANCE_ANNOTATE_NODES__
+    logFormat: json
+
+  # Kured must run on tainted control-plane and worker nodes to inspect their
+  # host package state. The cluster-wide lock still serializes reboots.
+  tolerations:
+    - operator: Exists
+
+  metrics:
+    create: __HOST_MAINTENANCE_METRICS__
+    namespace: observability
+    labels:
+      release: prometheus
+  service:
+    create: __HOST_MAINTENANCE_METRICS__
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+destination_namespace: kube-system

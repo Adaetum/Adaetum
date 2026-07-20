@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Protect the first-boot console's runner-to-renderer status contract."""
+import re
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "ansible" / "ansible-scripts" / "bundle-bootstrap"
 PHASE90 = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-90" / "run-phase90.sh"
+PHASE99 = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-90" / "run-phase99.sh"
 CONTROL_PAIR_COMMON = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "control-pair-common.sh"
 CONSOLE = ROOT / "ks-src" / "fragments" / "shared" / "portable" / "11-tailscale-firstboot-lib.shfrag"
 FIRSTBOOT_FLOW = ROOT / "ks-src" / "fragments" / "shared" / "portable" / "12-tailscale-firstboot-flow.shfrag"
@@ -17,6 +19,7 @@ ISO_WORKFLOW = ROOT / ".github" / "workflows" / "iso-build.yml"
 def main() -> int:
     runner = RUNNER.read_text(encoding="utf-8")
     phase90 = PHASE90.read_text(encoding="utf-8")
+    phase99 = PHASE99.read_text(encoding="utf-8")
     control_pair_common = CONTROL_PAIR_COMMON.read_text(encoding="utf-8")
     console = CONSOLE.read_text(encoding="utf-8")
     firstboot_flow = FIRSTBOOT_FLOW.read_text(encoding="utf-8")
@@ -46,6 +49,20 @@ def main() -> int:
     ):
         if required not in runner:
             raise SystemExit(f"first-boot console contract failed: runner does not publish detailed progress ({required})")
+    failure_capture = re.compile(
+        r'if run_step "\$\{key\}" "\$\{label\}" "\$@"; then.*?return 0\s*'
+        r'else\s*(?:#.*\n\s*)*rc=\$\?\s*fi.*?'
+        r'bootstrap_phase_status_write "\$\{phase_id\}" "\$\{key\}" "FAILED".*?'
+        r'return "\$\{rc\}"',
+        re.DOTALL,
+    )
+    if not failure_capture.search(runner):
+        raise SystemExit(
+            "bootstrap phase failure-propagation contract failed: "
+            "run_step's exit code must be captured in its else branch"
+        )
+    if 'export KUBECONFIG="${KUBECONFIG:-/etc/rancher/rke2/rke2.yaml}"' not in phase99:
+        raise SystemExit("Phase 99 kubectl contract failed: RKE2 KUBECONFIG default is missing")
     for required in (
         "gum_status_latest_activity()",
         "gum_status_log_freshness()",

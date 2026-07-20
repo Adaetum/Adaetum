@@ -8,6 +8,17 @@
   hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
   become: true
   gather_facts: true
+  # Host policy is reconciled one machine at a time. Package timers remain
+  # independently staggered on each host; Kured serializes disruptive reboots.
+  serial: 1
+  pre_tasks:
+    - name: Load the public platform profile for host maintenance policy
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../platform.yaml"
+        name: adaetum_platform_profile
   roles:
     - healthcheck
+    - role: host-maintenance
+      vars:
+        host_maintenance: "{{ adaetum_platform_profile.spec.hostMaintenance }}"
     - tailscale-user-sync

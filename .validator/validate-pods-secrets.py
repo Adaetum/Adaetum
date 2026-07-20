@@ -869,6 +869,29 @@ def validate_csi_workload_identities() -> list[str]:
 
 def main() -> int:
     failures: list[str] = []
+    openbao_csi_app = (
+        REPO_ROOT / "pods/secrets/openbao-csi-provider.app.yaml"
+    ).read_text(encoding="utf-8")
+    csi_driver_app = (
+        REPO_ROOT / "pods/secrets/csi-secrets-store.app.yaml"
+    ).read_text(encoding="utf-8")
+    provider_socket_dir = "providersDir: /var/run/secrets-store-csi-providers"
+    if provider_socket_dir not in csi_driver_app:
+        failures.append(
+            "pods/secrets/csi-secrets-store.app.yaml: "
+            "CSI driver provider socket directory contract is missing"
+        )
+    for required in (
+        provider_socket_dir,
+        "securityContext:",
+        "runAsUser: 0",
+        "runAsNonRoot: false",
+    ):
+        if required not in openbao_csi_app:
+            failures.append(
+                "pods/secrets/openbao-csi-provider.app.yaml: "
+                f"CSI provider socket identity contract is missing {required!r}"
+            )
     for path in iter_files():
         failures.extend(validate_file(path))
     failures.extend(validate_rotation_contracts())

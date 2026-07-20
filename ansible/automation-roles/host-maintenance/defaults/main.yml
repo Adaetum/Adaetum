@@ -1,0 +1,12 @@
+---
+# The playbook supplies this mapping directly from platform.yaml. Keeping an
+# empty default makes a missing ownership handoff fail at the assertion below.
+host_maintenance: {}
+
+host_maintenance_packages:
+  - dnf-automatic
+  - dnf-utils
+
+host_maintenance_timer_unit: dnf-automatic.timer
+host_maintenance_config_path: /etc/dnf/automatic.conf
+host_maintenance_timer_dropin_dir: /etc/systemd/system/dnf-automatic.timer.d

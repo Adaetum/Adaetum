@@ -119,6 +119,11 @@ else
   exit 10
 fi
 
+# Phase 99 may be invoked directly as well as through bundle-bootstrap. RKE2's
+# kubectl otherwise defaults to localhost:8080 and can neither verify nor remove
+# the temporary bootstrap authority.
+export KUBECONFIG="${KUBECONFIG:-/etc/rancher/rke2/rke2.yaml}"
+
 redact_url() {
   # Redact token query param in logs.
   python3 - <<'PY' "${1:-}"

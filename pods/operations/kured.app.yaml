@@ -1,0 +1,66 @@
+name: kured
+project: default
+annotations:
+  # Host reboot coordination is useful only after the monitoring API exists.
+  argocd.argoproj.io/sync-wave: "5"
+source_type: helm
+source_repo_url: https://kubereboot.github.io/charts
+source_chart: kured
+source_target_revision: "5.12.0"
+ignore_differences:
+  - group: apps
+    kind: DaemonSet
+    name: kured
+    namespace: kube-system
+    jsonPointers:
+      # Kured itself owns this live lock. Argo must not remove it while a node
+      # is drained or rebooting.
+      - /metadata/annotations/weave.works~1kured-node-lock
+sync_options:
+  - RespectIgnoreDifferences=true
+source_helm_values: |
+  configuration:
+    useRebootSentinelHostPath: false
+    rebootSentinelCommand: "sh -c \"! needs-restarting --reboothint\""
+    rebootDays: [su, mo, tu, we, th, fr, sa]
+    startTime: "03:00"
+    endTime: "06:00"
+    timeZone: "America/Chicago"
+    period: "1h"
+    concurrency: 1
+    drainTimeout: "30m"
+    drainGracePeriod: -1
+    forceReboot: false
+    lockTtl: "0"
+    lockReleaseDelay: "10m"
+    rebootDelay: "0"
+    blockingPodSelector: []
+    prometheusUrl: "http://prometheus-kube-prometheus-prometheus.observability.svc.cluster.local:9090"
+    # Only Adaetum's explicit maintenance blockers stop the next reboot. This
+    # avoids unrelated informational alerts permanently deadlocking patching.
+    alertFilterRegexp: "^AdaetumMaintenance"
+    alertFilterMatchOnly: true
+    alertFiringOnly: true
+    annotateNodes: true
+    logFormat: json
+
+  # Kured must run on tainted control-plane and worker nodes to inspect their
+  # host package state. The cluster-wide lock still serializes reboots.
+  tolerations:
+    - operator: Exists
+
+  metrics:
+    create: true
+    namespace: observability
+    labels:
+      release: prometheus
+  service:
+    create: true
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+destination_namespace: kube-system

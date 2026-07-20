@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -59,6 +60,10 @@ def config_from_profile(profile: dict) -> dict[str, str]:
     domain = cluster["domain"]
     local_domain = cluster["localDomain"]
     repository = cluster["repository"]
+    maintenance = profile["spec"]["hostMaintenance"]
+    reboots = maintenance["reboots"]
+    safety = maintenance["safety"]
+    observability = maintenance["observability"]
     owner = repository["owner"]
     name = repository["name"]
     host = lambda service, suffix: f"{service}.{suffix}"
@@ -98,6 +103,33 @@ def config_from_profile(profile: dict) -> dict[str, str]:
         "TAILSCALE_DOMAIN": cluster["overlayDomain"],
         "TAILSCALE_CLUSTER_TAG": cluster["overlayClusterTag"],
         "EXTERNAL_DNS_DOMAIN_FILTER": domain,
+        "HOST_MAINTENANCE_ENABLED": str(maintenance["enabled"]).lower(),
+        "HOST_MAINTENANCE_REBOOT_ENABLED": str(reboots["enabled"]).lower(),
+        "HOST_MAINTENANCE_REBOOT_DAYS": "[" + ", ".join(reboots["days"]) + "]",
+        "HOST_MAINTENANCE_REBOOT_START_TIME": reboots["startTime"],
+        "HOST_MAINTENANCE_REBOOT_END_TIME": reboots["endTime"],
+        "HOST_MAINTENANCE_TIME_ZONE": reboots["timeZone"],
+        "HOST_MAINTENANCE_REBOOT_PERIOD": str(reboots["period"]),
+        "HOST_MAINTENANCE_CONCURRENCY": str(reboots["concurrency"]),
+        "HOST_MAINTENANCE_DRAIN_TIMEOUT": str(reboots["drainTimeout"]),
+        "HOST_MAINTENANCE_DRAIN_GRACE_PERIOD": str(reboots["drainGracePeriodSeconds"]),
+        "HOST_MAINTENANCE_FORCE_REBOOT": str(reboots["forceReboot"]).lower(),
+        "HOST_MAINTENANCE_LOCK_TTL": str(reboots["lockTtl"]),
+        "HOST_MAINTENANCE_LOCK_RELEASE_DELAY": str(reboots["lockReleaseDelay"]),
+        "HOST_MAINTENANCE_REBOOT_DELAY": str(reboots["rebootDelay"]),
+        "HOST_MAINTENANCE_BLOCKING_POD_SELECTORS": json.dumps(safety["blockingPodSelectors"]),
+        "HOST_MAINTENANCE_PROMETHEUS_URL": json.dumps(
+            "http://prometheus-kube-prometheus-prometheus.observability.svc.cluster.local:9090"
+            if maintenance["enabled"] and reboots["enabled"] and safety["prometheusGate"]
+            else ""
+        ),
+        "HOST_MAINTENANCE_METRICS": str(observability["metrics"]).lower(),
+        "HOST_MAINTENANCE_ANNOTATE_NODES": str(observability["annotateNodes"]).lower(),
+        "HOST_MAINTENANCE_SENTINEL_COMMAND": json.dumps(
+            'sh -c "! needs-restarting --reboothint"'
+            if maintenance["enabled"] and reboots["enabled"]
+            else "/bin/false"
+        ),
     }
     config["HOMEPAGE_ALLOWED_HOSTS"] = ",".join((config["HOMEPAGE_LOCAL_HOST"], config["HOMEPAGE_PUBLIC_HOST"], "homepage.homepage.svc.cluster.local", "homepage.homepage.svc", "localhost", "127.0.0.1"))
     return config

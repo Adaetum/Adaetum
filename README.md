@@ -128,6 +128,7 @@ public platform configuration while retaining `.env` only for runtime secrets.
 - [Release evidence](docs/release-evidence.md)
 - [Versioning policy](docs/versioning.md)
 - [External integration boundaries](docs/integrations.md)
+- [Automatic host maintenance](docs/host-maintenance.md)
 - [Maintainer triage and release process](docs/maintainer-process.md)
 - [Bootstrap and recovery guide](setup.md)
 - [Public roadmap](TODO.md)

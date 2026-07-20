@@ -248,7 +248,8 @@ mock_kubectl() {
       return 1
     fi
     if [[ "$*" == *".spec.clusterIP"* ]]; then
-      printf '%s' '10.43.66.127'
+      # The pinned Gitea chart uses a valid headless Service.
+      printf '%s' 'None'
     elif [[ "$*" == *".spec.ports"* ]]; then
       printf '%s' '3000 '
     fi

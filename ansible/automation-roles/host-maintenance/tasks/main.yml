@@ -1,0 +1,58 @@
+---
+- name: Validate Rocky host-maintenance policy handoff
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == "RedHat"
+      - host_maintenance is mapping
+      - host_maintenance.enabled is boolean
+      - host_maintenance.updates.policy in ["full", "security", "download-only", "disabled"]
+    fail_msg: >-
+      Host maintenance requires a validated spec.hostMaintenance profile and a
+      Red Hat-family host.
+
+- name: Install Rocky automatic-update tooling
+  ansible.builtin.dnf:
+    name: "{{ host_maintenance_packages }}"
+    state: present
+    lock_timeout: 120
+
+- name: Render DNF automatic-update policy
+  ansible.builtin.template:
+    src: automatic.conf.j2
+    dest: "{{ host_maintenance_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the DNF automatic timer override directory
+  ansible.builtin.file:
+    path: "{{ host_maintenance_timer_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render the DNF automatic update schedule
+  ansible.builtin.template:
+    src: timer-override.conf.j2
+    dest: "{{ host_maintenance_timer_dropin_dir }}/override.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd for host maintenance
+
+- name: Reconcile the DNF automatic timer state
+  ansible.builtin.systemd_service:
+    name: "{{ host_maintenance_timer_unit }}"
+    enabled: >-
+      {{ host_maintenance.enabled | bool and host_maintenance.updates.policy != 'disabled' }}
+    state: >-
+      {{ 'started' if (host_maintenance.enabled | bool and host_maintenance.updates.policy != 'disabled') else 'stopped' }}
+    daemon_reload: true
+
+- name: Verify the Rocky reboot-hint command used by Kured
+  ansible.builtin.command: needs-restarting --help
+  changed_when: false
+  when:
+    - host_maintenance.enabled | bool
+    - host_maintenance.reboots.enabled | bool

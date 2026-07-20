@@ -49,6 +49,7 @@ TEMPLATE_TARGETS = [
     ("pods/ingress/observability-routing/grafana-public-ingress.yaml.tmpl", "pods/ingress/observability-routing/grafana-public-ingress.yaml"),
     ("pods/ingress/observability-routing/prometheus-ingress.yaml.tmpl", "pods/ingress/observability-routing/prometheus-ingress.yaml"),
     ("pods/ingress/observability-routing/prometheus-public-ingress.yaml.tmpl", "pods/ingress/observability-routing/prometheus-public-ingress.yaml"),
+    ("pods/operations/kured.app.yaml.tmpl", "pods/operations/kured.app.yaml"),
 ]
 
 # ConfigMap fields that Kustomize copies into manifests after template render.
@@ -166,6 +167,25 @@ ENV_KEYS = (
     "TAILSCALE_DOMAIN",
     "TAILSCALE_CLUSTER_TAG",
     "EXTERNAL_DNS_DOMAIN_FILTER",
+    "HOST_MAINTENANCE_ENABLED",
+    "HOST_MAINTENANCE_REBOOT_ENABLED",
+    "HOST_MAINTENANCE_REBOOT_DAYS",
+    "HOST_MAINTENANCE_REBOOT_START_TIME",
+    "HOST_MAINTENANCE_REBOOT_END_TIME",
+    "HOST_MAINTENANCE_TIME_ZONE",
+    "HOST_MAINTENANCE_REBOOT_PERIOD",
+    "HOST_MAINTENANCE_CONCURRENCY",
+    "HOST_MAINTENANCE_DRAIN_TIMEOUT",
+    "HOST_MAINTENANCE_DRAIN_GRACE_PERIOD",
+    "HOST_MAINTENANCE_FORCE_REBOOT",
+    "HOST_MAINTENANCE_LOCK_TTL",
+    "HOST_MAINTENANCE_LOCK_RELEASE_DELAY",
+    "HOST_MAINTENANCE_REBOOT_DELAY",
+    "HOST_MAINTENANCE_BLOCKING_POD_SELECTORS",
+    "HOST_MAINTENANCE_PROMETHEUS_URL",
+    "HOST_MAINTENANCE_METRICS",
+    "HOST_MAINTENANCE_ANNOTATE_NODES",
+    "HOST_MAINTENANCE_SENTINEL_COMMAND",
 )
 
 # Gitea maps environment variables into app.ini with

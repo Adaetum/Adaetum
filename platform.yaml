@@ -16,3 +16,29 @@ spec:
   delivery:
     bootstrapBaseUrl: https://bootstrap.mudazukai.cloud
     r2Bucket: iso
+  hostMaintenance:
+    enabled: true
+    updates:
+      policy: full
+      onCalendar: "*-*-* 02:00:00"
+      randomizedDelay: 1h
+    reboots:
+      enabled: true
+      days: [su, mo, tu, we, th, fr, sa]
+      startTime: "03:00"
+      endTime: "06:00"
+      timeZone: America/Chicago
+      period: 1h
+      concurrency: 1
+      drainTimeout: 30m
+      drainGracePeriodSeconds: -1
+      forceReboot: false
+      lockTtl: 0
+      lockReleaseDelay: 10m
+      rebootDelay: 0
+    safety:
+      prometheusGate: true
+      blockingPodSelectors: []
+    observability:
+      metrics: true
+      annotateNodes: true

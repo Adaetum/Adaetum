@@ -493,12 +493,17 @@ run_bootstrap_phase() {
   shift
   bootstrap_phase_status_write "${phase_id}" "${key}" "RUNNING" "$(phase_label_for_id "${phase_id}")"
   bootstrap_phase_status_start_log_monitor "$(phase_log_path "${key}")"
+  local rc=0
   if run_step "${key}" "${label}" "$@"; then
     bootstrap_phase_status_stop_log_monitor
     bootstrap_phase_status_write "${phase_id}" "${key}" "SUCCESS" "$(phase_label_for_id "${phase_id}")"
     return 0
+  else
+    # Capture the failed command while still inside the conditional. After a
+    # completed `if` without an else, `$?` is zero and the bundle would continue
+    # into later phases and report a false-successful installation.
+    rc=$?
   fi
-  local rc=$?
   bootstrap_phase_status_stop_log_monitor
   bootstrap_phase_status_write "${phase_id}" "${key}" "FAILED" "$(phase_label_for_id "${phase_id}")"
   return "${rc}"

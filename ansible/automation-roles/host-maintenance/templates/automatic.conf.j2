@@ -1,0 +1,12 @@
+# Managed by Adaetum from platform.yaml. Local edits are reconciled by day two.
+[commands]
+upgrade_type = {{ 'security' if host_maintenance.updates.policy == 'security' else 'default' }}
+random_sleep = 0
+download_updates = yes
+apply_updates = {{ 'yes' if host_maintenance.updates.policy in ['full', 'security'] else 'no' }}
+
+[emitters]
+emit_via = stdio
+
+[base]
+debuglevel = 1
