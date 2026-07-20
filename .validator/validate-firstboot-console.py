@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "ansible" / "ansible-scripts" / "bundle-bootstrap"
 PHASE90 = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-90" / "run-phase90.sh"
 PHASE99 = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-90" / "run-phase99.sh"
+PHASE10 = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-10" / "run-phase10.sh"
 CONTROL_PAIR_COMMON = ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "control-pair-common.sh"
 CONSOLE = ROOT / "ks-src" / "fragments" / "shared" / "portable" / "11-tailscale-firstboot-lib.shfrag"
 FIRSTBOOT_FLOW = ROOT / "ks-src" / "fragments" / "shared" / "portable" / "12-tailscale-firstboot-flow.shfrag"
@@ -18,6 +19,7 @@ ISO_WORKFLOW = ROOT / ".github" / "workflows" / "iso-build.yml"
 
 def main() -> int:
     runner = RUNNER.read_text(encoding="utf-8")
+    phase10 = PHASE10.read_text(encoding="utf-8")
     phase90 = PHASE90.read_text(encoding="utf-8")
     phase99 = PHASE99.read_text(encoding="utf-8")
     control_pair_common = CONTROL_PAIR_COMMON.read_text(encoding="utf-8")
@@ -26,6 +28,23 @@ def main() -> int:
     iso_build = ISO_BUILD.read_text(encoding="utf-8")
     installer_handoff = INSTALLER_HANDOFF.read_text(encoding="utf-8")
     iso_workflow = ISO_WORKFLOW.read_text(encoding="utf-8")
+    for required in (
+        "task platform:validate",
+        "task bootstrap:phase10:validate-runtime",
+    ):
+        if required not in phase10:
+            raise SystemExit(f"Phase 10 intake contract failed: required check is missing ({required})")
+    for forbidden in (
+        "prek run",
+        "pre-commit run",
+        "bootstrap:phase10:check-ks",
+        "bootstrap:phase10:compile-ks",
+        "bootstrap:phase10:validate-pods-contract",
+    ):
+        if forbidden in phase10:
+            raise SystemExit(
+                f"Phase 10 intake contract failed: repository validation remains ({forbidden})"
+            )
     fields = (
         "BOOTSTRAP_PROGRESS_PHASE_DETAIL",
         "BOOTSTRAP_PROGRESS_PHASE_LOG_PATH",

@@ -6,7 +6,7 @@ are generated locally on the first server and are disposable.
 
 ## Phases (summary)
 
-- Phase 10: Public bootstrap artifacts (no secrets)
+- Phase 10: First-boot profile and runtime-payload intake
 - Phase 20: Break-glass first server + local secret generation
 - Phase 30: Automation without authority (RKE2, Rancher, Gitea; Argo CD optional and typically deferred)
 - Phase 40: Introduce OpenBao (authority layer)
@@ -18,11 +18,11 @@ are generated locally on the first server and are disposable.
 
 ## Scripts
 
-- `Phase-10/run-phase10.sh`: Validate Phase 10 artifacts and tooling (no secrets).
+- `Phase-10/run-phase10.sh`: Validate the copied profile and runtime payload.
   The supported first-boot path expects Homebrew to have been provisioned at OS
   install time. `bundle-bootstrap` ensures `task` and `kubectl` are available
-  via Homebrew before Phase 10 runs, and Phase 10 then executes the bundle-safe
-  `task` validation targets only.
+  via Homebrew before Phase 10 runs. Repository hooks, Kickstart compilation,
+  and pods contract checks run in checkout and publication workflows instead.
 - `Phase-20/run-phase20.sh`: Generate local bootstrap secrets.
 - `Phase-30/run-phase30.sh`: Run Ansible to install the platform components.
 - `Phase-40/run-phase40.sh`: Initialize OpenBao and apply post-OpenBao config.
@@ -119,15 +119,15 @@ sudo BOOTSTRAP_OPENBAO_AUTO_UNSEAL=1 \
 ```
 
 Note: `bundle-bootstrap` now runs the full `10 -> 20 -> 30 -> 40 -> 50 -> 60 -> 70 -> 90 -> 99`
-chain. Bootstrap completion means validation, GitOps install, handoff, GitOps
+chain. Bootstrap completion means intake validation, GitOps install, handoff, GitOps
 realization, late live-state reconciliation, and the final recovery export have run.
 
 The supported first-boot contract is:
 - OS install provisions Homebrew in the standard Linux path.
 - `bundle-bootstrap` uses Homebrew to ensure `task` and `kubectl` exist before
   Phase 10.
-- Phase 10 requires `task`; the old direct validator fallback path is not part
-  of the supported workflow.
+- Phase 10 requires `task` for profile and runtime-payload intake validation;
+  it does not require Git metadata or a repository hook runner.
 
 Phase scripts remain implementation references beside their docs, but the
 supported operator path is the bundle orchestrator above.

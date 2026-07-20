@@ -151,7 +151,7 @@ phase_remaining_baseline_seconds_for_id() {
 
 phase_label_for_id() {
   case "${1:-}" in
-    10) printf 'fast-fail validation gate' ;;
+    10) printf 'first-boot intake gate' ;;
     20) printf 'bootstrap-local secret authority' ;;
     30) printf 'platform bootstrap' ;;
     40) printf 'OpenBao authority transition' ;;
@@ -970,7 +970,7 @@ run_step "bundle-phase10-tooling" "install Phase 10 tooling (task + kubectl) via
   install_formula kubectl kubernetes-cli
 '
 
-run_bootstrap_phase "10" "phase10" "run Phase 10 (fast-fail validation gate)" \
+run_bootstrap_phase "10" "phase10" "run Phase 10 (first-boot intake gate)" \
   /opt/ansible-runner/ansible/ansible-scripts/bootstrap/Phase-10/run-phase10.sh
 
 run_bootstrap_playbook_phases || exit $?

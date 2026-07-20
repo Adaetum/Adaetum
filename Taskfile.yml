@@ -270,34 +270,10 @@ tasks:
       - cmd: python ./.validator/validate-setup-readiness.py
         platforms: [windows]
 
-  bootstrap:phase10:check-ks:
-    desc: Bundle-safe Phase 10 kickstart validation
-    cmds:
-      - cmd: python3 ./tasks/scripts/compile-kickstarts.py --validate-all --self-test
-        platforms: [linux, darwin]
-      - cmd: python ./tasks/scripts/compile-kickstarts.py --validate-all --self-test
-        platforms: [windows]
-
-  bootstrap:phase10:compile-ks:
-    desc: Bundle-safe Phase 10 kickstart compile validation
-    cmds:
-      - cmd: python3 ./tasks/scripts/compile-kickstarts.py --sync --self-test
-        platforms: [linux, darwin]
-      - cmd: python ./tasks/scripts/compile-kickstarts.py --sync --self-test
-        platforms: [windows]
-
   bootstrap:phase10:validate-runtime:
     desc: Bundle-safe Phase 10 runtime payload validation
     cmds:
       - cmd: bash ./tasks/scripts/validate-bootstrap-runtime-env.sh
         platforms: [linux, darwin]
       - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/validate-bootstrap-runtime-env.sh
-        platforms: [windows]
-
-  bootstrap:phase10:validate-pods-contract:
-    desc: Bundle-safe Phase 10 pods contract validation
-    cmds:
-      - cmd: python3 ./.validator/run-pods-contract.py
-        platforms: [linux, darwin]
-      - cmd: python ./.validator/run-pods-contract.py
         platforms: [windows]

@@ -4,10 +4,11 @@
 
 Phase 20 is the bootstrap secrets phase.
 
-By the time Phase 20 starts, Phase 10 should already have completed the full
-fast-fail validation suite. That means Phase 20 should not spend its time
-revalidating the world. Its main job is to instantiate the bootstrap-local
-secret authority that later pre-OpenBao phases can use.
+By the time Phase 20 starts, source validation has already run at checkout and
+publication boundaries, and Phase 10 has accepted the copied profile and
+runtime payload. Phase 20 should not revalidate those inputs. Its main job is to
+instantiate the bootstrap-local secret authority that later pre-OpenBao phases
+can use.
 
 In practical terms, Phase 20 should:
 
@@ -92,7 +93,7 @@ treated as the authoritative secret store by design.
 
 ## Design Rules
 
-- Phase 20 assumes validation has already happened in Phase 10
+- Phase 20 assumes source validation and Phase 10 intake validation have passed
 - it should instantiate secrets, not do broad environment sanity checking
 - it should be idempotent and preserve existing good values
 - it should fail on obviously bad local secret state such as empty placeholder
@@ -109,11 +110,11 @@ Phase 20 should not:
 - mint late live-app tokens
 - perform post-burn reconciliations
 - consume emergency backups during ordinary first bootstrap
-- absorb the fast-fail validation role that belongs to Phase 10
+- absorb the source or machine-intake validation owned by earlier boundaries
 
 ## Relationship to Phase 10 and Phase 40
 
-Phase 10 is the gate.
+Phase 10 is the machine-intake gate.
 
 Phase 20 is the first state-creating phase.
 
@@ -121,7 +122,7 @@ Phase 40 is the authority transition into OpenBao.
 
 That means:
 
-- Phase 10 should prove the run is worth attempting
+- Phase 10 should prove the copied machine inputs are usable
 - Phase 20 should instantiate the bootstrap-local secret authority
 - Phase 40 should promote authority out of local bootstrap files and into
   OpenBao

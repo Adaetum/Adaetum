@@ -30,8 +30,9 @@ Setup keeps `.env` for runtime-only secrets while regenerating all public
 values from `platform.yaml`. The runtime env and cluster-config files are
 generated outputs, not alternative configuration inputs.
 
-The target bootstrap repeats profile validation in Phase 10 before stateful
-bootstrap phases can run.
+Phase 10 repeats only profile and runtime-payload intake validation before
+stateful bootstrap phases run. Repository and installer-source validators run
+at checkout, commit, CI, and artifact-publication boundaries.
 
 ## Secret authority audit
 
@@ -161,11 +162,12 @@ Remaining concerns are concrete rather than theoretical:
 
 ## Bootstrap phases
 
-Phase 10 validates. Phase 20 creates temporary local bootstrap secrets. Phase
-30 establishes the cluster. Phase 40 promotes OpenBao to secret authority.
-Phases 50 and 60 install then hand off the Argo CD/Gitea control pair. Phase 70
-proves GitOps. Phase 90 completes live-state reconciliation, and Phase 99
-exports recovery material and removes bootstrap-local authority.
+Phase 10 validates first-boot inputs. Phase 20 creates temporary local
+bootstrap secrets. Phase 30 establishes the cluster. Phase 40 promotes OpenBao
+to secret authority. Phases 50 and 60 install then hand off the Argo CD/Gitea
+control pair. Phase 70 proves GitOps. Phase 90 completes live-state
+reconciliation, and Phase 99 exports recovery material and removes
+bootstrap-local authority.
 
 The recurring Ansible runner executes `playbooks/day2.yml`, which is limited to
 health and explicitly enabled host reconciliation. `playbooks/bootstrap.yml`
