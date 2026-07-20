@@ -1483,13 +1483,50 @@ bootstrap_capture_deployment_rollout_diagnostics() {
     "${evidence_path}" "error" "rollout"
 }
 
+# Preserve the controller and GitOps state together. An ExternalSecret without
+# conditions usually means its controller never observed it, so describing only
+# the custom resource omits the evidence needed to distinguish a failed chart
+# rollout from an OpenBao authentication or data error.
+bootstrap_capture_external_secret_diagnostics() {
+  local kubectl_path="${1:?kubectl path}"
+  local namespace="${2:?namespace}"
+  local external_secret="${3:?ExternalSecret name}"
+  local component="${4:-${external_secret}}"
+  local failure_kind="${5:-secret-sync}"
+  local evidence_path=""
+
+  evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "external-secret")"
+  {
+    echo "[secret-sync] diagnostics for ${namespace}/externalsecret/${external_secret} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+    echo "[secret-sync] Argo CD application state:"
+    "${kubectl_path}" -n argocd get application external-secrets openbao-secret-sync -o wide || true
+    "${kubectl_path}" -n argocd describe application external-secrets || true
+    "${kubectl_path}" -n argocd describe application openbao-secret-sync || true
+    echo "[secret-sync] External Secrets controller state:"
+    "${kubectl_path}" -n external-secrets get deployments,pods -o wide || true
+    "${kubectl_path}" -n external-secrets describe deployment external-secrets || true
+    "${kubectl_path}" -n external-secrets get events --sort-by=.lastTimestamp | tail -n 100 || true
+    "${kubectl_path}" -n external-secrets logs deployment/external-secrets --all-containers --tail=200 || true
+    "${kubectl_path}" -n external-secrets logs deployment/external-secrets --all-containers --previous --tail=200 || true
+    echo "[secret-sync] OpenBao store and requested delivery state:"
+    "${kubectl_path}" get clustersecretstore openbao -o wide || true
+    "${kubectl_path}" describe clustersecretstore openbao || true
+    "${kubectl_path}" -n "${namespace}" get externalsecret "${external_secret}" -o wide || true
+    "${kubectl_path}" -n "${namespace}" describe externalsecret "${external_secret}" || true
+    "${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp | tail -n 100 || true
+  } | tee "${evidence_path}" || true
+  bootstrap_diag_record_file_event \
+    "${component}" "${external_secret}-sync" "captured Argo CD, External Secrets controller, OpenBao store, and delivery diagnostics" \
+    "${evidence_path}" "error" "${failure_kind}"
+}
+
 # GitOps can create a workload before ESO has delivered its OpenBao-backed
 # Kubernetes Secret. Gate dependent work on ESO's Ready condition instead of
 # spending later phases on a pod that Kubernetes already knows cannot start.
-# There is intentionally no wall-clock deadline: a controller that is still
-# starting is allowed to converge, while a reported sync error is actionable.
-# A pre-existing Kubernetes Secret is never sufficient on its own: OpenBao via
-# ESO is the sole production authority for workload credentials.
+# BOOTSTRAP_EXTERNAL_SECRET_TIMEOUT_SECONDS is deliberately generous for first
+# pulls, but bounded so an absent or wedged controller cannot hold first boot
+# forever. A pre-existing Kubernetes Secret is never sufficient on its own:
+# OpenBao via ESO is the sole production authority for workload credentials.
 bootstrap_wait_for_external_secret_delivery() {
   local kubectl_path="${1:?kubectl path}"
   local namespace="${2:?namespace}"
@@ -1499,19 +1536,28 @@ bootstrap_wait_for_external_secret_delivery() {
   local ready_status=""
   local ready_reason=""
   local ready_message=""
-  local evidence_path=""
   local target_exists="false"
+  local timeout_seconds="${BOOTSTRAP_EXTERNAL_SECRET_TIMEOUT_SECONDS:-600}"
+  local poll_seconds="${BOOTSTRAP_EXTERNAL_SECRET_POLL_SECONDS:-15}"
+  local started_seconds="${SECONDS}"
+  local elapsed_seconds=0
+  local controller_available=""
+  local controller_progress=""
+
+  if ! [[ "${timeout_seconds}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[secret-sync] invalid BOOTSTRAP_EXTERNAL_SECRET_TIMEOUT_SECONDS=${timeout_seconds}; using 600" >&2
+    timeout_seconds=600
+  fi
+  if ! [[ "${poll_seconds}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[secret-sync] invalid BOOTSTRAP_EXTERNAL_SECRET_POLL_SECONDS=${poll_seconds}; using 15" >&2
+    poll_seconds=15
+  fi
 
   echo "[secret-sync] watching ${namespace}/externalsecret/${external_secret} -> secret/${target_secret}"
   if ! "${kubectl_path}" -n "${namespace}" get externalsecret "${external_secret}" >/dev/null 2>&1; then
     echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: expected delivery declaration is absent" >&2
-    evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "external-secret")"
-    {
-      echo "[secret-sync] diagnostics for missing ${namespace}/externalsecret/${external_secret} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
-      "${kubectl_path}" -n "${namespace}" get externalsecrets -o wide || true
-      "${kubectl_path}" get clustersecretstore openbao -o wide || true
-      "${kubectl_path}" -n external-secrets get pods -o wide || true
-    } | tee "${evidence_path}" || true
+    bootstrap_capture_external_secret_diagnostics \
+      "${kubectl_path}" "${namespace}" "${external_secret}" "${component}" "secret-declaration-missing"
     return 1
   fi
   while true; do
@@ -1525,17 +1571,8 @@ bootstrap_wait_for_external_secret_delivery() {
       ready_reason="${ready_reason%%$'\t'*}"
       ready_message="${ready_status##*$'\t'}"
       echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: terminal ${ready_reason}: ${ready_message}" >&2
-      evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "external-secret")"
-      {
-        echo "[secret-sync] diagnostics for ${namespace}/externalsecret/${external_secret} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
-        "${kubectl_path}" -n "${namespace}" describe externalsecret "${external_secret}" || true
-        "${kubectl_path}" get clustersecretstore openbao -o wide || true
-        "${kubectl_path}" describe clustersecretstore openbao || true
-        "${kubectl_path}" -n external-secrets logs deploy/external-secrets --all-containers --tail=200 || true
-      } | tee "${evidence_path}" || true
-      bootstrap_diag_record_file_event \
-        "${component}" "${external_secret}-sync" "captured ExternalSecret, OpenBao store, and controller diagnostics" \
-        "${evidence_path}" "error" "secret-sync"
+      bootstrap_capture_external_secret_diagnostics \
+        "${kubectl_path}" "${namespace}" "${external_secret}" "${component}" "secret-sync"
       return 1
     fi
 
@@ -1546,8 +1583,32 @@ bootstrap_wait_for_external_secret_delivery() {
       fi
     fi
 
-    echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: controller is still reconciling"
-    sleep 15
+    controller_available="$(
+      "${kubectl_path}" -n external-secrets get deployment external-secrets \
+        -o jsonpath='{range .status.conditions[?(@.type=="Available")]}{.status}{end}' 2>/dev/null || true
+    )"
+    controller_progress="$(
+      "${kubectl_path}" -n external-secrets get deployment external-secrets \
+        -o jsonpath='{range .status.conditions[?(@.type=="Progressing")]}{.status}{"\t"}{.reason}{end}' 2>/dev/null || true
+    )"
+    if [[ "${controller_progress}" == False$'\t'ProgressDeadlineExceeded ]]; then
+      echo "[secret-sync] external-secrets/deployment/external-secrets: terminal ProgressDeadlineExceeded" >&2
+      bootstrap_capture_external_secret_diagnostics \
+        "${kubectl_path}" "${namespace}" "${external_secret}" "${component}" "controller-rollout"
+      return 1
+    fi
+
+    elapsed_seconds=$((SECONDS - started_seconds))
+    if (( elapsed_seconds >= timeout_seconds )); then
+      echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: timed out after ${elapsed_seconds}s (controller Available=${controller_available:-unknown})" >&2
+      bootstrap_capture_external_secret_diagnostics \
+        "${kubectl_path}" "${namespace}" "${external_secret}" "${component}" "secret-sync-timeout"
+      return 1
+    fi
+    if (( elapsed_seconds == 0 || elapsed_seconds % 60 < poll_seconds )); then
+      echo "[secret-sync] ${namespace}/externalsecret/${external_secret}: reconciling for ${elapsed_seconds}s (controller Available=${controller_available:-unknown})"
+    fi
+    sleep "${poll_seconds}"
   done
 }
 

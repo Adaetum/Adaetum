@@ -90,8 +90,14 @@ def main() -> int:
             raise SystemExit(f"Grafana rollout recovery contract failed: missing {required}")
     for required in (
         "bootstrap_capture_deployment_rollout_diagnostics()",
+        "bootstrap_capture_external_secret_diagnostics()",
         "bootstrap_wait_for_external_secret_delivery()",
         "bootstrap_wait_for_csi_secret_delivery()",
+        "BOOTSTRAP_EXTERNAL_SECRET_TIMEOUT_SECONDS",
+        "BOOTSTRAP_EXTERNAL_SECRET_POLL_SECONDS",
+        "ProgressDeadlineExceeded",
+        "get application external-secrets openbao-secret-sync -o wide",
+        "get deployments,pods -o wide",
         'rollout status "deploy/${deployment}" --timeout=45s',
         'get pvc -o wide',
         'get externalsecret -o wide',
@@ -99,7 +105,6 @@ def main() -> int:
         'logs deploy/external-secrets --all-containers --tail=200',
         'get events --sort-by=.lastTimestamp',
         'logs "${pod_name}" --all-containers --previous --tail=200',
-        "ProgressDeadlineExceeded",
     ):
         if required not in control_pair_common:
             raise SystemExit(f"deployment rollout recovery contract failed: missing {required}")

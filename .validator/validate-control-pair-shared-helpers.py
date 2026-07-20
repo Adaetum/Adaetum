@@ -197,6 +197,57 @@ configure_gitea_push_mirror_from_openbao \
     return [f"Gitea push-mirror helper behavior failed: {detail}"]
 
 
+def validate_external_secret_timeout() -> list[str]:
+    """Prove a controller that never reports status cannot block boot forever."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = rf'''
+set -euo pipefail
+source {source_path}
+
+BOOTSTRAP_EXTERNAL_SECRET_TIMEOUT_SECONDS=1
+BOOTSTRAP_EXTERNAL_SECRET_POLL_SECONDS=1
+DIAGNOSTICS_CAPTURED=0
+
+bootstrap_capture_external_secret_diagnostics() {{
+  [[ "$5" == "secret-sync-timeout" ]]
+  DIAGNOSTICS_CAPTURED=1
+}}
+
+mock_kubectl() {{
+  if [[ " $* " == *" get externalsecret stalled "* ]]; then
+    return 0
+  fi
+  if [[ " $* " == *" get secret stalled-target "* ]]; then
+    return 1
+  fi
+  if [[ " $* " == *" get deployment external-secrets "* ]]; then
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}}
+
+if bootstrap_wait_for_external_secret_delivery \
+  mock_kubectl ansible stalled stalled-target stalled-component; then
+  echo 'ExternalSecret without controller status unexpectedly passed' >&2
+  exit 1
+fi
+[[ "${{DIAGNOSTICS_CAPTURED}}" == 1 ]]
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"ExternalSecret timeout behavior failed: {detail}"]
+
+
 def validate_phase70_realization_gate() -> list[str]:
     """Keep the post-handoff proof strict, bounded, and non-restarting."""
     phase_60 = PHASE_60.read_text(encoding="utf-8")
@@ -307,6 +358,7 @@ def main() -> int:
     )
     failures = validate_gitea_token_helpers()
     failures.extend(validate_push_mirror_helper())
+    failures.extend(validate_external_secret_timeout())
     failures.extend(validate_phase70_realization_gate())
     if duplicates:
         print("Move exact shared helpers into control-pair-common.sh:", file=sys.stderr)
@@ -318,7 +370,7 @@ def main() -> int:
     print(
         "Control-pair helper ownership ok: "
         f"{len(phase_50_functions)} Phase 50 and {len(phase_60_functions)} Phase 60 helpers; "
-        "Gitea token, push-mirror, and Phase 70 realization behavior passed."
+        "Gitea token, push-mirror, ExternalSecret timeout, and Phase 70 realization behavior passed."
     )
     return 0
 
