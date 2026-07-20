@@ -105,6 +105,53 @@ def main() -> int:
         failures.append("pods/gitea/gitea-values.yaml: Gitea ROOT_URL does not match GITEA_CANONICAL_HOST")
 
     try:
+        authentik_blueprints = render_kustomize_text(REPO_ROOT / "pods" / "authentik" / "blueprints")
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    authentik_service_hosts = {
+        config[key]
+        for key in (
+            "ARGOCD_PUBLIC_HOST",
+            "ARGOCD_LOCAL_HOST",
+            "OPENBAO_PUBLIC_HOST",
+            "OPENBAO_LOCAL_HOST",
+            "GITEA_PUBLIC_HOST",
+            "GITEA_LOCAL_HOST",
+            "REGISTRY_PUBLIC_HOST",
+            "REGISTRY_LOCAL_HOST",
+            "HEADLAMP_PUBLIC_HOST",
+            "HEADLAMP_LOCAL_HOST",
+            "HOMEPAGE_PUBLIC_HOST",
+            "HOMEPAGE_LOCAL_HOST",
+            "ALERTMANAGER_PUBLIC_HOST",
+            "ALERTMANAGER_LOCAL_HOST",
+            "GRAFANA_PUBLIC_HOST",
+            "GRAFANA_LOCAL_HOST",
+            "PROMETHEUS_PUBLIC_HOST",
+            "PROMETHEUS_LOCAL_HOST",
+            "AUTHENTIK_PUBLIC_HOST",
+        )
+    }
+    for host in sorted(authentik_service_hosts):
+        if host not in authentik_blueprints:
+            failures.append(f"pods/authentik/blueprints: missing profile hostname {host}")
+    advertised_hosts = set(re.findall(r"https?://([A-Za-z0-9.-]+)", authentik_blueprints))
+    unexpected_hosts = sorted(advertised_hosts - authentik_service_hosts)
+    if unexpected_hosts:
+        failures.append(
+            "pods/authentik/blueprints: hostnames outside the platform profile: "
+            + ", ".join(unexpected_hosts)
+        )
+    cookie_domains = set(re.findall(r"cookie_domain:\s+\.([A-Za-z0-9.-]+)", authentik_blueprints))
+    expected_cookie_domains = {config["CLUSTER_DOMAIN"], config["CLUSTER_LOCAL_DOMAIN"]}
+    if cookie_domains != expected_cookie_domains:
+        failures.append(
+            "pods/authentik/blueprints: cookie domains do not match the platform profile "
+            f"(expected {sorted(expected_cookie_domains)!r}, got {sorted(cookie_domains)!r})"
+        )
+
+    try:
         ingress_output = subprocess.run(
             [require_kubectl(), "kustomize", str(REPO_ROOT / "pods" / "ingress"), "--load-restrictor=LoadRestrictionsNone"],
             cwd=REPO_ROOT,
@@ -197,6 +244,36 @@ def main() -> int:
         tailscale_cluster_tag_match.group(1),
         config["TAILSCALE_CLUSTER_TAG"],
     )
+
+    standalone_runner_path = REPO_ROOT / "ansible" / "ansible-host-config-sync.yaml"
+    standalone_runner = load_text(standalone_runner_path)
+    standalone_image = extract_yaml_value(
+        standalone_runner_path,
+        r"(?m)^\s*image:\s*(\S+)\s*$",
+        "ansible-host-config-sync image",
+    )
+    expect_equal(
+        failures,
+        standalone_runner_path,
+        "image",
+        standalone_image,
+        config["ANSIBLE_RUNNER_IMAGE"],
+    )
+    for env_name in ("TAILSCALE_DOMAIN", "TAILSCALE_TAILNET"):
+        match = re.search(
+            rf'(?ms)name:\s*{env_name}\s*\n\s*value:\s*"?(.*?)"?\s*$',
+            standalone_runner,
+        )
+        if not match:
+            failures.append(f"ansible/ansible-host-config-sync.yaml: missing {env_name}")
+            continue
+        expect_equal(
+            failures,
+            standalone_runner_path,
+            env_name,
+            match.group(1),
+            config["TAILSCALE_DOMAIN"],
+        )
 
     try:
         ext_dns_text = load_kustomize_resource_text(REPO_ROOT / "pods" / "ingress", "Deployment", "external-dns")

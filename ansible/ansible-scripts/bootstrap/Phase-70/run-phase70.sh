@@ -303,25 +303,22 @@ ensure_ansible_runner_pull_secret_phase70() {
   local registry_username=""
   local registry_token=""
   local registry_host=""
+  local runner_image=""
 
   if [[ -z "${kubectl_bin}" ]]; then
     echo "[phase70] kubectl not available; cannot reconcile ansible-runner pull secret" >&2
     return 1
   fi
 
-  registry_host="$("${kubectl_bin}" -n ansible get configmap ansible-cluster-config -o jsonpath='{.data.ANSIBLE_RUNNER_IMAGE}' 2>/dev/null | python3 - <<'PY'
-import sys
-image = sys.stdin.read().strip()
-if "/" in image:
-    print(image.split("/", 1)[0], end="")
-PY
+  runner_image="$(
+    "${kubectl_bin}" -n ansible get configmap ansible-cluster-config \
+      -o jsonpath='{.data.ANSIBLE_RUNNER_IMAGE}' 2>/dev/null || true
   )"
-  if [[ -z "${registry_host}" ]]; then
-    registry_host="registry.cluster-duck.cloud"
+  if [[ "${runner_image}" == */* ]]; then
+    registry_host="${runner_image%%/*}"
   fi
-
   if [[ -z "${registry_host}" ]]; then
-    echo "[phase70] ansible-runner pull secret reconcile failed: could not determine registry host" >&2
+    echo "[phase70] ansible-runner pull secret reconcile failed: ansible-cluster-config does not declare ANSIBLE_RUNNER_IMAGE" >&2
     return 1
   fi
 

@@ -26,7 +26,9 @@ TEMPLATE_TARGETS = [
     ("pods/argocd/platform/post-openbao/application.yaml.tmpl", "pods/argocd/platform/post-openbao/application.yaml"),
     ("pods/argocd/platform/post-openbao/openbao-config.yaml.tmpl", "pods/argocd/platform/post-openbao/openbao-config.yaml"),
     ("pods/gitea/gitea-values.yaml.tmpl", "pods/gitea/gitea-values.yaml"),
+    ("pods/authentik/blueprints/authentik-blueprints-configmap.yaml.tmpl", "pods/authentik/blueprints/authentik-blueprints-configmap.yaml"),
     ("pods/ansible/ansible/ansible-runner-deployment.yaml.tmpl", "pods/ansible/ansible/ansible-runner-deployment.yaml"),
+    ("ansible/ansible-host-config-sync.yaml.tmpl", "ansible/ansible-host-config-sync.yaml"),
     ("pods/ingress/external-dns/deployment.yaml.tmpl", "pods/ingress/external-dns/deployment.yaml"),
     ("pods/ingress/ingress-routing.app.yaml.tmpl", "pods/ingress/ingress-routing.app.yaml"),
     ("pods/ingress/nginx-routing/argocd-ingress.yaml.tmpl", "pods/ingress/nginx-routing/argocd-ingress.yaml"),
@@ -240,6 +242,7 @@ def render_templates(config: dict[str, str], check: bool) -> list[str]:
         "prometheus.example.services": config["PROMETHEUS_PUBLIC_HOST"],
         "rancher.example.services": config["RANCHER_PUBLIC_HOST"],
         "example.ts.net": config["TAILSCALE_DOMAIN"],
+        "example.local": config["CLUSTER_LOCAL_DOMAIN"],
         "example.services": config["EXTERNAL_DNS_DOMAIN_FILTER"],
     }
     replacement_items = sorted(literal_replacements.items(), key=lambda item: len(item[0]), reverse=True)

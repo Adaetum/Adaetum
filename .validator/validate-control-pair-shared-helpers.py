@@ -362,11 +362,38 @@ def validate_phase70_realization_gate() -> list[str]:
         'get service "${GITEA_INTERNAL_SERVICE_NAME}"',
         'get endpoints "${GITEA_INTERNAL_SERVICE_NAME}"',
         "Gitea service discovery does not resolve to a ready registry endpoint",
+        "ensure_gitea_registry_bootstrap_path()",
+        "discover_gitea_registry_token_service_host",
+        'ensure_gitea_runtime_host_aliases "${registry_token_service_host}"',
+        "registry-token-preflight",
+        "Kaniko Job is missing the required",
     ):
         if required not in phase_60:
             failures.append(
                 f"Phase 60 Gitea service preflight contract missing: {required}"
             )
+
+    realization_start = phase_60.find(
+        'echo "[phase60] running realization checks'
+    )
+    bootstrap_path = phase_60.find(
+        '"failed establishing internal Gitea registry bootstrap path"',
+        realization_start,
+    )
+    image_publish = phase_60.find(
+        '"failed publishing ansible-runner image to Gitea registry"',
+        realization_start,
+    )
+    if (
+        realization_start < 0
+        or bootstrap_path < 0
+        or image_publish < 0
+        or bootstrap_path > image_publish
+    ):
+        failures.append(
+            "Phase 60 must establish the internal registry bootstrap path before "
+            "publishing ansible-runner during realization"
+        )
 
     for required in (
         "PHASE60_WARNING_ONLY=0",
@@ -377,9 +404,15 @@ def validate_phase70_realization_gate() -> list[str]:
         "verify_secret_delivery_foundation_phase70",
         "secret-delivery foundation failed; stopping before workload realization checks",
         "GitOps realization checks failed; stopping before secret-delivery reconciliation",
+        'registry_host="${runner_image%%/*}"',
+        "ansible-cluster-config does not declare ANSIBLE_RUNNER_IMAGE",
     ):
         if required not in phase_70:
             failures.append(f"Phase 70 realization gate contract missing: {required}")
+
+    alpha_host_label = "cluster-" + "duck"
+    if alpha_host_label in phase_70:
+        failures.append("Phase 70 contains an alpha hostname")
 
     foundation_gate = phase_70.find(
         'run_phase70_step "verify secret-delivery foundation"'
@@ -457,6 +490,56 @@ fi
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
             failures.append(f"Gitea service preflight behavior failed: {detail}")
+
+    phase_70_path = (
+        REPOSITORY_ROOT
+        / "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh"
+    )
+    phase_70_functions = functions(phase_70_path)
+    pull_secret_helper = phase_70_functions.get("ensure_ansible_runner_pull_secret_phase70")
+    if pull_secret_helper:
+        script = pull_secret_helper + r'''
+set -euo pipefail
+kubectl_bin=mock_kubectl
+SEEDED=0
+
+mock_kubectl() {
+  if [[ " $* " == *" get configmap ansible-cluster-config "* ]]; then
+    printf '%s' 'registry.mudazukai.cloud/gitea-admin/ansible-runner:latest'
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}
+
+read_phase70_bootstrap_field() {
+  case "$1" in
+    argocd_repo_username) printf '%s' gitea-admin ;;
+    gitea_git_token) printf '%s' registry-token ;;
+  esac
+}
+
+seed_openbao_app_fields() {
+  [[ " $* " == *" host=registry.mudazukai.cloud "* ]]
+  [[ " $* " != *"cluster-"*"duck"* ]]
+  SEEDED=1
+}
+
+bootstrap_wait_for_external_secret_delivery() { return 0; }
+
+ensure_ansible_runner_pull_secret_phase70 openbao-token
+[[ "${SEEDED}" == 1 ]]
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            cwd=REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+            failures.append(f"Phase 70 registry host derivation failed: {detail}")
 
     return failures
 

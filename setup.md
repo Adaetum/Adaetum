@@ -382,7 +382,7 @@ bucket. Credentials remain separate runtime inputs.
 Terminology used below:
 
 - `Public Domain`
-  The public base domain, for example `cluster-duck.cloud`.
+  The public base domain, for example `example.services`.
 - `FQDN`
   A full public host under that domain, for example
   `argocd.<public-domain>`.

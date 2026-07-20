@@ -371,7 +371,7 @@ PY
   local_host="${gitea_local_host:-}"
   registry_host="$(ansible_runner_registry_host_pull)"
 
-  rendered="$(python3 - <<'PY' "${begin_marker}" "${end_marker}" "${gitea_ip}" "${canonical_host}" "${local_host}" "${registry_host}"
+  rendered="$(python3 - <<'PY' "${begin_marker}" "${end_marker}" "${gitea_ip}" "${canonical_host}" "${local_host}" "${registry_host}" "$@"
 import sys
 begin_marker, end_marker, ip = sys.argv[1], sys.argv[2], sys.argv[3]
 hosts = []
@@ -418,6 +418,64 @@ PY
   chmod 0644 "${tmp}" 2>/dev/null || true
   mv "${tmp}" "${hosts_path}"
   echo "[phase60] ensured runtime host aliases for ${canonical_host:-<none>} ${local_host:-<none>} via ${gitea_ip}"
+}
+
+
+discover_gitea_registry_token_service_host() {
+  local headers=""
+
+  # The live challenge is authoritative. Gitea derives this hostname from its
+  # canonical ROOT_URL, and bootstrap must bridge that identity without waiting
+  # for operator-managed DNS to exist.
+  headers="$(
+    curl -sS -D - -o /dev/null --noproxy '*' --max-time 10 \
+      "http://${GITEA_INTERNAL_SERVICE_HOST}/v2/" 2>/dev/null || true
+  )"
+  printf '%s' "${headers}" \
+    | python3 "${script_dir}/registry-token-service-host.py" 2>/dev/null || true
+}
+
+
+ensure_gitea_registry_bootstrap_path() {
+  local bootstrap_ip=""
+  local registry_token_service_host=""
+  local health_code=""
+
+  # Phase 70 invokes Phase 60 in reconcile-only mode, so none of the state from
+  # the initial handoff may be assumed. Recreate the internal transport bridge
+  # immediately before publishing or pulling the runner image.
+  refresh_gitea_internal_service_url
+  bootstrap_ip="$(gitea_service_cluster_ip)"
+  if [[ -z "${bootstrap_ip}" ]]; then
+    echo "[phase60] unable to determine the bootstrap Gitea Service IP" >&2
+    return 1
+  fi
+
+  registry_token_service_host="$(discover_gitea_registry_token_service_host)"
+  if [[ -z "${registry_token_service_host}" ]]; then
+    echo "[phase60] Gitea registry did not advertise a usable token-service hostname" >&2
+    return 1
+  fi
+
+  ensure_gitea_runtime_host_aliases "${registry_token_service_host}"
+  ensure_ansible_runner_registry_runtime
+
+  # --resolve proves the canonical token host reaches the bootstrap Service
+  # without consulting external DNS. The Kaniko init container repeats this
+  # proof inside the exact pod network used for the image publication.
+  health_code="$(
+    curl -sS -o /dev/null -w '%{http_code}' --noproxy '*' --max-time 10 \
+      --resolve "${registry_token_service_host}:80:${bootstrap_ip}" \
+      "http://${registry_token_service_host}/api/healthz" 2>/dev/null || true
+  )"
+  if [[ ! "${health_code}" =~ ^2[0-9][0-9]$ ]]; then
+    echo "[phase60] internal Gitea token-service preflight failed for ${registry_token_service_host} via ${bootstrap_ip} (http=${health_code:-none})" >&2
+    return 1
+  fi
+
+  GITEA_REGISTRY_TOKEN_SERVICE_HOST="${registry_token_service_host}"
+  export GITEA_REGISTRY_TOKEN_SERVICE_HOST
+  echo "[phase60] internal Gitea registry path ready: token_host=${registry_token_service_host} service_ip=${bootstrap_ip}"
 }
 
 
@@ -664,23 +722,23 @@ publish_ansible_runner_image() {
   "${kubectl_bin}" -n ansible delete job "${job_name}" --ignore-not-found >/dev/null 2>&1 || true
   if [[ "${push_image}" != "${runner_image}" ]]; then
     echo "[phase60] kaniko will push ansible-runner to internal registry endpoint ${push_image} while the deployment continues to use ${runner_image}"
-    gitea_service_ip="$(gitea_service_cluster_ip)"
-    if [[ -n "${gitea_service_ip}" ]]; then
-      # Gitea's registry challenge names its token service using Gitea's
-      # configured canonical host. During initial bootstrap that .local name
-      # may not resolve yet, so derive the exact host from the live challenge
-      # and reach it through the already-available in-cluster Service IP.
-      registry_token_service_host="$(curl -sSI --max-time 10 "http://${GITEA_INTERNAL_SERVICE_HOST}/v2/" 2>/dev/null | python3 "${script_dir}/registry-token-service-host.py" 2>/dev/null || true)"
-      if [[ -n "${registry_token_service_host}" ]]; then
-        host_aliases+=("${registry_token_service_host}")
-      fi
-      if [[ -n "${CLUSTER_LOCAL_DOMAIN}" ]]; then
-        host_aliases+=("gitea.${CLUSTER_LOCAL_DOMAIN}")
-      fi
-      if [[ -n "${CLUSTER_DOMAIN}" && "${CLUSTER_DOMAIN}" != "example.services" ]]; then
-        host_aliases+=("gitea.${CLUSTER_DOMAIN}")
-      fi
-      host_alias_block="$(python3 - <<'PY' "${gitea_service_ip}" "${host_aliases[@]}"
+  fi
+
+  gitea_service_ip="$(gitea_service_cluster_ip)"
+  registry_token_service_host="${GITEA_REGISTRY_TOKEN_SERVICE_HOST:-}"
+  if [[ -z "${gitea_service_ip}" || -z "${registry_token_service_host}" ]]; then
+    echo "[phase60] internal Gitea registry path was not prepared before the Kaniko build" >&2
+    return 1
+  fi
+
+  host_aliases+=("${registry_token_service_host}")
+  if [[ -n "${CLUSTER_LOCAL_DOMAIN}" ]]; then
+    host_aliases+=("gitea.${CLUSTER_LOCAL_DOMAIN}")
+  fi
+  if [[ -n "${CLUSTER_DOMAIN}" && "${CLUSTER_DOMAIN}" != "example.services" ]]; then
+    host_aliases+=("gitea.${CLUSTER_DOMAIN}")
+  fi
+  host_alias_block="$(python3 - <<'PY' "${gitea_service_ip}" "${host_aliases[@]}"
 import sys
 ip = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
 hosts = [h.strip() for h in sys.argv[2:] if h.strip()]
@@ -697,11 +755,11 @@ for host in seen:
     print(f"            - {host}")
 PY
 )"
-      if [[ -n "${host_alias_block}" ]]; then
-        echo "[phase60] kaniko will resolve Gitea token-service hostnames via service IP ${gitea_service_ip}"
-      fi
-    fi
+  if [[ -z "${host_alias_block}" ]]; then
+    echo "[phase60] failed rendering Kaniko host aliases for ${registry_token_service_host}" >&2
+    return 1
   fi
+  echo "[phase60] kaniko will resolve Gitea token-service hostnames via service IP ${gitea_service_ip}"
 
   manifest="$(cat <<EOF
 apiVersion: batch/v1
@@ -718,6 +776,16 @@ spec:
 ${host_alias_block}
       imagePullSecrets:
         - name: ${secret_name}
+      initContainers:
+        - name: registry-token-preflight
+          image: gcr.io/kaniko-project/executor:v1.23.2-debug
+          command:
+            - /busybox/sh
+            - -ec
+          args:
+            - |
+              grep -Eq '^[^#]*[[:space:]]${registry_token_service_host}([[:space:]]|$)' /etc/hosts
+              /busybox/wget -q -O /dev/null -T 10 http://${registry_token_service_host}/api/healthz
       containers:
         - name: kaniko
           image: gcr.io/kaniko-project/executor:v1.23.2-debug
@@ -747,6 +815,19 @@ EOF
 )"
 
   printf '%s\n' "${manifest}" | "${kubectl_bin}" apply -f - >/dev/null
+  if ! "${kubectl_bin}" -n ansible get job "${job_name}" -o json \
+    | python3 -c '
+import json, sys
+expected_ip, expected_host = sys.argv[1], sys.argv[2]
+job = json.load(sys.stdin)
+aliases = ((job.get("spec") or {}).get("template") or {}).get("spec", {}).get("hostAliases", []) or []
+if not any(item.get("ip") == expected_ip and expected_host in (item.get("hostnames") or []) for item in aliases):
+    raise SystemExit(1)
+' "${gitea_service_ip}" "${registry_token_service_host}"; then
+    echo "[phase60] Kaniko Job is missing the required ${registry_token_service_host} -> ${gitea_service_ip} host alias" >&2
+    "${kubectl_bin}" -n ansible delete job "${job_name}" --ignore-not-found >/dev/null 2>&1 || true
+    return 1
+  fi
   echo "[phase60] building ansible-runner image with kaniko job ${job_name}"
   echo "[phase60] waiting up to ${timeout_secs}s for kaniko build/push to ${push_image}"
 
@@ -783,6 +864,7 @@ EOF
     echo "[phase60] ansible-runner image build job failed or timed out; logs follow" >&2
     "${kubectl_bin}" -n ansible get job "${job_name}" -o wide >&2 || true
     "${kubectl_bin}" -n ansible get pods -l "job-name=${job_name}" -o wide >&2 || true
+    "${kubectl_bin}" -n ansible logs "job/${job_name}" -c registry-token-preflight --tail=100 >&2 || true
     "${kubectl_bin}" -n ansible logs "job/${job_name}" --tail=200 >&2 || true
     return 1
   fi
@@ -3124,13 +3206,9 @@ else
     fail_local_requirement "Argo CD did not create deployment/gitea in namespace gitea within the expected time"
   fi
   require_gitea_golden_path
-  refresh_gitea_internal_service_url
   run_or_fail \
-    "failed configuring runtime host aliases for Gitea registry auth" \
-    ensure_gitea_runtime_host_aliases
-  run_or_fail \
-    "failed configuring rke2 registry runtime for ansible-runner pulls" \
-    ensure_ansible_runner_registry_runtime
+    "failed establishing internal Gitea registry bootstrap path" \
+    ensure_gitea_registry_bootstrap_path
   gitea_runner_token_effective="$(read_openbao_app_field gitea/actions-runner token "${openbao_token}" || true)"
   if [[ -z "${gitea_runner_token_effective}" ]]; then
     gitea_runner_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
@@ -3581,6 +3659,10 @@ if [[ -d "${repo_root}/pods/ingress/external-dns" ]]; then
 else
   echo "[phase60] skip: missing ${repo_root}/pods/ingress/external-dns"
 fi
+
+run_or_fail \
+  "failed establishing internal Gitea registry bootstrap path" \
+  ensure_gitea_registry_bootstrap_path
 
 run_or_fail \
   "failed ensuring ansible-runner image pull secret" \

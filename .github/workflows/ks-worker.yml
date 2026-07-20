@@ -416,7 +416,7 @@ jobs:
             fi
             if [ -z "${ks_zone_name}" ] || [ "${ks_zone_name}" = "${ks_custom_domain}" ]; then
               echo "Unable to determine zone name for fallback route." >&2
-              echo "Set GitHub Prod secret KS_ZONE_NAME (e.g. cluster-duck.cloud)." >&2
+              echo "Set GitHub Prod secret KS_ZONE_NAME (e.g. example.services)." >&2
               rm -f "${deploy_log}"
               exit 1
             fi
