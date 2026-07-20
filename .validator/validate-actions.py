@@ -5,6 +5,7 @@ Checks:
 - YAML parses cleanly
 - Top-level document is a mapping
 - Required keys are present: `name` and `on`
+- Every job honors the upstream-repository Actions disable variable
 """
 
 from __future__ import annotations
@@ -13,6 +14,9 @@ import sys
 from pathlib import Path
 
 import yaml
+
+
+DISABLE_ACTIONS_CONDITION = "vars.ADAETUM_DISABLE_ACTIONS != 'true'"
 
 
 def validate_file(path: Path) -> list[str]:
@@ -36,6 +40,21 @@ def validate_file(path: Path) -> list[str]:
     # PyYAML may parse YAML 1.1 plain key `on` as boolean True.
     if "on" not in doc and True not in doc:
         errors.append(f"{path}: missing required top-level key: on")
+
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, dict) or not jobs:
+        errors.append(f"{path}: missing required top-level jobs mapping")
+        return errors
+
+    for job_name, job in jobs.items():
+        if not isinstance(job, dict):
+            errors.append(f"{path}: job {job_name!r} must be a mapping/object")
+            continue
+        condition = job.get("if")
+        if not isinstance(condition, str) or DISABLE_ACTIONS_CONDITION not in condition:
+            errors.append(
+                f"{path}: job {job_name!r} must honor {DISABLE_ACTIONS_CONDITION}"
+            )
 
     return errors
 

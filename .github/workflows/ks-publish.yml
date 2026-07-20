@@ -24,7 +24,7 @@ on:
 
 jobs:
   publish-ks:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    if: vars.ADAETUM_DISABLE_ACTIONS != 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     environment: Prod
     permissions:
