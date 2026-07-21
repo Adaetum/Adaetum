@@ -874,6 +874,33 @@ ensure_ansible_runner_pull_secret_phase70 openbao-token
     return failures
 
 
+def validate_phase50_gitea_postgresql_handoff() -> list[str]:
+    """Keep chart credential adoption after Gitea readiness and before exit."""
+    phase_50 = PHASE_50.read_text(encoding="utf-8")
+    bootstrap_start = phase_50.find(
+        'echo "[phase50] bootstrapping Gitea through Argo CD before repo handoff"'
+    )
+    golden_path = phase_50.find("  require_gitea_golden_path", bootstrap_start)
+    adoption = phase_50.find(
+        "bootstrap_adopt_gitea_postgresql_credentials", golden_path
+    )
+    install_exit = phase_50.find(
+        'if [[ "${PHASE50_MODE}" == "install" ]]', adoption
+    )
+    if (
+        bootstrap_start < 0
+        or golden_path < 0
+        or adoption < 0
+        or install_exit < 0
+        or not bootstrap_start < golden_path < adoption < install_exit
+    ):
+        return [
+            "Phase 50 must adopt chart-generated Gitea PostgreSQL credentials "
+            "after proving Gitea ready and before completing install mode"
+        ]
+    return []
+
+
 def validate_registry_token_service_discovery() -> list[str]:
     """Prove registry discovery uses canonical identity over the Service bridge."""
     discovery = functions(PHASE_60).get("discover_gitea_registry_token_service_host", "")
@@ -1040,6 +1067,7 @@ def main() -> int:
     failures.extend(validate_csi_mounted_status())
     failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())
+    failures.extend(validate_phase50_gitea_postgresql_handoff())
     failures.extend(validate_registry_token_service_discovery())
     failures.extend(validate_rancher_origin_settle())
     failures.extend(validate_secret_foundation_handoff())

@@ -412,6 +412,54 @@ seed_openbao_app_fields() {
       env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
       bao kv put "secret/apps/${path}" "${missing[@]}" >/dev/null
 }
+
+# Gitea is installed by Phase 50 after OpenBao already exists. Once Gitea is
+# healthy, adopt the chart-generated database credentials so OpenBao becomes
+# their recovery authority before the GitOps handoff exposes the corresponding
+# ExternalSecret. This cannot run in Phase 40 because Gitea does not exist yet
+# on a clean installation.
+bootstrap_adopt_gitea_postgresql_credentials() {
+  local kubectl_path="${1:?kubectl path}"
+  # Bash functions use dynamic scope; keep the existing secret/OpenBao helpers
+  # on the explicitly supplied client instead of an ambient caller value.
+  local kubectl_bin="${kubectl_path}"
+  local openbao_token="${2:?OpenBao token}"
+  local attempts="${3:-60}"
+  local delay="${4:-5}"
+  local attempt=0
+  local postgres_password=""
+  local app_password=""
+  local replication_password=""
+  local -a postgresql_args=()
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    postgres_password="$(read_k8s_secret_key gitea gitea-postgresql postgres-password)"
+    app_password="$(read_k8s_secret_key gitea gitea-postgresql password)"
+    replication_password="$(read_k8s_secret_key gitea gitea-postgresql replication-password)"
+    if [[ -n "${postgres_password}" && -n "${app_password}" ]]; then
+      break
+    fi
+    if (( attempt < attempts )); then
+      sleep "${delay}"
+    fi
+  done
+
+  if [[ -z "${postgres_password}" || -z "${app_password}" ]]; then
+    echo "[gitea-postgresql] timed out waiting for chart-generated database credentials" >&2
+    return 1
+  fi
+
+  postgresql_args=(
+    "postgres-password=${postgres_password}"
+    "password=${app_password}"
+  )
+  if [[ -n "${replication_password}" ]]; then
+    postgresql_args+=("replication-password=${replication_password}")
+  fi
+  seed_openbao_app_fields gitea/postgresql "${openbao_token}" \
+    "${postgresql_args[@]}"
+  echo "[gitea-postgresql] adopted chart-generated database credentials into OpenBao"
+}
 # Ansible-runner image and registry helpers
 
 ansible_runner_image_effective() {

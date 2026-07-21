@@ -275,9 +275,6 @@ ROTATION_CONTRACTS = {
         "remove_installed_bootstrap_artifacts\ntouch \"${done_file}\"",
     ),
     "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh": (
-        "PHASE40_GITEA_POSTGRESQL_SECRET_ATTEMPTS",
-        "load_gitea_postgresql_credentials()",
-        "timed out waiting for Gitea PostgreSQL credentials; refusing an incomplete OpenBao handoff",
         "seed_openbao_app_fields()",
         "seed_openbao_app_fields argocd/runtime",
         '"redis_password=${argocd_redis_password_val}"',
@@ -290,6 +287,9 @@ ROTATION_CONTRACTS = {
         "seed_openbao_app_fields homepage/grafana",
     ),
     "ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh": (
+        "PHASE50_GITEA_POSTGRESQL_SECRET_ATTEMPTS",
+        "bootstrap_adopt_gitea_postgresql_credentials",
+        "failed adopting Gitea PostgreSQL credentials into OpenBao",
         "ARGOCD_SERVER_SECRET_KEY",
         "read_openbao_app_field argocd/runtime server_secret_key",
         "ARGOCD_REDIS_PASSWORD",
@@ -338,6 +338,8 @@ ROTATION_CONTRACTS = {
         "revoke_stale_gitea_widget_tokens",
     ),
     "ansible/ansible-scripts/bootstrap/control-pair-common.sh": (
+        "bootstrap_adopt_gitea_postgresql_credentials()",
+        "timed out waiting for chart-generated database credentials",
         "seed_openbao_app_fields()",
         'bao kv patch "secret/apps/${path}"',
         'bao kv put "secret/apps/${path}"',
