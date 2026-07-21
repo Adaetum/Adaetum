@@ -20,12 +20,14 @@ Notes
 - `config/bookmarks.yaml` is intentionally empty so Homepage does not render its
   stock Developer/Social/Entertainment bookmark groups.
 - Argo CD and Gitea widget tokens are delivered from OpenBao
-  `secret/apps/homepage/widgets` through an ExternalSecret. Late bootstrap
-  validates or mints those app-issued tokens and persists only those two
-  fields. Authentik, Cloudflare, and Tailscale are links only, so their
-  credentials are never delivered to Homepage. Late reconciliation also checks
-  the Gitea token's registered scopes and revokes superseded
-  `homepage-widget*` tokens only after the replacement is active.
+  `secret/apps/homepage/widgets` through Secrets Store CSI. These tokens cannot
+  be arbitrary OpenBao-generated values: Argo CD signs its tokens and Gitea
+  registers its access tokens. Late bootstrap therefore validates or mints a
+  replacement through the owning app, persists and read-verifies it in OpenBao,
+  and only then restarts Homepage. Authentik, Cloudflare, and Tailscale are links
+  only, so their credentials are never delivered to Homepage. Late
+  reconciliation also checks the Gitea token's registered scopes and revokes
+  superseded `homepage-widget*` tokens only after the replacement is active.
 - Grafana uses a separate `homepage` Viewer identity from
   `secret/apps/homepage/grafana`; Homepage never receives Grafana's
   administrator password. A scoped reconciler changes the account in Grafana,

@@ -238,13 +238,13 @@ persist_openbao_homepage_field() {
   local secret_key=""
 
   if [[ -z "${field}" || -z "${value}" || -z "${openbao_token}" || -z "${kubectl_bin:-}" ]]; then
-    return 0
+    return 1
   fi
 
   case "${field}" in
     homepage_argocd_widget_key) secret_key="HOMEPAGE_ARGOCD_WIDGET_KEY" ;;
     homepage_gitea_widget_auth) secret_key="HOMEPAGE_GITEA_WIDGET_AUTH" ;;
-    *) return 0 ;;
+    *) return 1 ;;
   esac
 
   retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
@@ -252,7 +252,11 @@ persist_openbao_homepage_field() {
     bao kv patch secret/apps/homepage/widgets "${secret_key}=${value}" >/dev/null 2>&1 || \
   retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
     env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-    bao kv put secret/apps/homepage/widgets "${secret_key}=${value}" >/dev/null
+    bao kv put secret/apps/homepage/widgets "${secret_key}=${value}" >/dev/null || return 1
+
+  # A successful CLI exit is not enough at this credential handoff boundary.
+  # Prove the exact value is readable before a workload is restarted onto CSI.
+  [[ "$(read_openbao_app_field homepage/widgets "${secret_key}" "${openbao_token}")" == "${value}" ]]
 }
 
 read_openbao_app_field() {

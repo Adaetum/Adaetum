@@ -21,6 +21,7 @@ PHASE_40 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-40/run-pha
 PHASE_50 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh"
 PHASE_60 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh"
 PHASE_70 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh"
+PHASE_90 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh"
 SHARED_HELPERS = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/control-pair-common.sh"
 FUNCTION_START = re.compile(
     r"^(?:(?:function)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{", re.MULTILINE
@@ -121,6 +122,44 @@ revoke_stale_gitea_widget_tokens \
         return []
     detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
     return [f"Gitea token helper behavior failed: {detail}"]
+
+
+def validate_homepage_credential_handoff() -> list[str]:
+    """Keep credential-only stdout and verified OpenBao delivery fail closed."""
+    failures: list[str] = []
+    for phase, path in (("70", PHASE_70), ("90", PHASE_90)):
+        source = path.read_text(encoding="utf-8")
+        for required in (
+            "/api/v1/notifications?limit=1",
+            "OpenBao write verification failed",
+            "Homepage widget reconciliation failed before workload restart",
+            "Homepage CSI credential delivery did not become ready",
+        ):
+            if required not in source:
+                failures.append(f"Phase {phase} Homepage handoff missing: {required}")
+        if f'mint_argocd_widget_key_phase{phase} "${{openbao_token}}" || true' in source:
+            failures.append(
+                f"Phase {phase} must preserve Argo CD mint failure instead of accepting stdout"
+            )
+        if f'"${{gitea_base_url}}" || true)' in source:
+            failures.append(
+                f"Phase {phase} must preserve Gitea mint failure instead of accepting stdout"
+            )
+
+        phase_functions = functions(path)
+        for mint_name in (
+            f"mint_argocd_widget_key_phase{phase}",
+            f"mint_gitea_widget_auth_phase{phase}",
+        ):
+            implementation = phase_functions.get(mint_name, "")
+            if (
+                "bootstrap_wait_for_deployment_rollout" not in implementation
+                or ">&2; then" not in implementation
+            ):
+                failures.append(
+                    f"Phase {phase} {mint_name} must keep rollout logs off credential stdout"
+                )
+    return failures
 
 
 def validate_push_mirror_helper() -> list[str]:
@@ -1059,6 +1098,7 @@ def main() -> int:
         if phase_60_functions.get(name) == implementation
     )
     failures = validate_gitea_token_helpers()
+    failures.extend(validate_homepage_credential_handoff())
     failures.extend(validate_push_mirror_helper())
     failures.extend(validate_external_secret_timeout())
     failures.extend(validate_external_secret_ready())

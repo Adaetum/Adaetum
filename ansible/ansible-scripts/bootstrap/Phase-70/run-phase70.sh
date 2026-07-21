@@ -293,7 +293,7 @@ validate_gitea_widget_auth_phase70() {
   status="$(
     curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
       -H "Authorization: token ${token}" \
-      "http://${service_host}:3000/api/v1/user" 2>/dev/null || true
+      "http://${service_host}:3000/api/v1/notifications?limit=1" 2>/dev/null || true
   )"
   [[ "${status}" == "200" ]]
 }
@@ -627,7 +627,7 @@ mint_argocd_widget_key_phase70() {
   fi
 
   if ! bootstrap_wait_for_deployment_rollout \
-    "${kubectl_bin}" argocd argocd-server argocd-server 'app.kubernetes.io/name=argocd-server'; then
+    "${kubectl_bin}" argocd argocd-server argocd-server 'app.kubernetes.io/name=argocd-server' >&2; then
     echo "[phase70] Argo CD widget token mint failed: argocd-server not ready in time" >&2
     return 1
   fi
@@ -680,7 +680,7 @@ mint_gitea_widget_auth_phase70() {
   fi
 
   if ! bootstrap_wait_for_deployment_rollout \
-    "${kubectl_bin}" gitea gitea gitea 'app.kubernetes.io/name=gitea'; then
+    "${kubectl_bin}" gitea gitea gitea 'app.kubernetes.io/name=gitea' >&2; then
     echo "[phase70] Gitea widget token mint failed: gitea deployment not ready in time" >&2
     return 1
   fi
@@ -702,10 +702,13 @@ mint_gitea_widget_auth_phase70() {
     echo "[phase70] Gitea widget token mint failed: unable to generate API token" >&2
     return 1
   fi
-  if ! validate_gitea_widget_auth_phase70 "${token}" \
-    || ! gitea_widget_token_has_required_scopes \
-      "${gitea_base_url}" "${admin_username}" "${admin_password}" "${token}"; then
-    echo "[phase70] Gitea widget token mint failed: token or read-only scope validation failed" >&2
+  if ! validate_gitea_widget_auth_phase70 "${token}"; then
+    echo "[phase70] Gitea widget token mint failed: notifications API rejected the token" >&2
+    return 1
+  fi
+  if ! gitea_widget_token_has_required_scopes \
+    "${gitea_base_url}" "${admin_username}" "${admin_password}" "${token}"; then
+    echo "[phase70] Gitea widget token mint failed: token registry did not confirm exact read-only scopes" >&2
     return 1
   fi
 
@@ -804,8 +807,7 @@ ensure_homepage_widget_secrets_phase70() {
   if validate_argocd_widget_key_phase70 "${argocd_widget_key}"; then
     log_widget_field_phase70 homepage_argocd_widget_key reused "validated from OpenBao"
   else
-    argocd_widget_key="$(mint_argocd_widget_key_phase70 "${openbao_token}" || true)"
-    if [[ -n "${argocd_widget_key}" ]]; then
+    if argocd_widget_key="$(mint_argocd_widget_key_phase70 "${openbao_token}")"; then
       log_widget_field_phase70 homepage_argocd_widget_key minted "no valid stored credential; validated via Argo CD API"
     else
       argocd_widget_key=""
@@ -821,9 +823,8 @@ ensure_homepage_widget_secrets_phase70() {
       "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_widget_auth}"; then
     log_widget_field_phase70 homepage_gitea_widget_auth reused "validated read-only token from OpenBao"
   else
-    gitea_widget_auth="$(mint_gitea_widget_auth_phase70 \
-      "${openbao_token}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_base_url}" || true)"
-    if [[ -n "${gitea_widget_auth}" ]]; then
+    if gitea_widget_auth="$(mint_gitea_widget_auth_phase70 \
+      "${openbao_token}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_base_url}")"; then
       log_widget_field_phase70 homepage_gitea_widget_auth minted "no valid stored credential; validated via Gitea API"
     else
       gitea_widget_auth=""
@@ -832,8 +833,21 @@ ensure_homepage_widget_secrets_phase70() {
     fi
   fi
 
-  persist_widget_field_phase70 homepage_argocd_widget_key "${argocd_widget_key}" "${openbao_token}"
-  persist_widget_field_phase70 homepage_gitea_widget_auth "${gitea_widget_auth}" "${openbao_token}"
+  if [[ -n "${argocd_widget_key}" ]] \
+    && ! persist_widget_field_phase70 homepage_argocd_widget_key "${argocd_widget_key}" "${openbao_token}"; then
+    log_widget_field_phase70 homepage_argocd_widget_key invalid "OpenBao write verification failed"
+    failure=1
+  fi
+  if [[ -n "${gitea_widget_auth}" ]] \
+    && ! persist_widget_field_phase70 homepage_gitea_widget_auth "${gitea_widget_auth}" "${openbao_token}"; then
+    log_widget_field_phase70 homepage_gitea_widget_auth invalid "OpenBao write verification failed"
+    failure=1
+  fi
+
+  if (( failure > 0 )); then
+    echo "[phase70] Homepage widget reconciliation failed before workload restart" >&2
+    return 1
+  fi
 
   # A valid OpenBao value needs no restart. A minted replacement is consumed
   # only by the next pod through homepage-openbao; never recreate a native
@@ -845,8 +859,11 @@ ensure_homepage_widget_secrets_phase70() {
       "${kubectl_bin}" homepage homepage homepage 'app.kubernetes.io/name=homepage'; then
       echo "[phase70] Homepage restart did not become ready; diagnostics were captured" >&2
     fi
-    bootstrap_wait_for_csi_secret_delivery \
-      "${kubectl_bin}" homepage homepage-openbao homepage
+    if ! bootstrap_wait_for_csi_secret_delivery \
+      "${kubectl_bin}" homepage homepage-openbao homepage; then
+      echo "[phase70] Homepage CSI credential delivery did not become ready" >&2
+      return 1
+    fi
     echo "[phase70] restarted Homepage deployment after OpenBao widget reconciliation"
   fi
 
