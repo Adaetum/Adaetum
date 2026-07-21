@@ -72,6 +72,45 @@ def functions(path: Path) -> dict[str, str]:
     return result
 
 
+def validate_service_address_helper() -> list[str]:
+    """Reject headless-Service sentinels and use a ready endpoint instead."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = rf'''
+set -euo pipefail
+source {source_path}
+
+MOCK_CLUSTER_IP=10.43.0.12
+MOCK_ENDPOINT_IP=10.42.0.8
+mock_kubectl() {{
+  if [[ " $* " == *" get svc "* ]]; then
+    printf '%s' "${{MOCK_CLUSTER_IP}}"
+  elif [[ " $* " == *" get endpoints "* ]]; then
+    printf '%s' "${{MOCK_ENDPOINT_IP}}"
+  else
+    return 1
+  fi
+}}
+
+[[ "$(bootstrap_service_address mock_kubectl gitea gitea-http)" == 10.43.0.12 ]]
+MOCK_CLUSTER_IP=None
+[[ "$(bootstrap_service_address mock_kubectl gitea gitea-http)" == 10.42.0.8 ]]
+MOCK_CLUSTER_IP='<none>'
+MOCK_ENDPOINT_IP=None
+[[ -z "$(bootstrap_service_address mock_kubectl gitea gitea-http)" ]]
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"Service address helper behavior failed: {detail}"]
+
+
 def validate_gitea_token_helpers() -> list[str]:
     """Exercise scope rejection and post-promotion stale-token revocation."""
     source_path = shlex.quote(str(SHARED_HELPERS))
@@ -153,6 +192,7 @@ def validate_homepage_credential_handoff() -> list[str]:
         source = path.read_text(encoding="utf-8")
         for required in (
             "/api/v1/notifications?limit=1",
+            "bootstrap_service_address",
             "mint_gitea_widget_token",
             "Gitea widget token validation returned HTTP",
             "OpenBao write verification failed",
@@ -1121,7 +1161,8 @@ def main() -> int:
         for name, implementation in phase_50_functions.items()
         if phase_60_functions.get(name) == implementation
     )
-    failures = validate_gitea_token_helpers()
+    failures = validate_service_address_helper()
+    failures.extend(validate_gitea_token_helpers())
     failures.extend(validate_homepage_credential_handoff())
     failures.extend(validate_push_mirror_helper())
     failures.extend(validate_external_secret_timeout())

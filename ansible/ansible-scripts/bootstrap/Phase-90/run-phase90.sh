@@ -236,18 +236,7 @@ persist_widget_field_phase90() {
 service_cluster_ip_phase90() {
   local namespace="${1:-}"
   local service_name="${2:-}"
-  local cluster_ip=""
-  local endpoint_ip=""
-  if [[ -z "${kubectl_bin}" || -z "${namespace}" || -z "${service_name}" ]]; then
-    return 0
-  fi
-  cluster_ip="$("${kubectl_bin}" -n "${namespace}" get svc "${service_name}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
-  if [[ -n "${cluster_ip}" && "${cluster_ip}" != "None" ]]; then
-    printf '%s' "${cluster_ip}"
-    return 0
-  fi
-  endpoint_ip="$("${kubectl_bin}" -n "${namespace}" get endpoints "${service_name}" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
-  printf '%s' "${endpoint_ip}"
+  bootstrap_service_address "${kubectl_bin}" "${namespace}" "${service_name}"
 }
 
 validate_argocd_widget_key_phase90() {

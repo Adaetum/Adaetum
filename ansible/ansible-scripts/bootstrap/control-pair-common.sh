@@ -272,6 +272,35 @@ read_openbao_app_field() {
     bao kv get -field="${field}" "secret/apps/${path}" 2>/dev/null | tr -d '\r\n' || true
 }
 
+# Return an address that host-side bootstrap checks can actually reach. A
+# headless Service reports clusterIP=None, so use its first ready endpoint
+# rather than allowing that Kubernetes sentinel to become a hostname.
+bootstrap_service_address() {
+  local kubectl_command="${1:-}"
+  local namespace="${2:-}"
+  local service_name="${3:-}"
+  local address=""
+
+  if [[ -z "${kubectl_command}" || -z "${namespace}" || -z "${service_name}" ]]; then
+    return 0
+  fi
+
+  address="$("${kubectl_command}" -n "${namespace}" get svc "${service_name}" \
+    -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  address="$(printf '%s' "${address}" | tr -d '\r\n[:space:]')"
+  if [[ -n "${address}" && "${address}" != "None" && "${address}" != "<none>" ]]; then
+    printf '%s' "${address}"
+    return 0
+  fi
+
+  address="$("${kubectl_command}" -n "${namespace}" get endpoints "${service_name}" \
+    -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
+  address="$(printf '%s' "${address}" | tr -d '\r\n[:space:]')"
+  if [[ -n "${address}" && "${address}" != "None" && "${address}" != "<none>" ]]; then
+    printf '%s' "${address}"
+  fi
+}
+
 # Gitea access tokens are application-issued credentials, not arbitrary KV
 # strings. These helpers let late bootstrap prove the selected Homepage token
 # has only the intended read scopes and revoke superseded system-owned tokens

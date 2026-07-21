@@ -232,10 +232,7 @@ persist_widget_field_phase70() {
 service_cluster_ip_phase70() {
   local namespace="${1:-}"
   local service_name="${2:-}"
-  if [[ -z "${kubectl_bin}" || -z "${namespace}" || -z "${service_name}" ]]; then
-    return 0
-  fi
-  "${kubectl_bin}" -n "${namespace}" get svc "${service_name}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true
+  bootstrap_service_address "${kubectl_bin}" "${namespace}" "${service_name}"
 }
 
 validate_argocd_widget_key_phase70() {
