@@ -22,8 +22,17 @@ operator-facing services, and Ansible keeps the hosts aligned.
 
 For its intended audience, Adaetum is an **OpenShift replacement**: a way to
 get an integrated, security-conscious application platform while retaining a
-smaller, inspectable stack built on RKE2 and upstream tools. It is an
-alternative operating model, not a drop-in or API-compatible OpenShift clone.
+smaller, inspectable stack built on RKE2 and upstream tools—without OpenShift's
+operational and resource overhead. It is an alternative operating model, not a
+drop-in or API-compatible OpenShift clone.
+
+Adaetum also occupies some of the same ground as **Sidero Omni and Talos
+Linux**: declarative Kubernetes and host lifecycle management across machines
+you own. The difference is deliberate. Adaetum keeps a conventional Rocky
+Linux host beneath Kubernetes, so operators retain package, service, and
+Ansible-level control instead of adopting an immutable appliance OS. That adds
+flexibility while keeping desired state, patching, and one-node-at-a-time
+maintenance under GitOps control.
 
 ## Why Adaetum?
 
@@ -48,6 +57,10 @@ Adaetum gives you:
 - **An OpenShift alternative you own.** GitOps, identity, secrets, policy,
   storage, ingress, and observability arrive as one coherent platform without
   making OpenShift itself the cluster distribution.
+- **Declarative hosts without an immutable OS.** Adaetum brings the
+  machine-lifecycle goals of Sidero and Talos to general-purpose Rocky Linux,
+  preserving direct host extensibility while automating configuration,
+  patching, draining, and rolling reboots.
 
 This is for operators who want a cohesive, inspectable system—not a bag of
 installation snippets and not a new proprietary control plane.
