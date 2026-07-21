@@ -527,6 +527,7 @@ ensure_homepage_widget_secrets_phase90() {
   local gitea_service_host=""
   local gitea_base_url=""
   local secret_manifest=""
+  local homepage_pod=""
   local failure=0
 
   if [[ -z "${kubectl_bin}" ]]; then
@@ -614,8 +615,16 @@ ensure_homepage_widget_secrets_phase90() {
       "${kubectl_bin}" homepage homepage homepage 'app.kubernetes.io/name=homepage'; then
       echo "[phase90] Homepage restart did not become ready; diagnostics were captured" >&2
     fi
+    homepage_pod="$("${kubectl_bin}" -n homepage get pods \
+      --selector='app.kubernetes.io/name=homepage' --sort-by=.metadata.creationTimestamp \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}' \
+      2>/dev/null | awk -F '\t' '$2 == "" { print $1 }' | tail -n 1)"
+    if [[ -z "${homepage_pod}" ]]; then
+      echo "[phase90] Homepage restart produced no active replacement pod" >&2
+      return 1
+    fi
     if ! bootstrap_wait_for_csi_secret_delivery \
-      "${kubectl_bin}" homepage homepage-openbao homepage; then
+      "${kubectl_bin}" homepage homepage-openbao homepage "${homepage_pod}"; then
       echo "[phase90] Homepage CSI credential delivery did not become ready" >&2
       return 1
     fi

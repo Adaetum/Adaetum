@@ -1992,6 +1992,11 @@ bootstrap_wait_for_csi_secret_delivery() {
   local component="${4:-${provider_class}}"
   local expected_pod="${5:-}"
   local status=""
+  local mounted_status=""
+  local active_pods=""
+  local pod_name=""
+  local pod_state=""
+  local event_rows=""
   local mount_failure=""
   local evidence_path=""
   local timeout_seconds="${BOOTSTRAP_CSI_SECRET_TIMEOUT_SECONDS:-600}"
@@ -2027,33 +2032,58 @@ bootstrap_wait_for_csi_secret_delivery() {
     # mounted=true prevents the presence of a pending status object from
     # satisfying this authentication proof.
     status="$("${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus \
-      -o jsonpath='{range .items[?(@.status.secretProviderClassName=="'"${provider_class}"'")]}{.metadata.name}{"\t"}{.status.podName}{"\t"}{.status.mounted}{"\\n"}{end}' 2>/dev/null || true)"
-    if [[ -n "${expected_pod}" ]]; then
-      status="$(printf '%s\n' "${status}" | awk -F '\t' -v pod="${expected_pod}" \
-        '$2 == pod && $3 == "true" { print $1 "\t" $2 }')"
-    else
-      status="$(printf '%s\n' "${status}" | awk -F '\t' \
-        '$3 == "true" { print $1 "\t" $2 }')"
-    fi
-    if [[ -n "${status}" ]]; then
-      echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: mounted by ${status//$'\n'/, }"
+      -o jsonpath='{range .items[?(@.status.secretProviderClassName=="'"${provider_class}"'")]}{.metadata.name}{"\t"}{.status.podName}{"\t"}{.status.mounted}{"\n"}{end}' 2>/dev/null || true)"
+    # PodStatus objects and Events outlive replaced pods. Only accept a mount
+    # or terminal failure for a pod that still exists and is not terminating;
+    # otherwise a pre-secret FailedMount can poison the later, valid rollout.
+    while IFS=$'\t' read -r status_name pod_name mounted; do
+      [[ -n "${pod_name}" && "${mounted}" == "true" ]] || continue
+      if [[ -n "${expected_pod}" && "${pod_name}" != "${expected_pod}" ]]; then
+        continue
+      fi
+      pod_state="$("${kubectl_path}" -n "${namespace}" get pod "${pod_name}" \
+        -o jsonpath='{.metadata.deletionTimestamp}{"\t"}{.status.phase}' 2>/dev/null || true)"
+      if [[ "${pod_state}" == $'\t'Running ]]; then
+        mounted_status+="${mounted_status:+$'\n'}${status_name}"$'\t'"${pod_name}"
+      fi
+    done <<< "${status}"
+    if [[ -n "${mounted_status}" ]]; then
+      echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: mounted by ${mounted_status//$'\n'/, }"
       return 0
     fi
-    mount_failure="$("${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp 2>/dev/null | \
-      grep -E 'FailedMount|MountVolume\.SetUp failed|permission denied|forbidden' | \
-      grep -E "${expected_pod:-${provider_class}}" | tail -n 1 || true)"
+
+    active_pods=""
+    while IFS=$'\t' read -r _ pod_name _; do
+      [[ -n "${pod_name}" ]] || continue
+      if [[ -n "${expected_pod}" && "${pod_name}" != "${expected_pod}" ]]; then
+        continue
+      fi
+      pod_state="$("${kubectl_path}" -n "${namespace}" get pod "${pod_name}" \
+        -o jsonpath='{.metadata.deletionTimestamp}{"\t"}{.status.phase}' 2>/dev/null || true)"
+      if [[ "${pod_state}" == $'\t'Running || "${pod_state}" == $'\t'Pending ]]; then
+        active_pods+="${active_pods:+ }${pod_name}"
+      fi
+    done <<< "${status}"
+    event_rows="$("${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp \
+      -o jsonpath='{range .items[*]}{.lastTimestamp}{"\t"}{.reason}{"\t"}{.involvedObject.name}{"\t"}{.message}{"\n"}{end}' \
+      2>/dev/null || true)"
+    mount_failure="$(printf '%s\n' "${event_rows}" | awk -F '\t' -v active=" ${active_pods} " \
+      '$2 == "FailedMount" && index(active, " " $3 " ") && \
+       tolower($4) ~ /(permission denied|forbidden|code: 403|status code 403)/ \
+       { line=$0 } END { print line }')"
     if [[ -n "${mount_failure}" ]]; then
       echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: terminal mount failure: ${mount_failure}" >&2
       evidence_path="$(bootstrap_diag_capture_evidence_path "${component}" "csi-secret")"
       {
         echo "[secret-csi] diagnostics for ${namespace}/secretproviderclass/${provider_class} ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
         echo "${mount_failure}"
+        printf '%s\n' "${event_rows}"
         "${kubectl_path}" -n "${namespace}" describe secretproviderclass "${provider_class}" || true
         "${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus -o wide || true
         "${kubectl_path}" -n kube-system get pods -o wide | grep -E 'secrets-store|openbao.*csi' || true
-        "${kubectl_path}" -n kube-system logs -l app.kubernetes.io/component=csi --all-containers --tail=200 || true
         while IFS= read -r pod_name; do
           [[ -n "${pod_name}" ]] || continue
+          "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --tail=200 || true
           "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --previous --tail=200 || true
         done < <("${kubectl_path}" -n kube-system get pods -o name | grep -E 'secrets-store|openbao.*csi' || true)
       } | tee "${evidence_path}" || true
@@ -2071,8 +2101,13 @@ bootstrap_wait_for_csi_secret_delivery() {
         "${kubectl_path}" -n "${namespace}" describe secretproviderclass "${provider_class}" || true
         "${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus -o wide || true
         "${kubectl_path}" -n "${namespace}" get pods -o wide || true
-        "${kubectl_path}" -n "${namespace}" get events --sort-by=.lastTimestamp | tail -n 120 || true
+        printf '%s\n' "${event_rows}"
         "${kubectl_path}" -n kube-system get daemonset,pod -o wide | grep -E 'NAME|secrets-store|openbao.*csi' || true
+        while IFS= read -r pod_name; do
+          [[ -n "${pod_name}" ]] || continue
+          "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --tail=200 || true
+          "${kubectl_path}" -n kube-system logs "${pod_name}" --all-containers --previous --tail=200 || true
+        done < <("${kubectl_path}" -n kube-system get pods -o name | grep -E 'secrets-store|openbao.*csi' || true)
       } | tee "${evidence_path}" || true
       bootstrap_diag_record_file_event \
         "${component}" "${provider_class}-csi-timeout" \

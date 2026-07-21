@@ -518,7 +518,7 @@ fi
 
 
 def validate_csi_mounted_status() -> list[str]:
-    """Accept only a mounted CSI status for the expected replacement pod."""
+    """Accept only a mounted CSI status for the active replacement pod."""
     source_path = shlex.quote(str(SHARED_HELPERS))
     script = rf'''
 set -euo pipefail
@@ -537,6 +537,13 @@ mock_kubectl() {{
       $'pending-status\tlive-pod\tfalse' \
       $'mounted-status\tlive-pod\ttrue'
     return 0
+  fi
+  if [[ " $* " == *" get pod live-pod "* ]]; then
+    printf '\tRunning'
+    return 0
+  fi
+  if [[ " $* " == *" get pod old-pod "* ]]; then
+    return 1
   fi
   echo "unexpected mock kubectl call: $*" >&2
   return 1
@@ -560,6 +567,71 @@ result="$(bootstrap_wait_for_csi_secret_delivery \
         return []
     detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
     return [f"CSI mounted-status behavior failed: {detail}"]
+
+
+def validate_csi_stale_mount_event() -> list[str]:
+    """Do not let an event retained for a replaced pod poison a new mount."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = rf'''
+set -euo pipefail
+source {source_path}
+
+BOOTSTRAP_CSI_SECRET_TIMEOUT_SECONDS=3
+BOOTSTRAP_CSI_SECRET_POLL_SECONDS=1
+STATUS_FILE="$(mktemp)"
+printf '0' >"${{STATUS_FILE}}"
+
+mock_kubectl() {{
+  if [[ " $* " == *" get secretproviderclass mounted-class "* ]]; then
+    return 0
+  fi
+  if [[ " $* " == *" get secretproviderclasspodstatus "* ]]; then
+    STATUS_CALLS="$(cat "${{STATUS_FILE}}")"
+    STATUS_CALLS=$((STATUS_CALLS + 1))
+    printf '%s' "${{STATUS_CALLS}}" >"${{STATUS_FILE}}"
+    printf 'old-status\told-pod\tfalse\n'
+    if (( STATUS_CALLS > 1 )); then
+      printf 'live-status\tlive-pod\ttrue\n'
+    else
+      printf 'live-status\tlive-pod\tfalse\n'
+    fi
+    return 0
+  fi
+  if [[ " $* " == *" get pod live-pod "* ]]; then
+    printf '\tRunning'
+    return 0
+  fi
+  if [[ " $* " == *" get pod old-pod "* ]]; then
+    return 1
+  fi
+  if [[ " $* " == *" get events "* ]]; then
+    printf '%s\n' \
+      $'2026-07-21T22:28:21Z\tFailedMount\told-pod\told secret was missing' \
+      $'2026-07-21T22:28:22Z\tFailedMount\tlive-pod\tsecret was not written yet'
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}}
+
+result="$(bootstrap_wait_for_csi_secret_delivery \
+  mock_kubectl homepage mounted-class homepage)"
+[[ "${{result}}" == *$'mounted by live-status\tlive-pod'* ]]
+[[ "${{result}}" != *"terminal mount failure"* ]]
+rm -f "${{STATUS_FILE}}"
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"CSI stale-event behavior failed: {detail}"]
 
 
 def validate_secret_foundation_ready() -> list[str]:
@@ -1170,6 +1242,7 @@ def main() -> int:
     failures.extend(validate_registry_secret_alias())
     failures.extend(validate_csi_secret_timeout())
     failures.extend(validate_csi_mounted_status())
+    failures.extend(validate_csi_stale_mount_event())
     failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())
     failures.extend(validate_phase50_gitea_postgresql_handoff())
