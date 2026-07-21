@@ -1866,10 +1866,18 @@ bootstrap_wait_for_csi_secret_delivery() {
       sleep "${poll_seconds}"
       continue
     fi
+    # SecretProviderClassPodStatus is entirely controller-produced status. The
+    # workload binding and mounted bit live under .status, not .spec. Requiring
+    # mounted=true prevents the presence of a pending status object from
+    # satisfying this authentication proof.
     status="$("${kubectl_path}" -n "${namespace}" get secretproviderclasspodstatus \
-      -o jsonpath='{range .items[?(@.spec.secretProviderClassName=="'"${provider_class}"'")]}{.metadata.name}{"\t"}{.spec.podName}{"\\n"}{end}' 2>/dev/null || true)"
+      -o jsonpath='{range .items[?(@.status.secretProviderClassName=="'"${provider_class}"'")]}{.metadata.name}{"\t"}{.status.podName}{"\t"}{.status.mounted}{"\\n"}{end}' 2>/dev/null || true)"
     if [[ -n "${expected_pod}" ]]; then
-      status="$(printf '%s\n' "${status}" | awk -F '\t' -v pod="${expected_pod}" '$2 == pod { print $1 }')"
+      status="$(printf '%s\n' "${status}" | awk -F '\t' -v pod="${expected_pod}" \
+        '$2 == pod && $3 == "true" { print $1 "\t" $2 }')"
+    else
+      status="$(printf '%s\n' "${status}" | awk -F '\t' \
+        '$3 == "true" { print $1 "\t" $2 }')"
     fi
     if [[ -n "${status}" ]]; then
       echo "[secret-csi] ${namespace}/secretproviderclass/${provider_class}: mounted by ${status//$'\n'/, }"

@@ -275,6 +275,9 @@ ROTATION_CONTRACTS = {
         "remove_installed_bootstrap_artifacts\ntouch \"${done_file}\"",
     ),
     "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh": (
+        "PHASE40_GITEA_POSTGRESQL_SECRET_ATTEMPTS",
+        "load_gitea_postgresql_credentials()",
+        "timed out waiting for Gitea PostgreSQL credentials; refusing an incomplete OpenBao handoff",
         "seed_openbao_app_fields()",
         "seed_openbao_app_fields argocd/runtime",
         '"redis_password=${argocd_redis_password_val}"',

@@ -26,6 +26,8 @@ PHASE40_JOB_DISCOVERY_TIMEOUT="${PHASE40_JOB_DISCOVERY_TIMEOUT:-10m}"
 PHASE40_JOB_COMPLETE_TIMEOUT="${PHASE40_JOB_COMPLETE_TIMEOUT:-10m}"
 PHASE40_ESO_ROLLOUT_TIMEOUT="${PHASE40_ESO_ROLLOUT_TIMEOUT:-5m}"
 PHASE40_ESO_STORE_TIMEOUT="${PHASE40_ESO_STORE_TIMEOUT:-5m}"
+PHASE40_GITEA_POSTGRESQL_SECRET_ATTEMPTS="${PHASE40_GITEA_POSTGRESQL_SECRET_ATTEMPTS:-60}"
+PHASE40_GITEA_POSTGRESQL_SECRET_DELAY="${PHASE40_GITEA_POSTGRESQL_SECRET_DELAY:-5}"
 LONGHORN_NAMESPACE="${LONGHORN_NAMESPACE:-longhorn-system}"
 BOOTSTRAP_INTRODUCE_OPENBAO="${BOOTSTRAP_INTRODUCE_OPENBAO:-}"
 BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET="${BOOTSTRAP_OPENBAO_CREATE_TOKEN_SECRET:-}"
@@ -159,6 +161,16 @@ read_k8s_secret_key() {
   if [[ -n "${raw}" ]]; then
     printf '%s' "${raw}" | base64 -d 2>/dev/null || true
   fi
+}
+
+# Gitea's chart owns initial database credential generation. OpenBao cannot
+# adopt those values until the chart Secret exists, so treat that handoff as a
+# bounded readiness dependency instead of a one-shot observation.
+load_gitea_postgresql_credentials() {
+  gitea_postgres_password_val="$(read_k8s_secret_key gitea gitea-postgresql postgres-password)"
+  gitea_app_password_val="$(read_k8s_secret_key gitea gitea-postgresql password)"
+  gitea_replication_password_val="$(read_k8s_secret_key gitea gitea-postgresql replication-password)"
+  [[ -n "${gitea_postgres_password_val}" && -n "${gitea_app_password_val}" ]]
 }
 
 # Phase 40 is a one-way authority handoff. It may fill an application field
@@ -1452,22 +1464,22 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
   # The chart generated these credentials before OpenBao was available. Adopt
   # the live values once so OpenBao becomes their recovery authority and ESO
   # can maintain the existing Kubernetes delivery Secret without replacing it.
-  gitea_postgres_password_val="$(read_k8s_secret_key gitea gitea-postgresql postgres-password)"
-  gitea_app_password_val="$(read_k8s_secret_key gitea gitea-postgresql password)"
-  gitea_replication_password_val="$(read_k8s_secret_key gitea gitea-postgresql replication-password)"
-  if [[ -n "${gitea_postgres_password_val}" && -n "${gitea_app_password_val}" ]]; then
-    gitea_postgresql_args=(
-      "postgres-password=${gitea_postgres_password_val}"
-      "password=${gitea_app_password_val}"
-    )
-    if [[ -n "${gitea_replication_password_val}" ]]; then
-      gitea_postgresql_args+=("replication-password=${gitea_replication_password_val}")
-    fi
-    seed_openbao_app_fields gitea/postgresql "${root_token}" \
-      "${gitea_postgresql_args[@]}"
-  else
-    echo "[phase40] Gitea PostgreSQL Secret is not ready; app-owned database credentials were not promoted." >&2
+  if ! retry_cmd \
+    "${PHASE40_GITEA_POSTGRESQL_SECRET_ATTEMPTS}" \
+    "${PHASE40_GITEA_POSTGRESQL_SECRET_DELAY}" \
+    load_gitea_postgresql_credentials; then
+    echo "[phase40] timed out waiting for Gitea PostgreSQL credentials; refusing an incomplete OpenBao handoff" >&2
+    exit 1
   fi
+  gitea_postgresql_args=(
+    "postgres-password=${gitea_postgres_password_val}"
+    "password=${gitea_app_password_val}"
+  )
+  if [[ -n "${gitea_replication_password_val}" ]]; then
+    gitea_postgresql_args+=("replication-password=${gitea_replication_password_val}")
+  fi
+  seed_openbao_app_fields gitea/postgresql "${root_token}" \
+    "${gitea_postgresql_args[@]}"
   if [[ -n "${authentik_secret_key_val}" && -n "${authentik_postgresql_password_val}" && -n "${authentik_admin_password_val}" && -n "${authentik_bootstrap_token_val}" ]]; then
     seed_openbao_app_fields authentik/encryption "${root_token}" \
       "secret_key=${authentik_secret_key_val}"

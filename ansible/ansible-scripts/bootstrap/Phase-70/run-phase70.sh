@@ -531,27 +531,27 @@ verify_openbao_secret_delivery_phase70() {
   # each consumer here turns a delivery fault into a quick, specific failure
   # instead of allowing later rollout waits to consume the run.
   bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" observability grafana-openbao grafana
+    "${kubectl_bin}" observability grafana-openbao grafana || return 1
   bootstrap_wait_for_external_secret_delivery \
-    "${kubectl_bin}" observability homepage-grafana-desired homepage-grafana-desired grafana
+    "${kubectl_bin}" observability homepage-grafana-desired homepage-grafana-desired grafana || return 1
   bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" observability apprise-openbao apprise
+    "${kubectl_bin}" observability apprise-openbao apprise || return 1
   bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" homepage homepage-openbao homepage
+    "${kubectl_bin}" homepage homepage-openbao homepage || return 1
   bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" cloudflared cloudflared-openbao cloudflared
+    "${kubectl_bin}" cloudflared cloudflared-openbao cloudflared || return 1
   bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" ingress external-dns-openbao external-dns
+    "${kubectl_bin}" ingress external-dns-openbao external-dns || return 1
   bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" ansible ansible-runner-openbao ansible-runner
+    "${kubectl_bin}" ansible ansible-runner-openbao ansible-runner || return 1
   bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" authentik authentik-openbao authentik
+    "${kubectl_bin}" authentik authentik-openbao authentik || return 1
   bootstrap_wait_for_external_secret_delivery \
-    "${kubectl_bin}" authentik authentik-postgresql-desired authentik-postgresql-desired authentik-postgresql
+    "${kubectl_bin}" authentik authentik-postgresql-desired authentik-postgresql-desired authentik-postgresql || return 1
   bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" gitea gitea-openbao gitea
+    "${kubectl_bin}" gitea gitea-openbao gitea || return 1
   bootstrap_wait_for_external_secret_delivery \
-    "${kubectl_bin}" gitea gitea-postgresql-desired gitea-postgresql-desired gitea-postgresql
+    "${kubectl_bin}" gitea gitea-postgresql-desired gitea-postgresql-desired gitea-postgresql || return 1
 }
 
 # Runtime rotations are explicit operator actions: setting this flag after an
@@ -1083,6 +1083,11 @@ fi
 run_phase70_step "run GitOps realization checks" critical run_gitops_realization_checks_phase70
 if (( phase70_critical_failures > 0 )); then
   echo "[phase70] GitOps realization checks failed; stopping before secret-delivery reconciliation" >&2
+  exit 1
+fi
+run_phase70_step "reconcile Homepage widget secrets" critical ensure_homepage_widget_secrets_phase70
+if (( phase70_critical_failures > 0 )); then
+  echo "[phase70] Homepage widget reconciliation failed; stopping before workload secret verification" >&2
   exit 1
 fi
 if ! verify_openbao_secret_delivery_phase70; then

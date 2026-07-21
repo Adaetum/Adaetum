@@ -20,6 +20,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PHASE_40 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh"
 PHASE_50 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh"
 PHASE_60 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh"
+PHASE_70 = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh"
 SHARED_HELPERS = REPOSITORY_ROOT / "ansible/ansible-scripts/bootstrap/control-pair-common.sh"
 FUNCTION_START = re.compile(
     r"^(?:(?:function)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{", re.MULTILINE
@@ -413,6 +414,51 @@ fi
     return [f"CSI secret timeout behavior failed: {detail}"]
 
 
+def validate_csi_mounted_status() -> list[str]:
+    """Accept only a mounted CSI status for the expected replacement pod."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = rf'''
+set -euo pipefail
+source {source_path}
+
+mock_kubectl() {{
+  if [[ " $* " == *" get secretproviderclass mounted-class "* ]]; then
+    return 0
+  fi
+  if [[ " $* " == *" get secretproviderclasspodstatus "* ]]; then
+    [[ "$*" == *".status.secretProviderClassName"* ]]
+    [[ "$*" == *".status.podName"* ]]
+    [[ "$*" == *".status.mounted"* ]]
+    printf '%s\n' \
+      $'old-status\told-pod\ttrue' \
+      $'pending-status\tlive-pod\tfalse' \
+      $'mounted-status\tlive-pod\ttrue'
+    return 0
+  fi
+  echo "unexpected mock kubectl call: $*" >&2
+  return 1
+}}
+
+result="$(bootstrap_wait_for_csi_secret_delivery \
+  mock_kubectl ansible mounted-class mounted-component live-pod)"
+[[ "${{result}}" == *$'mounted by mounted-status\tlive-pod'* ]]
+[[ "${{result}}" != *"pending-status"* ]]
+[[ "${{result}}" != *"old-status"* ]]
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"CSI mounted-status behavior failed: {detail}"]
+
+
 def validate_secret_foundation_ready() -> list[str]:
     """Exercise the successful status contract used by Phases 60 and 70."""
     source_path = shlex.quote(str(SHARED_HELPERS))
@@ -459,10 +505,7 @@ bootstrap_wait_for_secret_delivery_foundation mock_kubectl test-foundation
 def validate_phase70_realization_gate() -> list[str]:
     """Keep the post-handoff proof strict, bounded, and non-restarting."""
     phase_60 = PHASE_60.read_text(encoding="utf-8")
-    phase_70 = (
-        REPOSITORY_ROOT
-        / "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh"
-    ).read_text(encoding="utf-8")
+    phase_70 = PHASE_70.read_text(encoding="utf-8")
     failures: list[str] = []
 
     for required in (
@@ -630,6 +673,8 @@ wait_for_gitea_registry_bootstrap_path
         "verify_secret_delivery_foundation_phase70",
         "secret-delivery foundation failed; stopping before workload realization checks",
         "GitOps realization checks failed; stopping before secret-delivery reconciliation",
+        'run_phase70_step "reconcile Homepage widget secrets"',
+        "Homepage widget reconciliation failed; stopping before workload secret verification",
         'registry_host="${runner_image%%/*}"',
         "ansible-cluster-config does not declare ANSIBLE_RUNNER_IMAGE",
     ):
@@ -650,6 +695,58 @@ wait_for_gitea_registry_bootstrap_path
         failures.append(
             "Phase 70 must prove the secret-delivery foundation before workload realization"
         )
+
+    homepage_reconcile = phase_70.find(
+        'run_phase70_step "reconcile Homepage widget secrets"'
+    )
+    secret_verification = phase_70.find("if ! verify_openbao_secret_delivery_phase70")
+    if (
+        realization_gate < 0
+        or homepage_reconcile < 0
+        or secret_verification < 0
+        or not realization_gate < homepage_reconcile < secret_verification
+    ):
+        failures.append(
+            "Phase 70 must reconcile Homepage's generated credentials before "
+            "verifying workload secret mounts"
+        )
+
+    phase_70_functions = functions(PHASE_70)
+    secret_delivery_gate = phase_70_functions.get(
+        "verify_openbao_secret_delivery_phase70"
+    )
+    if secret_delivery_gate:
+        script = secret_delivery_gate + r'''
+set -euo pipefail
+kubectl_bin=mock_kubectl
+CALLS=0
+
+bootstrap_wait_for_csi_secret_delivery() {
+  CALLS=$((CALLS + 1))
+  return 1
+}
+bootstrap_wait_for_external_secret_delivery() {
+  CALLS=$((CALLS + 1))
+  return 0
+}
+
+if verify_openbao_secret_delivery_phase70; then
+  echo "failed first consumer unexpectedly passed" >&2
+  exit 1
+fi
+[[ "${CALLS}" == 1 ]]
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            cwd=REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+            failures.append(f"Phase 70 secret-delivery fail-fast behavior failed: {detail}")
 
     service_check = phase_60_functions.get("require_gitea_service_contract")
     if service_check:
@@ -940,6 +1037,7 @@ def main() -> int:
     failures.extend(validate_external_secret_ready())
     failures.extend(validate_registry_secret_alias())
     failures.extend(validate_csi_secret_timeout())
+    failures.extend(validate_csi_mounted_status())
     failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())
     failures.extend(validate_registry_token_service_discovery())
