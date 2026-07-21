@@ -276,6 +276,81 @@ read_openbao_app_field() {
 # strings. These helpers let late bootstrap prove the selected Homepage token
 # has only the intended read scopes and revoke superseded system-owned tokens
 # after the replacement has been promoted to OpenBao and Kubernetes.
+mint_gitea_widget_token() {
+  local base_url="${1:-}"
+  local username="${2:-}"
+  local password="${3:-}"
+  local token_name=""
+  local payload=""
+  local response=""
+  local response_body=""
+  local http_status=""
+  local error_message=""
+  local token=""
+
+  if [[ -z "${base_url}" || -z "${username}" || -z "${password}" ]]; then
+    return 1
+  fi
+
+  token_name="homepage-widget-$(date +%s)-$$"
+  payload="$(python3 - "${token_name}" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "name": sys.argv[1],
+    "scopes": ["read:notification", "read:repository", "read:issue"],
+}))
+PY
+  )" || return 1
+
+  # Mint through the live API that will authenticate Homepage. This avoids a
+  # separate CLI process, config discovery, and credential-bearing stdout.
+  response="$(
+    curl --silent --show-error --max-time 20 \
+      --user "${username}:${password}" \
+      --header 'Content-Type: application/json' \
+      --request POST \
+      --data "${payload}" \
+      --write-out $'\n%{http_code}' \
+      "${base_url}/api/v1/users/${username}/tokens"
+  )" || return 1
+  http_status="${response##*$'\n'}"
+  response_body="${response%$'\n'*}"
+
+  if [[ "${http_status}" != "201" ]]; then
+    error_message="$(GITEA_TOKEN_RESPONSE="${response_body}" python3 - <<'PY'
+import json
+import os
+
+try:
+    print(json.loads(os.environ["GITEA_TOKEN_RESPONSE"]).get("message", "unknown error"))
+except (TypeError, ValueError):
+    print("invalid JSON response")
+PY
+    )"
+    echo "[gitea-token] mint failed: HTTP ${http_status:-000} (${error_message})" >&2
+    return 1
+  fi
+
+  token="$(GITEA_TOKEN_RESPONSE="${response_body}" python3 - <<'PY'
+import json
+import os
+
+try:
+    print(json.loads(os.environ["GITEA_TOKEN_RESPONSE"]).get("sha1", ""), end="")
+except (TypeError, ValueError):
+    pass
+PY
+  )"
+  if [[ ! "${token}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "[gitea-token] mint failed: API did not return a valid 40-character token" >&2
+    return 1
+  fi
+
+  printf '%s' "${token}"
+}
+
 gitea_widget_token_has_required_scopes() {
   local base_url="${1:-}"
   local username="${2:-}"

@@ -322,7 +322,7 @@ ROTATION_CONTRACTS = {
     "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh": (
         "read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY",
         "read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH",
-        '--scopes "read:notification,read:repository,read:issue"',
+        "mint_gitea_widget_token",
         "gitea_widget_token_has_required_scopes",
         "revoke_stale_gitea_widget_tokens",
         "seed_openbao_app_fields gitea/registry",
@@ -333,7 +333,7 @@ ROTATION_CONTRACTS = {
     "ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh": (
         "read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY",
         "read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH",
-        '--scopes "read:notification,read:repository,read:issue"',
+        "mint_gitea_widget_token",
         "gitea_widget_token_has_required_scopes",
         "revoke_stale_gitea_widget_tokens",
     ),
@@ -343,6 +343,8 @@ ROTATION_CONTRACTS = {
         "seed_openbao_app_fields()",
         'bao kv patch "secret/apps/${path}"',
         'bao kv put "secret/apps/${path}"',
+        "mint_gitea_widget_token()",
+        '"${base_url}/api/v1/users/${username}/tokens"',
         "gitea_widget_token_has_required_scopes()",
         "revoke_stale_gitea_widget_tokens()",
         '"read:notification", "read:repository", "read:issue"',

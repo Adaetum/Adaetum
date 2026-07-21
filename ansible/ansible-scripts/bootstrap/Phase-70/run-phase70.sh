@@ -295,7 +295,11 @@ validate_gitea_widget_auth_phase70() {
       -H "Authorization: token ${token}" \
       "http://${service_host}:3000/api/v1/notifications?limit=1" 2>/dev/null || true
   )"
-  [[ "${status}" == "200" ]]
+  if [[ "${status}" != "200" ]]; then
+    echo "[phase70] Gitea widget token validation returned HTTP ${status:-000}" >&2
+    return 1
+  fi
+  return 0
 }
 
 ensure_ansible_runner_pull_secret_phase70() {
@@ -685,30 +689,18 @@ mint_gitea_widget_auth_phase70() {
     return 1
   fi
 
-  token="$("${kubectl_bin}" -n gitea exec deploy/gitea -c gitea -- sh -lc '
-    gitea admin user generate-access-token \
-      --username "'"${admin_username}"'" \
-      --token-name "homepage-widget" \
-      --scopes "read:notification,read:repository,read:issue" \
-      --raw 2>/dev/null \
-    || gitea admin user generate-access-token \
-      --username "'"${admin_username}"'" \
-      --token-name "homepage-widget-$(date +%s)" \
-      --scopes "read:notification,read:repository,read:issue" \
-      --raw 2>/dev/null
-  ' 2>/dev/null | tr -d '\r\n' || true)"
-
-  if [[ -z "${token}" ]]; then
-    echo "[phase70] Gitea widget token mint failed: unable to generate API token" >&2
-    return 1
-  fi
-  if ! validate_gitea_widget_auth_phase70 "${token}"; then
-    echo "[phase70] Gitea widget token mint failed: notifications API rejected the token" >&2
+  if ! token="$(mint_gitea_widget_token \
+    "${gitea_base_url}" "${admin_username}" "${admin_password}")"; then
+    echo "[phase70] Gitea widget token mint failed: live Gitea API did not issue a token" >&2
     return 1
   fi
   if ! gitea_widget_token_has_required_scopes \
     "${gitea_base_url}" "${admin_username}" "${admin_password}" "${token}"; then
     echo "[phase70] Gitea widget token mint failed: token registry did not confirm exact read-only scopes" >&2
+    return 1
+  fi
+  if ! validate_gitea_widget_auth_phase70 "${token}"; then
+    echo "[phase70] Gitea widget token mint failed: notifications API rejected the token" >&2
     return 1
   fi
 

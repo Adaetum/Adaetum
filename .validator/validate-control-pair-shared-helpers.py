@@ -79,13 +79,22 @@ def validate_gitea_token_helpers() -> list[str]:
 set -euo pipefail
 source {source_path}
 
-MOCK_MODE=readonly
+MOCK_MODE=mint-valid
 curl() {{
   if [[ " $* " == *" --request DELETE "* ]]; then
     MOCK_MODE=revoke-after
     return 0
   fi
   case "${{MOCK_MODE}}" in
+    mint-valid)
+      printf '%s\n%s' '{{"sha1":"0123456789abcdef0123456789abcdef01234567"}}' '201'
+      ;;
+    mint-malformed)
+      printf '%s\n%s' '{{"sha1":"not-a-token"}}' '201'
+      ;;
+    mint-rejected)
+      printf '%s\n%s' '{{"message":"bad credentials"}}' '401'
+      ;;
     readonly|revoke-after)
       printf '%s' '[{{"id":2,"name":"homepage-widget-2","token_last_eight":"abcdefgh","scopes":["read:issue","read:repository","read:notification"]}}]'
       ;;
@@ -98,6 +107,19 @@ curl() {{
   esac
 }}
 
+[[ "$(mint_gitea_widget_token http://gitea gitea-admin password)" == \
+  0123456789abcdef0123456789abcdef01234567 ]]
+MOCK_MODE=mint-malformed
+if mint_gitea_widget_token http://gitea gitea-admin password >/dev/null 2>&1; then
+  echo 'malformed API token was accepted' >&2
+  exit 1
+fi
+MOCK_MODE=mint-rejected
+if mint_gitea_widget_token http://gitea gitea-admin password >/dev/null 2>&1; then
+  echo 'rejected token request was accepted' >&2
+  exit 1
+fi
+MOCK_MODE=readonly
 gitea_widget_token_has_required_scopes \
   http://gitea gitea-admin password 0123456789abcdefgh
 MOCK_MODE=broad
@@ -131,6 +153,8 @@ def validate_homepage_credential_handoff() -> list[str]:
         source = path.read_text(encoding="utf-8")
         for required in (
             "/api/v1/notifications?limit=1",
+            "mint_gitea_widget_token",
+            "Gitea widget token validation returned HTTP",
             "OpenBao write verification failed",
             "Homepage widget reconciliation failed before workload restart",
             "Homepage CSI credential delivery did not become ready",
