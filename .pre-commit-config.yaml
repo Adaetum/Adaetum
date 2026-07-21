@@ -84,7 +84,7 @@ repos:
         entry: python3 .validator/validate-firstboot-console.py
         language: system
         pass_filenames: false
-        files: ^(ansible/ansible-scripts/(bundle-bootstrap|bootstrap/Phase-10/run-phase10\.sh)|ks-src/fragments/shared/portable/(11-tailscale-firstboot-lib|12-tailscale-firstboot-flow)\.shfrag|ks-src/fragments/installers/kickstart/rocky10/60-embed-repo\.ksfrag|tasks/iso\.yml|\.github/workflows/iso-build\.yml|\.validator/validate-firstboot-console\.py)$
+        files: ^(ansible/ansible-scripts/(bundle-bootstrap|bootstrap/Phase-10/run-phase10\.sh)|ks-src/fragments/shared/portable/(11-tailscale-firstboot-lib|12-tailscale-firstboot-flow)\.shfrag|ks-src/fragments/installers/kickstart/rocky10/(60-embed-repo|70-firstboot)\.ksfrag|tasks/iso\.yml|\.github/workflows/iso-build\.yml|\.validator/validate-firstboot-console\.py)$
       - id: validate-bootstrap-mode
         name: Validate Tailscale bootstrap mode detection
         entry: python3 .validator/validate-bootstrap-mode.py

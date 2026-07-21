@@ -14,6 +14,7 @@ CONSOLE = ROOT / "ks-src" / "fragments" / "shared" / "portable" / "11-tailscale-
 FIRSTBOOT_FLOW = ROOT / "ks-src" / "fragments" / "shared" / "portable" / "12-tailscale-firstboot-flow.shfrag"
 ISO_BUILD = ROOT / "tasks" / "iso.yml"
 INSTALLER_HANDOFF = ROOT / "ks-src" / "fragments" / "installers" / "kickstart" / "rocky10" / "60-embed-repo.ksfrag"
+INSTALLER_BOOTSTRAP = ROOT / "ks-src" / "fragments" / "installers" / "kickstart" / "rocky10" / "70-firstboot.ksfrag"
 ISO_WORKFLOW = ROOT / ".github" / "workflows" / "iso-build.yml"
 
 
@@ -27,6 +28,7 @@ def main() -> int:
     firstboot_flow = FIRSTBOOT_FLOW.read_text(encoding="utf-8")
     iso_build = ISO_BUILD.read_text(encoding="utf-8")
     installer_handoff = INSTALLER_HANDOFF.read_text(encoding="utf-8")
+    installer_bootstrap = INSTALLER_BOOTSTRAP.read_text(encoding="utf-8")
     iso_workflow = ISO_WORKFLOW.read_text(encoding="utf-8")
     for required in (
         "task platform:validate",
@@ -187,6 +189,17 @@ def main() -> int:
     ):
         if required not in installer_handoff:
             raise SystemExit(f"first-boot console contract failed: installer does not require {required}")
+    for required in (
+        'dnf -y ${dnf_base_repos:-} install "$@"',
+        'mirrorlist_probe="$(mktemp)"',
+        "grep -Eq '^[[:space:]]*https?://' \"${mirrorlist_probe}\"",
+        "Mirrorlist unavailable or empty; using direct baseurl fallback",
+    ):
+        if required not in installer_bootstrap:
+            raise SystemExit(
+                "first-boot repository fallback contract failed: "
+                f"installer is missing {required}"
+            )
     for required in (
         'GUM_BIN="/usr/bin/gum"',
         'Required Gum console binary is missing',

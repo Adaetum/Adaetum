@@ -303,11 +303,16 @@ retry_cmd() {
 
 install_pkg() {
   if command -v dnf >/dev/null 2>&1; then
-    dnf -y install "$@"
+    # local-repos sets this override when the installer mirrorlist cannot
+    # provide a usable repository. Keep every early package install on the
+    # repository path that was actually proven available.
+    # shellcheck disable=SC2086
+    dnf -y ${dnf_base_repos:-} install "$@"
     return $?
   fi
   if command -v yum >/dev/null 2>&1; then
-    yum -y install "$@"
+    # shellcheck disable=SC2086
+    yum -y ${dnf_base_repos:-} install "$@"
     return $?
   fi
   if command -v apt-get >/dev/null 2>&1; then
@@ -481,8 +486,10 @@ else
   mirrorlist_url="https://mirrors.rockylinux.org/mirrorlist?arch=$(rpm --eval '%{_arch}')&repo=BaseOS-10"
   if command -v curl >/dev/null 2>&1; then
     echo "[BOOTSTRAP] Probing mirrorlist: ${mirrorlist_url}"
-    if ! retry_cmd "mirrorlist probe" curl -fsSL --connect-timeout 5 --max-time 15 -o /dev/null "${mirrorlist_url}"; then
-      echo "[BOOTSTRAP] Mirrorlist unreachable; using direct baseurl fallback"
+    mirrorlist_probe="$(mktemp)"
+    if ! retry_cmd "mirrorlist probe" curl -fsSL --connect-timeout 5 --max-time 15 -o "${mirrorlist_probe}" "${mirrorlist_url}" \
+      || ! grep -Eq '^[[:space:]]*https?://' "${mirrorlist_probe}"; then
+      echo "[BOOTSTRAP] Mirrorlist unavailable or empty; using direct baseurl fallback"
       echo "[BOOTSTRAP] Probing direct repo: https://dl.rockylinux.org/pub/rocky/10/BaseOS/$(rpm --eval '%{_arch}')/os/repodata/repomd.xml"
       curl -fsSL --connect-timeout 5 --max-time 15 -o /dev/null \
         "https://dl.rockylinux.org/pub/rocky/10/BaseOS/$(rpm --eval '%{_arch}')/os/repodata/repomd.xml" \
@@ -506,6 +513,7 @@ EOF
     else
       dnf_offline=false
     fi
+    rm -f "${mirrorlist_probe}" 2>/dev/null || true
   else
     dnf_offline=true
   fi
