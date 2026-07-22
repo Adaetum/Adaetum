@@ -168,6 +168,16 @@ if [ -z "${bootstrap_bundle_sha256_runtime}" ] && [ -f "dist/ansible-runner-bund
   bootstrap_bundle_sha256_runtime="$(sha256sum dist/ansible-runner-bundle.tar.gz | awk '{print $1}')"
 fi
 
+# Recovery export settings travel with the private runtime payload. External
+# Kickstarts intentionally contain no secret state, and Phase 99 must not
+# silently lose its off-node backup contract merely because those public
+# installer fields are blank.
+bootstrap_backup_url_runtime="${BOOTSTRAP_BACKUP_URL:-}"
+if [ -z "${bootstrap_backup_url_runtime}" ] && [ -n "${KS_BASE_URL:-}" ]; then
+  bootstrap_backup_url_runtime="${KS_BASE_URL%/}/backup"
+fi
+bootstrap_backup_url_runtime="$(strip_token_param "${bootstrap_backup_url_runtime}")"
+
 mkdir -p "$(dirname "${out_path}")"
 
 emit_env_line() {
@@ -211,6 +221,12 @@ emit_env_line() {
   emit_env_line INGRESS_CLOUDFLARED_ORIGIN_NO_TLS_VERIFY "${INGRESS_CLOUDFLARED_ORIGIN_NO_TLS_VERIFY:-}"
   emit_env_line BOOTSTRAP_BACKUP_PASSPHRASE "${BOOTSTRAP_BACKUP_PASSPHRASE:-}"
   emit_env_line BOOTSTRAP_BACKUP_PASSPHRASE_B64 "${BOOTSTRAP_BACKUP_PASSPHRASE_B64:-}"
+  emit_env_line BOOTSTRAP_BACKUP_TO_R2 "${BOOTSTRAP_BACKUP_TO_R2:-1}"
+  emit_env_line BOOTSTRAP_BACKUP_URL "${bootstrap_backup_url_runtime}"
+  emit_env_line BOOTSTRAP_BACKUP_FORMAT "${BOOTSTRAP_BACKUP_FORMAT:-both}"
+  emit_env_line BOOTSTRAP_BACKUP_FILE_OPENSSL "${BOOTSTRAP_BACKUP_FILE_OPENSSL:-bootstrap-emergency-kit.tar.gz.enc}"
+  emit_env_line BOOTSTRAP_BACKUP_FILE_7Z "${BOOTSTRAP_BACKUP_FILE_7Z:-bootstrap-emergency-kit.7z}"
+  emit_env_line BOOTSTRAP_OPENBAO_BACKUP_FILE "${BOOTSTRAP_OPENBAO_BACKUP_FILE:-bootstrap-openbao-backup.json.enc}"
   emit_env_line RANCHER_ADMIN_PASSWORD "${RANCHER_ADMIN_PASSWORD:-}"
   emit_env_line BOOTSTRAP_DEBUG_PASSWORD "${BOOTSTRAP_DEBUG_PASSWORD:-}"
   emit_env_line BOOTSTRAP_DEBUG_PASSWORD_HASH "${BOOTSTRAP_DEBUG_PASSWORD_HASH:-}"

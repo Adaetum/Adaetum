@@ -55,6 +55,8 @@ fi
 
 backup_plain="$(read_env_value "${out_file}" BOOTSTRAP_BACKUP_PASSPHRASE)"
 backup_b64="$(read_env_value "${out_file}" BOOTSTRAP_BACKUP_PASSPHRASE_B64)"
+backup_enabled="$(read_env_value "${out_file}" BOOTSTRAP_BACKUP_TO_R2)"
+backup_url="$(read_env_value "${out_file}" BOOTSTRAP_BACKUP_URL)"
 argocd_token="$(read_env_value "${out_file}" ARGOCD_GITHUB_TOKEN)"
 seed_token="$(read_env_value "${out_file}" GITEA_SEED_SOURCE_TOKEN)"
 mirror_enabled="$(read_env_value "${out_file}" GITEA_PUSH_MIRROR_ENABLED)"
@@ -70,6 +72,18 @@ fi
 
 if [ -z "${backup_plain}" ] && [ -z "${backup_b64}" ]; then
   echo "Runtime payload is missing BOOTSTRAP_BACKUP_PASSPHRASE and BOOTSTRAP_BACKUP_PASSPHRASE_B64." >&2
+  exit 1
+fi
+
+case "$(printf '%s' "${backup_enabled}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) ;;
+  *)
+    echo "Runtime payload must enable BOOTSTRAP_BACKUP_TO_R2 before Phase 99 can burn bootstrap authority." >&2
+    exit 1
+    ;;
+esac
+if ! printf '%s' "${backup_url}" | grep -Eq '^https?://[^[:space:]]+/backup$'; then
+  echo "Runtime payload BOOTSTRAP_BACKUP_URL must be an HTTP(S) /backup endpoint without query credentials." >&2
   exit 1
 fi
 
@@ -128,4 +142,4 @@ if [ -f "${kickstart_path}" ] && rg -n 'bootstrap-runtime\.env\?v=|ansible-runne
   exit 1
 fi
 
-echo "Runtime payload check passed: backup passphrase, repo auth tokens, and stable Worker payload URLs are present."
+echo "Runtime payload check passed: recovery export, repo auth, and stable Worker payload contracts are present."

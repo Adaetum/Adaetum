@@ -106,6 +106,19 @@ if [[ "${is_join_node}" -eq 1 ]] && [[ "${skip_burn_on_join}" == "1" || "${skip_
   exit 0
 fi
 
+# Phase 99 is an export-then-destroy transaction. Operators can postpone the
+# transaction by disabling Phase 99, but a Phase 99 run may never report
+# success after skipping its only off-node recovery copy.
+backup_to_r2_normalized="$(printf '%s' "${BOOTSTRAP_BACKUP_TO_R2}" | tr '[:upper:]' '[:lower:]')"
+case "${backup_to_r2_normalized}" in
+  1|true|yes|on) ;;
+  *)
+    echo "Phase 99 requires BOOTSTRAP_BACKUP_TO_R2=1 before bootstrap authority can be destroyed." >&2
+    echo "Disable BOOTSTRAP_RUN_PHASE99 to postpone both recovery export and burn-the-ladder." >&2
+    exit 22
+    ;;
+esac
+
 # Phase 99 always removes the bootstrap-token Secret after the recovery export.
 # Resolve kubectl before the optional backup branch so the final destructive
 # step has the same explicit dependency regardless of backup format.
@@ -360,7 +373,8 @@ Manual steps still required:
 
 INFO
 
-if [[ "${BOOTSTRAP_BACKUP_TO_R2}" == "1" || "${BOOTSTRAP_BACKUP_TO_R2}" == "true" ]]; then
+if [[ "${backup_to_r2_normalized}" == "1" || "${backup_to_r2_normalized}" == "true" || \
+      "${backup_to_r2_normalized}" == "yes" || "${backup_to_r2_normalized}" == "on" ]]; then
   if [[ -z "${BOOTSTRAP_BACKUP_URL}" ]]; then
     echo "BOOTSTRAP_BACKUP_URL is required when BOOTSTRAP_BACKUP_TO_R2=1" >&2
     exit 5

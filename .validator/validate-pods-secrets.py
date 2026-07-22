@@ -249,6 +249,8 @@ ROTATION_CONTRACTS = {
         "token_policies=openbao-config",
     ),
     "ansible/ansible-scripts/bootstrap/Phase-90/run-phase99.sh": (
+        "Phase 99 requires BOOTSTRAP_BACKUP_TO_R2=1",
+        "Disable BOOTSTRAP_RUN_PHASE99 to postpone both recovery export and burn-the-ladder.",
         "discover_openbao_leaf_paths secret/apps",
         "Refusing to burn local secrets without a complete workload-secret export.",
         '"${discovered_app_paths[@]}"',
@@ -257,6 +259,16 @@ ROTATION_CONTRACTS = {
         "/etc/ansible-bundle-bootstrap.env",
         "/etc/tailscale-firstboot.env",
         'Failed to remove first-boot credential file:',
+    ),
+    "tasks/scripts/build-bootstrap-runtime-env.sh": (
+        'bootstrap_backup_url_runtime="${KS_BASE_URL%/}/backup"',
+        'emit_env_line BOOTSTRAP_BACKUP_TO_R2 "${BOOTSTRAP_BACKUP_TO_R2:-1}"',
+        'emit_env_line BOOTSTRAP_BACKUP_URL "${bootstrap_backup_url_runtime}"',
+        'emit_env_line BOOTSTRAP_BACKUP_FORMAT "${BOOTSTRAP_BACKUP_FORMAT:-both}"',
+    ),
+    "tasks/scripts/validate-bootstrap-runtime-env.sh": (
+        "Runtime payload must enable BOOTSTRAP_BACKUP_TO_R2",
+        "Runtime payload BOOTSTRAP_BACKUP_URL must be an HTTP(S) /backup endpoint",
     ),
     "ansible/ansible-scripts/bundle-bootstrap": (
         "remove_first_boot_env_files()",
