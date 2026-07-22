@@ -277,6 +277,8 @@ ROTATION_CONTRACTS = {
         'BOOTSTRAP_RUNTIME_VALIDATE_FILE="${runtime_payload}"',
     ),
     "ansible/ansible-scripts/bundle-bootstrap": (
+        'runtime_env_file="${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"',
+        '. "${runtime_env_file}"',
         "remove_first_boot_env_files()",
         '"${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"',
         "/etc/ansible-bundle-bootstrap.env",

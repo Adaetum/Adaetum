@@ -8,9 +8,8 @@ if [ -f "${env_file}" ]; then
   set +a
 fi
 
-# Public cluster identity is rendered from platform.yaml into the bundle. Load
-# it after the secret-bearing runtime payload so scrubbed/default public values
-# can never override the private recovery repository's intended state.
+# Public cluster identity is rendered from platform.yaml into the bundle and is
+# authoritative for non-secret platform values.
 bundle_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 public_env_file="${bundle_repo_root}/pods/cluster-config/cluster-config.env"
 if [ -f "${public_env_file}" ]; then
@@ -28,6 +27,19 @@ if [ -f "${public_env_file}" ]; then
     export "${public_env_key}"
   done < "${public_env_file}"
 fi
+
+# The installer env deliberately carries blank placeholders for private values.
+# Reload the downloaded root-only payload after that file so those placeholders
+# cannot erase recovery-export settings before Phase 99. The payload was syntax
+# checked when fetched and its required contracts were validated in Phase 10.
+runtime_env_file="${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"
+if [ -f "${runtime_env_file}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${runtime_env_file}"
+  set +a
+fi
+
 homebrew_shellenv="/etc/profile.d/homebrew.sh"
 if [ -f "${homebrew_shellenv}" ]; then
   # shellcheck disable=SC1090

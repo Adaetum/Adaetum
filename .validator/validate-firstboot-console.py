@@ -75,14 +75,20 @@ def main() -> int:
         'while IFS= read -r public_env_line',
         'printf -v "${public_env_key}"',
         'export "${public_env_key}"',
+        'runtime_env_file="${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"',
+        '. "${runtime_env_file}"',
     ):
         if required not in runner:
             raise SystemExit(
                 f"first-boot public-profile contract failed: bundle runner is missing {required}"
             )
-    if runner.find('while IFS= read -r public_env_line') < runner.find('. "${env_file}"'):
+    static_source = runner.find('. "${env_file}"')
+    public_source = runner.find('while IFS= read -r public_env_line')
+    runtime_source = runner.find('. "${runtime_env_file}"')
+    if not static_source < public_source < runtime_source:
         raise SystemExit(
-            "first-boot public-profile contract failed: public profile must override runtime defaults"
+            "first-boot environment precedence failed: installer defaults must load first, "
+            "then the public profile, then the private runtime payload"
         )
     for required in (
         'brew_attempt_log="$(mktemp)"',
