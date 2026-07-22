@@ -8,7 +8,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
-out_file="${1:-dist/bootstrap-runtime.env}"
+# Installed hosts must validate the exact private payload they downloaded.
+# Local setup and CI keep the generated dist payload as their default.
+out_file="${1:-${BOOTSTRAP_RUNTIME_VALIDATE_FILE:-dist/bootstrap-runtime.env}}"
+require_existing_payload=0
+if [ "${#}" -gt 0 ] || [ -n "${BOOTSTRAP_RUNTIME_VALIDATE_FILE:-}" ]; then
+  require_existing_payload=1
+fi
 tmp_generated=0
 kickstart_path="dist/ks-templates/rocky10.ks"
 
@@ -42,6 +48,11 @@ github_token_looks_git_capable() {
     *) return 1 ;;
   esac
 }
+
+if [ ! -f "${out_file}" ] && [ "${require_existing_payload}" = "1" ]; then
+  echo "Missing runtime payload: ${out_file}" >&2
+  exit 1
+fi
 
 if [ ! -f "${out_file}" ]; then
   bash ./tasks/scripts/build-bootstrap-runtime-env.sh "${out_file}" >/dev/null

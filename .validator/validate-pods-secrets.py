@@ -267,8 +267,14 @@ ROTATION_CONTRACTS = {
         'emit_env_line BOOTSTRAP_BACKUP_FORMAT "${BOOTSTRAP_BACKUP_FORMAT:-both}"',
     ),
     "tasks/scripts/validate-bootstrap-runtime-env.sh": (
+        'BOOTSTRAP_RUNTIME_VALIDATE_FILE:-dist/bootstrap-runtime.env',
+        'require_existing_payload=1',
         "Runtime payload must enable BOOTSTRAP_BACKUP_TO_R2",
         "Runtime payload BOOTSTRAP_BACKUP_URL must be an HTTP(S) /backup endpoint",
+    ),
+    "ansible/ansible-scripts/bootstrap/Phase-10/run-phase10.sh": (
+        'runtime_payload="${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"',
+        'BOOTSTRAP_RUNTIME_VALIDATE_FILE="${runtime_payload}"',
     ),
     "ansible/ansible-scripts/bundle-bootstrap": (
         "remove_first_boot_env_files()",

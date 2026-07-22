@@ -27,7 +27,10 @@ if [[ "${ADAETUM_CONFIG_CONTRACT:-platform/v1alpha1}" == "platform/v1alpha1" ]];
   run_phase10_check "validating fork platform profile" task platform:validate
 fi
 
-run_phase10_check "running task bootstrap:phase10:validate-runtime" task bootstrap:phase10:validate-runtime
+runtime_payload="${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}"
+run_phase10_check \
+  "validating downloaded runtime payload ${runtime_payload}" \
+  env BOOTSTRAP_RUNTIME_VALIDATE_FILE="${runtime_payload}" task bootstrap:phase10:validate-runtime
 
 cat <<'INFO'
 
