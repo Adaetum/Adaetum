@@ -7,7 +7,7 @@ spec:
   installation: rocky10
   cluster:
     domain: mudazukai.cloud
-    localDomain: mudazukai.cloud.local
+    localDomain: mudazukai.local
     overlayDomain: armadillo-peacock.ts.net
     overlayClusterTag: tag:cluster
     repository:
