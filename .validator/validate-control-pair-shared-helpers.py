@@ -1076,6 +1076,22 @@ def validate_phase50_gitea_postgresql_handoff() -> list[str]:
     return []
 
 
+def validate_gitea_asset_probe() -> list[str]:
+    """Keep the UI gate on a stable Gitea asset instead of a built bundle name."""
+    failures: list[str] = []
+    stable_asset = "/assets/img/logo.svg"
+    removed_bundle = "/assets/js/index.js"
+    for phase_name, path in (("Phase 50", PHASE_50), ("Phase 60", PHASE_60)):
+        source = path.read_text(encoding="utf-8")
+        if stable_asset not in source:
+            failures.append(f"{phase_name} Gitea UI probe must request {stable_asset}")
+        if removed_bundle in source:
+            failures.append(
+                f"{phase_name} Gitea UI probe must not depend on removed bundle {removed_bundle}"
+            )
+    return failures
+
+
 def validate_registry_token_service_discovery() -> list[str]:
     """Prove registry discovery uses canonical identity over the Service bridge."""
     discovery = functions(PHASE_60).get("discover_gitea_registry_token_service_host", "")
@@ -1246,6 +1262,7 @@ def main() -> int:
     failures.extend(validate_secret_foundation_ready())
     failures.extend(validate_phase70_realization_gate())
     failures.extend(validate_phase50_gitea_postgresql_handoff())
+    failures.extend(validate_gitea_asset_probe())
     failures.extend(validate_registry_token_service_discovery())
     failures.extend(validate_rancher_origin_settle())
     failures.extend(validate_secret_foundation_handoff())

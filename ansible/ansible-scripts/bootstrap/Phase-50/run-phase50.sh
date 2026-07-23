@@ -2171,7 +2171,7 @@ require_gitea_golden_path() {
   health_code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
     "http://127.0.0.1:${pf_port}/api/v1/version" || true)"
   asset_code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
-    "http://127.0.0.1:${pf_port}/assets/js/index.js" || true)"
+    "http://127.0.0.1:${pf_port}/assets/img/logo.svg" || true)"
   kill "${pf_pid}" >/dev/null 2>&1 || true
   wait "${pf_pid}" >/dev/null 2>&1 || true
   rm -f "${pf_log}" >/dev/null 2>&1 || true
