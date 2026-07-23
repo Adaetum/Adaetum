@@ -873,7 +873,7 @@ first_run_profile() {
 }
 
 first_run_review_profile() {
-  local proposal="$1" hook_runner="" hook_log=""
+  local proposal="$1" hook_runner="" hook_log="" current_branch="" local_head="" remote_head=""
   first_run_heading "Review public cluster configuration"
   adaetum_ui_key_value "Public domain" "${first_run_domain}"
   adaetum_ui_key_value "Tailscale tailnet" "${first_run_overlay_domain}"
@@ -885,10 +885,19 @@ first_run_review_profile() {
     first_run_status info "Dry run would write, render, commit, and push this profile."
     return
   fi
+  # Rendering is an atomic publication boundary. Starting from a clean tracked
+  # worktree lets this step stage every renderer-owned output without absorbing
+  # an operator's unrelated edits into the recovery configuration commit.
+  if ! git diff --quiet HEAD; then
+    die "The tracked worktree changed before profile rendering. Commit or stash those changes, then rerun task init."
+  fi
   mv "${proposal}" ./platform.yaml
   task platform:render
-  if ! git diff --quiet HEAD -- platform.yaml; then
-    git add platform.yaml
+  if ! git diff --quiet HEAD; then
+    # The clean baseline above means every tracked change was produced by the
+    # reviewed profile and its renderer. Commit the profile and generated
+    # GitOps inputs together so remote workflows never observe a split state.
+    git add -u
     if command -v prek >/dev/null 2>&1; then
       hook_runner="prek"
     elif command -v pre-commit >/dev/null 2>&1; then
@@ -897,7 +906,7 @@ first_run_review_profile() {
       die "Neither prek nor pre-commit is available for profile commit validation."
     fi
     hook_log="$(mktemp)"
-    if "${hook_runner}" run --config .pre-commit-config.yaml --files platform.yaml >"${hook_log}" 2>&1; then
+    if "${hook_runner}" run --config .pre-commit-config.yaml --all-files >"${hook_log}" 2>&1; then
       rm -f "${hook_log}"
       first_run_status success "Profile commit checks passed."
     else
@@ -906,10 +915,16 @@ first_run_review_profile() {
       rm -f "${hook_log}"
       die "Fix the reported profile validation failure, then rerun task init."
     fi
-    # The exact staged file was validated above. Avoid invoking the repository
-    # hook again, which would only repeat the same result plus skipped hooks.
-    git commit --no-verify -m "Configure Adaetum platform profile" -- platform.yaml
-    git push origin "$(git rev-parse --abbrev-ref HEAD)"
+    git diff --quiet || die "Profile validation changed tracked files after staging. Review the changes, then rerun task init."
+    # The complete staged recovery configuration was validated above. Avoid
+    # invoking the hook again, which would only repeat the same result.
+    git commit --no-verify -m "Configure Adaetum platform profile"
+    current_branch="$(git rev-parse --abbrev-ref HEAD)"
+    git push origin "${current_branch}"
+    local_head="$(git rev-parse HEAD)"
+    remote_head="$(git ls-remote --heads origin "${current_branch}" | awk 'NR == 1 {print $1}')"
+    [ -n "${remote_head}" ] && [ "${remote_head}" = "${local_head}" ] || \
+      die "Profile push verification failed: origin/${current_branch} does not match local HEAD."
   fi
 }
 

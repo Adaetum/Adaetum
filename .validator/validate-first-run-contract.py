@@ -181,12 +181,22 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("the temporary Tailscale user token is still persisted after OAuth bootstrap")
     if "Use ${selected_zone} as the cluster domain root?" in first_run:
         fail("Cloudflare zone selection still asks a redundant confirmation")
-    if 'run --config .pre-commit-config.yaml --files platform.yaml' not in first_run:
-        fail("profile-only commits cannot validate safely while the hook configuration is under development")
+    if 'if ! git diff --quiet HEAD; then' not in first_run:
+        fail("profile rendering does not require a clean tracked baseline")
+    if "git add -u" not in first_run:
+        fail("profile rendering does not stage its generated tracked outputs")
+    if 'run --config .pre-commit-config.yaml --all-files' not in first_run:
+        fail("profile and generated outputs are not validated together")
+    if 'git diff --quiet || die "Profile validation changed tracked files after staging.' not in first_run:
+        fail("profile publication can commit hook-modified files that were not staged and validated")
     if 'git commit --no-verify -m "Configure Adaetum platform profile"' not in first_run:
-        fail("validated development-worktree profile commits still invoke the incompatible staged-config hook")
+        fail("validated profile publication still invokes the hook twice")
+    if 'git commit --no-verify -m "Configure Adaetum platform profile" -- platform.yaml' in first_run:
+        fail("profile publication still excludes generated GitOps outputs from its commit")
+    if 'git ls-remote --heads origin "${current_branch}"' not in first_run:
+        fail("profile publication does not verify the pushed recovery branch")
     if 'first_run_status success "Profile commit checks passed."' not in first_run or '>"${hook_log}" 2>&1' not in first_run:
-        fail("successful profile-only validation still exposes skipped hook noise")
+        fail("successful profile publication still exposes skipped hook noise")
     if 'first_run_heading "Profile commit checks failed"' not in first_run or 'cat "${hook_log}"' not in first_run:
         fail("profile validation details are not shown on failure")
     if "first_run_domain=\"\"" not in first_run:
