@@ -513,6 +513,40 @@ cloudflare_bootstrap_from_pat() {
   return 0
 }
 
+validate_r2_credentials() {
+  local access_key_id="${1:-}"
+  local secret_access_key="${2:-}"
+  local endpoint="${3:-}"
+  local bucket="${4:-}"
+  local validation_output=""
+
+  [ -n "${access_key_id}" ] && [ -n "${secret_access_key}" ] && \
+    [ -n "${endpoint}" ] && [ -n "${bucket}" ] || return 1
+  command -v rclone >/dev/null 2>&1 || {
+    echo "Cannot validate R2 credentials because rclone is not installed." >&2
+    return 1
+  }
+
+  # Listing a reserved, nonexistent prefix performs a signed bucket request
+  # without printing object names or mutating recovery storage.
+  if validation_output="$(
+    RCLONE_CONFIG_ADAETUM_R2_TYPE=s3 \
+    RCLONE_CONFIG_ADAETUM_R2_PROVIDER=Cloudflare \
+    RCLONE_CONFIG_ADAETUM_R2_ACCESS_KEY_ID="${access_key_id}" \
+    RCLONE_CONFIG_ADAETUM_R2_SECRET_ACCESS_KEY="${secret_access_key}" \
+    RCLONE_CONFIG_ADAETUM_R2_ENDPOINT="${endpoint}" \
+    RCLONE_CONFIG_ADAETUM_R2_NO_CHECK_BUCKET=true \
+      rclone lsf "adaetum_r2:${bucket}/.adaetum-credential-validation" --max-depth 1 2>&1
+  )"; then
+    return 0
+  fi
+  if printf '%s' "${validation_output}" | grep -Eqi 'StatusCode: 403|Forbidden|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied'; then
+    return 2
+  fi
+  echo "Unable to validate R2 credentials because the storage endpoint could not be checked." >&2
+  return 1
+}
+
 tailscale_bootstrap_from_inputs() {
   local user_token="$1"
   local tailnet="$2"
@@ -989,6 +1023,21 @@ if [ -z "${R2_ENDPOINT}" ] && [ -n "${CLOUDFLARE_ACCOUNT_ID}" ]; then
 fi
 
 if [ -n "${CLOUDFLARE_API_TOKEN}" ]; then
+  if [ -n "${R2_ACCESS_KEY_ID}" ] && [ -n "${R2_SECRET_ACCESS_KEY}" ] && [ -n "${R2_ENDPOINT}" ]; then
+    if validate_r2_credentials "${R2_ACCESS_KEY_ID}" "${R2_SECRET_ACCESS_KEY}" "${R2_ENDPOINT}" "${R2_BUCKET}"; then
+      echo "Validated existing bucket-scoped R2 credentials."
+    else
+      r2_validation_rc=$?
+      if [ "${r2_validation_rc}" -eq 2 ]; then
+        echo "Existing R2 credentials were rejected; creating a replacement scoped credential."
+        R2_ACCESS_KEY_ID=""
+        R2_SECRET_ACCESS_KEY=""
+      else
+        echo "R2 credential validation could not complete. Refusing to rotate credentials during a transient failure." >&2
+        exit 1
+      fi
+    fi
+  fi
   if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ] || [ -z "${R2_ACCESS_KEY_ID}" ] || [ -z "${R2_SECRET_ACCESS_KEY}" ] || [ -z "${R2_ENDPOINT}" ]; then
     if cloudflare_bootstrap_from_pat \
       "${CLOUDFLARE_API_TOKEN}" \
@@ -1031,6 +1080,10 @@ R2_ENDPOINT="$(prompt_value R2_ENDPOINT 'R2_ENDPOINT' "${R2_ENDPOINT}")"
 R2_ENDPOINT="$(ensure_valid_http_url "${R2_ENDPOINT}" 'R2_ENDPOINT')"
 R2_BUCKET="${PROFILE_R2_BUCKET}"
 R2_BUCKET="$(ensure_valid_r2_bucket "${R2_BUCKET}" 'R2_BUCKET')"
+if ! validate_r2_credentials "${R2_ACCESS_KEY_ID}" "${R2_SECRET_ACCESS_KEY}" "${R2_ENDPOINT}" "${R2_BUCKET}"; then
+  echo "R2 credential validation failed. Refusing to write .env or synchronize GitHub secrets." >&2
+  exit 1
+fi
 KS_BASE_URL="${PROFILE_KS_BASE_URL}"
 KS_BASE_URL="$(ensure_valid_http_url "${KS_BASE_URL}" 'KS_BASE_URL')"
 

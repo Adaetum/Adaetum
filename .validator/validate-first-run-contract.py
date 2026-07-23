@@ -179,6 +179,14 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("Tailscale setup does not identify its excluded persistence destinations")
     if "TAILSCALE_USER_API_TOKEN=\"\"" not in (ROOT / "tasks" / "scripts" / "generate-env-files.sh").read_text(encoding="utf-8"):
         fail("the temporary Tailscale user token is still persisted after OAuth bootstrap")
+    if "validate_r2_credentials()" not in env_renderer or 'rclone lsf "adaetum_r2:${bucket}/.adaetum-credential-validation"' not in env_renderer:
+        fail("setup does not make a signed read-only request before reusing R2 credentials")
+    if "Existing R2 credentials were rejected; creating a replacement scoped credential." not in env_renderer:
+        fail("setup does not replace a rejected existing R2 credential pair")
+    if "Refusing to rotate credentials during a transient failure." not in env_renderer:
+        fail("setup can rotate R2 credentials during a transient endpoint failure")
+    if "Refusing to write .env or synchronize GitHub secrets." not in env_renderer:
+        fail("setup can persist or synchronize an unvalidated R2 credential pair")
     if "Use ${selected_zone} as the cluster domain root?" in first_run:
         fail("Cloudflare zone selection still asks a redundant confirmation")
     if 'if ! git diff --quiet HEAD; then' not in first_run:
