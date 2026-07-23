@@ -13,7 +13,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: headlamp.mudazukai.cloud.local
+    - host: headlamp.mudazukai.local
       http:
         paths:
           - path: /

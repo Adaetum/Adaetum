@@ -13,7 +13,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: grafana.mudazukai.cloud.local
+    - host: grafana.mudazukai.local
       http:
         paths:
           - path: /

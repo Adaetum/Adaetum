@@ -37,8 +37,8 @@ data:
         attrs:
           name: cluster-argocd-local-forward-auth
           mode: forward_domain
-          external_host: https://argocd.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://argocd.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -53,7 +53,7 @@ data:
           name: Cluster Argo CD (Local)
           slug: cluster-argocd-local
           provider: !KeyOf argocd-local-provider
-          meta_launch_url: https://argocd.mudazukai.cloud.local
+          meta_launch_url: https://argocd.mudazukai.local
           meta_description: Cluster Argo CD access
           policy_engine_mode: any
 
@@ -93,8 +93,8 @@ data:
         attrs:
           name: cluster-openbao-local-forward-auth
           mode: forward_domain
-          external_host: https://openbao.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://openbao.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -109,7 +109,7 @@ data:
           name: Cluster OpenBao (Local)
           slug: cluster-openbao-local
           provider: !KeyOf openbao-local-provider
-          meta_launch_url: https://openbao.mudazukai.cloud.local/ui/
+          meta_launch_url: https://openbao.mudazukai.local/ui/
           meta_description: Cluster OpenBao access
           policy_engine_mode: any
 
@@ -149,8 +149,8 @@ data:
         attrs:
           name: cluster-gitea-local-forward-auth
           mode: forward_domain
-          external_host: https://gitea.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://gitea.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -165,7 +165,7 @@ data:
           name: Cluster Gitea (Local)
           slug: cluster-gitea-local
           provider: !KeyOf gitea-local-provider
-          meta_launch_url: https://gitea.mudazukai.cloud.local
+          meta_launch_url: https://gitea.mudazukai.local
           meta_description: Cluster Gitea access
           policy_engine_mode: any
 
@@ -205,8 +205,8 @@ data:
         attrs:
           name: cluster-registry-local-forward-auth
           mode: forward_domain
-          external_host: https://registry.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://registry.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -221,7 +221,7 @@ data:
           name: Cluster Registry (Local)
           slug: cluster-registry-local
           provider: !KeyOf registry-local-provider
-          meta_launch_url: https://registry.mudazukai.cloud.local
+          meta_launch_url: https://registry.mudazukai.local
           meta_description: Cluster Registry access
           policy_engine_mode: any
 
@@ -261,8 +261,8 @@ data:
         attrs:
           name: cluster-headlamp-local-forward-auth
           mode: forward_domain
-          external_host: https://headlamp.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://headlamp.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -277,7 +277,7 @@ data:
           name: Cluster Headlamp (Local)
           slug: cluster-headlamp-local
           provider: !KeyOf headlamp-local-provider
-          meta_launch_url: https://headlamp.mudazukai.cloud.local
+          meta_launch_url: https://headlamp.mudazukai.local
           meta_description: Cluster Headlamp access
           policy_engine_mode: any
 
@@ -317,8 +317,8 @@ data:
         attrs:
           name: cluster-home-local-forward-auth
           mode: forward_domain
-          external_host: https://home.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://home.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -333,7 +333,7 @@ data:
           name: Cluster Homepage (Local)
           slug: cluster-home-local
           provider: !KeyOf home-local-provider
-          meta_launch_url: https://home.mudazukai.cloud.local
+          meta_launch_url: https://home.mudazukai.local
           meta_description: Cluster Homepage access
           policy_engine_mode: any
 
@@ -373,8 +373,8 @@ data:
         attrs:
           name: cluster-alertmanager-local-forward-auth
           mode: forward_domain
-          external_host: https://alertmanager.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://alertmanager.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -389,7 +389,7 @@ data:
           name: Cluster Alertmanager (Local)
           slug: cluster-alertmanager-local
           provider: !KeyOf alertmanager-local-provider
-          meta_launch_url: https://alertmanager.mudazukai.cloud.local
+          meta_launch_url: https://alertmanager.mudazukai.local
           meta_description: Cluster Alertmanager access
           policy_engine_mode: any
 
@@ -429,8 +429,8 @@ data:
         attrs:
           name: cluster-grafana-local-forward-auth
           mode: forward_domain
-          external_host: https://grafana.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://grafana.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -445,7 +445,7 @@ data:
           name: Cluster Grafana (Local)
           slug: cluster-grafana-local
           provider: !KeyOf grafana-local-provider
-          meta_launch_url: https://grafana.mudazukai.cloud.local
+          meta_launch_url: https://grafana.mudazukai.local
           meta_description: Cluster Grafana access
           policy_engine_mode: any
 
@@ -485,8 +485,8 @@ data:
         attrs:
           name: cluster-prometheus-local-forward-auth
           mode: forward_domain
-          external_host: https://prometheus.mudazukai.cloud.local
-          cookie_domain: .mudazukai.cloud.local
+          external_host: https://prometheus.mudazukai.local
+          cookie_domain: .mudazukai.local
           authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
           authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
           invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
@@ -501,7 +501,7 @@ data:
           name: Cluster Prometheus (Local)
           slug: cluster-prometheus-local
           provider: !KeyOf prometheus-local-provider
-          meta_launch_url: https://prometheus.mudazukai.cloud.local
+          meta_launch_url: https://prometheus.mudazukai.local
           meta_description: Cluster Prometheus access
           policy_engine_mode: any
 

@@ -10,7 +10,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: authentik.mudazukai.cloud.local
+    - host: authentik.mudazukai.local
       http:
         paths:
           - path: /

@@ -109,8 +109,8 @@ gitea:
     queue:
       TYPE: level
     server:
-      DOMAIN: gitea.mudazukai.cloud.local
-      ROOT_URL: http://gitea.mudazukai.cloud.local/
+      DOMAIN: gitea.mudazukai.local
+      ROOT_URL: http://gitea.mudazukai.local/
     oauth2:
       # A symmetric key makes OAuth signing state recoverable from OpenBao
       # instead of leaving an auto-generated private key only on the PVC.

@@ -11,7 +11,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: prometheus.mudazukai.cloud.local
+    - host: prometheus.mudazukai.local
       http:
         paths:
           - path: /

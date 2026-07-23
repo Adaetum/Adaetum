@@ -3,11 +3,11 @@ kind: ConfigMap
 metadata:
   name: observability-routing-cluster-config
 data:
-  ALERTMANAGER_LOCAL_HOST: 'alertmanager.mudazukai.cloud.local'
+  ALERTMANAGER_LOCAL_HOST: 'alertmanager.mudazukai.local'
   ALERTMANAGER_PUBLIC_HOST: 'alertmanager.mudazukai.cloud'
-  GRAFANA_LOCAL_HOST: 'grafana.mudazukai.cloud.local'
+  GRAFANA_LOCAL_HOST: 'grafana.mudazukai.local'
   GRAFANA_PUBLIC_HOST: 'grafana.mudazukai.cloud'
-  PROMETHEUS_LOCAL_HOST: 'prometheus.mudazukai.cloud.local'
+  PROMETHEUS_LOCAL_HOST: 'prometheus.mudazukai.local'
   PROMETHEUS_PUBLIC_HOST: 'prometheus.mudazukai.cloud'
   AUTHENTIK_FORWARD_AUTH_URL: 'http://authentik-server.authentik.svc.cluster.local:80/outpost.goauthentik.io/auth/nginx'
   AUTHENTIK_LOCAL_AUTH_SIGNIN: 'https://$host/outpost.goauthentik.io/start?rd=$scheme://$http_host$escaped_request_uri'

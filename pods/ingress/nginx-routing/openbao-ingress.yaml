@@ -13,7 +13,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: openbao.mudazukai.cloud.local
+    - host: openbao.mudazukai.local
       http:
         paths:
           - path: /

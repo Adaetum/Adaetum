@@ -11,7 +11,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: alertmanager.mudazukai.cloud.local
+    - host: alertmanager.mudazukai.local
       http:
         paths:
           - path: /
