@@ -22,7 +22,7 @@ jobs:
       ANSIBLE_RUNNER_IMAGE_NAME: ${{ secrets.ANSIBLE_RUNNER_IMAGE_NAME }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.3.1
 
       - name: Resolve registry target
         shell: bash
@@ -35,7 +35,7 @@ jobs:
           registry_host="${ANSIBLE_RUNNER_REGISTRY_HOST%/}"
           namespace="${ANSIBLE_RUNNER_REGISTRY_NAMESPACE:-${GITHUB_REPOSITORY_OWNER:-gitea-admin}}"
           image_name="${ANSIBLE_RUNNER_IMAGE_NAME:-ansible-runner}"
-          sha_tag="$(printf '%s' "${GITHUB_SHA:-manual}" | cut -c1-12)"
+          image_tag="$(python3 tasks/scripts/ansible_runner_image.py)"
 
           case "${registry_host}" in
             http://*|https://*)
@@ -46,7 +46,7 @@ jobs:
 
           image_ref="${registry_host}/${namespace}/${image_name}"
           echo "ANSIBLE_RUNNER_IMAGE_REF=${image_ref}" >> "${GITHUB_ENV}"
-          echo "ANSIBLE_RUNNER_IMAGE_SHA_TAG=${sha_tag}" >> "${GITHUB_ENV}"
+          echo "ANSIBLE_RUNNER_IMAGE_TAG=${image_tag}" >> "${GITHUB_ENV}"
 
       - name: Log in to registry
         shell: bash
@@ -62,9 +62,7 @@ jobs:
           set -euo pipefail
           docker build \
             -f ansible/Dockerfile \
-            -t "${ANSIBLE_RUNNER_IMAGE_REF}:latest" \
-            -t "${ANSIBLE_RUNNER_IMAGE_REF}:${ANSIBLE_RUNNER_IMAGE_SHA_TAG}" \
+            -t "${ANSIBLE_RUNNER_IMAGE_REF}:${ANSIBLE_RUNNER_IMAGE_TAG}" \
             .
 
-          docker push "${ANSIBLE_RUNNER_IMAGE_REF}:latest"
-          docker push "${ANSIBLE_RUNNER_IMAGE_REF}:${ANSIBLE_RUNNER_IMAGE_SHA_TAG}"
+          docker push "${ANSIBLE_RUNNER_IMAGE_REF}:${ANSIBLE_RUNNER_IMAGE_TAG}"

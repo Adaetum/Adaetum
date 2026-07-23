@@ -109,7 +109,7 @@ ROTATION_CONTRACTS = {
         "secretName: authentik-admin",
     ),
     "pods/authentik/authentik.app.yaml": (
-        'source_target_revision: "2026.5.5"',
+            'source_target_revision: "2026.5.6"',
         "serviceAccountName: authentik-csi",
         "secretProviderClass: authentik-openbao",
         "name: authentik-encryption",

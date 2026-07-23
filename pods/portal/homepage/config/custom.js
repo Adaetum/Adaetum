@@ -1,77 +1,56 @@
 (() => {
-  const applyHomepageScopeFilter = () => {
-  const host = window.location.hostname.toLowerCase();
-  const localView = host.endsWith(".local");
-  const publicView = host.endsWith(".cloud");
+  const localPortalHost = "__HOMEPAGE_LOCAL_HOST__".toLowerCase();
+  const publicPortalHost = "__HOMEPAGE_PUBLIC_HOST__".toLowerCase();
+  const currentHost = window.location.hostname.toLowerCase();
 
-  if (!localView && !publicView) {
+  if (currentHost !== localPortalHost && currentHost !== publicPortalHost) {
     return;
   }
 
-  const cardAnchors = Array.from(document.querySelectorAll('a[href]')).filter((anchor) => {
-    try {
-      const hrefHost = new URL(anchor.href, window.location.origin).hostname.toLowerCase();
-      return hrefHost.endsWith(".local") || hrefHost.endsWith(".cloud");
-    } catch {
-      return false;
-    }
-  });
+  const useLocalRoutes = currentHost === localPortalHost;
+  const routePairs = [
+    ["__ARGOCD_PUBLIC_HOST__", "__ARGOCD_LOCAL_HOST__"],
+    ["__GITEA_PUBLIC_HOST__", "__GITEA_LOCAL_HOST__"],
+    ["__OPENBAO_PUBLIC_HOST__", "__OPENBAO_LOCAL_HOST__"],
+    ["__AUTHENTIK_PUBLIC_HOST__", "__AUTHENTIK_LOCAL_HOST__"],
+    ["__HEADLAMP_PUBLIC_HOST__", "__HEADLAMP_LOCAL_HOST__"],
+    ["__ALERTMANAGER_PUBLIC_HOST__", "__ALERTMANAGER_LOCAL_HOST__"],
+    ["__GRAFANA_PUBLIC_HOST__", "__GRAFANA_LOCAL_HOST__"],
+    ["__PROMETHEUS_PUBLIC_HOST__", "__PROMETHEUS_LOCAL_HOST__"],
+    ["__REGISTRY_PUBLIC_HOST__", "__REGISTRY_LOCAL_HOST__"],
+    ["__RANCHER_PUBLIC_HOST__", "__RANCHER_LOCAL_HOST__"],
+  ].map(([publicHost, localHost]) => [publicHost.toLowerCase(), localHost.toLowerCase()]);
 
-  const normalizeCardText = (card, sourceSuffix) => {
-    const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
-    const suffixPattern = sourceSuffix === "local" ? /\s+\(internal\)/gi : /\s+\(public\)/gi;
-    while (walker.nextNode()) {
-      const node = walker.currentNode;
-      node.textContent = node.textContent.replace(suffixPattern, "");
-    }
-  };
+  const hostMap = new Map(
+    routePairs.map(([publicHost, localHost]) => [
+      useLocalRoutes ? publicHost : localHost,
+      useLocalRoutes ? localHost : publicHost,
+    ]),
+  );
 
-  const findCardContainer = (anchor) => {
-    const candidates = [];
-    let node = anchor;
-    while (node && node !== document.body) {
-      if (
-        node.matches?.(
-          '.service, .service-card, .card, li, article, section, [class*="service"], [class*="card"]',
-        )
-      ) {
-        candidates.push(node);
+  const applyRouteScope = () => {
+    for (const anchor of document.querySelectorAll("a[href]")) {
+      try {
+        const url = new URL(anchor.href, window.location.origin);
+        const targetHost = hostMap.get(url.hostname.toLowerCase());
+        if (targetHost && targetHost !== url.hostname.toLowerCase()) {
+          url.hostname = targetHost;
+          anchor.href = url.toString();
+        }
+      } catch {
+        // Homepage may briefly render incomplete links while hydrating.
       }
-      node = node.parentElement;
     }
-
-    if (candidates.length === 0) {
-      return anchor.parentElement;
-    }
-
-    return candidates[candidates.length - 1];
-  };
-
-  for (const anchor of cardAnchors) {
-    const hrefHost = new URL(anchor.href, window.location.origin).hostname.toLowerCase();
-    const targetScope = hrefHost.endsWith(".local") ? "local" : "public";
-    const card = findCardContainer(anchor);
-    if (!card) {
-      continue;
-    }
-    if ((localView && targetScope === "public") || (publicView && targetScope === "local")) {
-      card.style.display = "none";
-      continue;
-    }
-    normalizeCardText(card, targetScope);
-  }
   };
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", applyHomepageScopeFilter, { once: true });
+    document.addEventListener("DOMContentLoaded", applyRouteScope, { once: true });
   } else {
-    applyHomepageScopeFilter();
+    applyRouteScope();
   }
 
-  const observer = new MutationObserver(() => applyHomepageScopeFilter());
-  observer.observe(document.documentElement, { childList: true, subtree: true });
-
-  window.addEventListener("load", applyHomepageScopeFilter, { once: true });
-  setTimeout(applyHomepageScopeFilter, 500);
-  setTimeout(applyHomepageScopeFilter, 1500);
+  new MutationObserver(applyRouteScope).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
 })();

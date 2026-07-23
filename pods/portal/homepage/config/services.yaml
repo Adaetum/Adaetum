@@ -1,8 +1,19 @@
-- GitOps and Source of Truth:
-    - Argo CD (internal):
+- Cluster Operations:
+    - Rancher:
+        icon: rancher.png
+        href: https://__RANCHER_PUBLIC_HOST__/
+        description: Cluster lifecycle and workload management
+        siteMonitor: http://rancher.cattle-system.svc.cluster.local/healthz
+    - Headlamp:
+        icon: mdi-kubernetes
+        href: https://__HEADLAMP_PUBLIC_HOST__/
+        description: Kubernetes resources, workloads, and security posture
+        siteMonitor: http://headlamp.headlamp.svc.cluster.local/
+- GitOps and Source:
+    - Argo CD:
         icon: si-argo
-        href: https://__ARGOCD_LOCAL_HOST__/
-        description: GitOps control plane on LAN or VPN
+        href: https://__ARGOCD_PUBLIC_HOST__/
+        description: Desired state, synchronization, and application health
         siteMonitor: http://argocd-server.argocd.svc.cluster.local/healthz
         widget:
           type: argocd
@@ -13,15 +24,10 @@
             - synced
             - outOfSync
             - healthy
-    - Argo CD (public):
-        icon: si-argo
-        href: https://__ARGOCD_PUBLIC_HOST__/
-        description: Public route for off-network access
-        siteMonitor: http://argocd-server.argocd.svc.cluster.local/healthz
-    - Gitea (internal):
+    - Gitea:
         icon: gitea.png
-        href: https://__GITEA_LOCAL_HOST__/
-        description: Source control and registry frontend on LAN or VPN
+        href: https://__GITEA_PUBLIC_HOST__/
+        description: Recovery repository, source control, and automation
         siteMonitor: http://gitea-http.gitea.svc.cluster.local:3000/api/healthz
         widget:
           type: gitea
@@ -32,63 +38,22 @@
             - notifications
             - issues
             - pulls
-    - Gitea (public):
-        icon: gitea.png
-        href: https://__GITEA_PUBLIC_HOST__/
-        description: Public route for source control
-        siteMonitor: http://gitea-http.gitea.svc.cluster.local:3000/api/healthz
-- Secrets, Identity, and Policy:
-    - OpenBao (internal):
-        icon: si-vault
-        href: https://__OPENBAO_LOCAL_HOST__/ui/
-        description: Secrets authority UI on LAN or VPN
-        siteMonitor: http://openbao.openbao.svc.cluster.local:8200/v1/sys/health
-    - OpenBao (public):
+- Secrets and Identity:
+    - OpenBao:
         icon: si-vault
         href: https://__OPENBAO_PUBLIC_HOST__/ui/
-        description: Public OpenBao UI route
+        description: Secrets, credentials, and rotation authority
         siteMonitor: http://openbao.openbao.svc.cluster.local:8200/v1/sys/health
-    - Authentik (internal):
-        icon: authentik.png
-        href: https://__AUTHENTIK_LOCAL_HOST__/
-        description: Identity provider on LAN or VPN
-        siteMonitor: http://authentik-server.authentik.svc.cluster.local/-/health/live/
-    - Authentik (public):
+    - Authentik:
         icon: authentik.png
         href: https://__AUTHENTIK_PUBLIC_HOST__/
-        description: Public authentication route
+        description: Identity provider and access control
         siteMonitor: http://authentik-server.authentik.svc.cluster.local/-/health/live/
-- Cluster Foundation:
-    - Headlamp (internal):
-        icon: mdi-kubernetes
-        href: https://__HEADLAMP_LOCAL_HOST__/
-        description: Kubernetes UI with Kubescape plugin on LAN or VPN
-        siteMonitor: http://headlamp.headlamp.svc.cluster.local/
-    - Headlamp (public):
-        icon: mdi-kubernetes
-        href: https://__HEADLAMP_PUBLIC_HOST__/
-        description: Public Kubernetes UI route
-        siteMonitor: http://headlamp.headlamp.svc.cluster.local/
-    - Rancher:
-        icon: rancher.png
-        href: https://__RANCHER_PUBLIC_HOST__/
-        description: Out-of-band cluster management route
-        siteMonitor: https://__RANCHER_PUBLIC_HOST__/
-- Observability, Portal, and Automation:
-    - Alertmanager (internal):
-        icon: si-prometheus
-        href: https://__ALERTMANAGER_LOCAL_HOST__/
-        description: Alert routing UI on LAN or VPN
-        siteMonitor: http://alertmanager.observability.svc.cluster.local:9093/-/healthy
-    - Alertmanager (public):
-        icon: si-prometheus
-        href: https://__ALERTMANAGER_PUBLIC_HOST__/
-        description: Public alerting route
-        siteMonitor: http://alertmanager.observability.svc.cluster.local:9093/-/healthy
-    - Grafana (internal):
+- Metrics and Alerts:
+    - Grafana:
         icon: grafana.png
-        href: https://__GRAFANA_LOCAL_HOST__/
-        description: Dashboards and visualization on LAN or VPN
+        href: https://__GRAFANA_PUBLIC_HOST__/
+        description: Dashboards, visualization, and alert exploration
         siteMonitor: http://grafana.observability.svc.cluster.local/api/health
         widget:
           type: grafana
@@ -102,15 +67,10 @@
             - datasources
             - totalalerts
             - alertstriggered
-    - Grafana (public):
-        icon: grafana.png
-        href: https://__GRAFANA_PUBLIC_HOST__/
-        description: Public dashboards route
-        siteMonitor: http://grafana.observability.svc.cluster.local/api/health
-    - Prometheus (internal):
+    - Prometheus:
         icon: si-prometheus
-        href: https://__PROMETHEUS_LOCAL_HOST__/
-        description: Metrics query and target UI on LAN or VPN
+        href: https://__PROMETHEUS_PUBLIC_HOST__/
+        description: Metrics queries, scrape targets, and service health
         siteMonitor: http://prometheus-operated.observability.svc.cluster.local:9090/-/healthy
         widget:
           type: prometheus
@@ -119,29 +79,26 @@
             - targets_up
             - targets_down
             - targets_total
-    - Prometheus (public):
+    - Alertmanager:
         icon: si-prometheus
-        href: https://__PROMETHEUS_PUBLIC_HOST__/
-        description: Public Prometheus route
-        siteMonitor: http://prometheus-operated.observability.svc.cluster.local:9090/-/healthy
-    - GitHub:
-        icon: github.png
-        href: https://github.com/
-        description: Upstream source control and automation
-        siteMonitor: https://github.com/
-- Networking and Edge Access:
-    - Registry:
+        href: https://__ALERTMANAGER_PUBLIC_HOST__/
+        description: Alert routing, silences, and active notifications
+        siteMonitor: http://alertmanager.observability.svc.cluster.local:9093/-/healthy
+- Network and Delivery:
+    - Container Registry:
         icon: mdi-docker
         href: https://__REGISTRY_PUBLIC_HOST__/
-        description: Public registry route through nginx ingress
+        description: Private images served by the recovery Gitea registry
         siteMonitor: http://gitea-http.gitea.svc.cluster.local:3000/api/healthz
     - Cloudflare:
         icon: cloudflare.png
         href: https://dash.cloudflare.com/
-        description: DNS, tunnels, and edge controls
-        siteMonitor: https://dash.cloudflare.com/
+        description: Public DNS, tunnels, and edge controls
     - Tailscale:
         icon: tailscale.png
         href: https://login.tailscale.com/admin/machines
-        description: Tailnet device and access management
-        siteMonitor: https://login.tailscale.com/admin/machines
+        description: Tailnet devices and private network access
+    - Adaetum on GitHub:
+        icon: github.png
+        href: https://github.com/Adaetum/Adaetum
+        description: Upstream project, releases, and documentation

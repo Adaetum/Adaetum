@@ -326,6 +326,16 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("platform bootstrap does not retag nodes with the OAuth-authorized Rocky tag")
     if "tag:rke2" in platform_bootstrap:
         fail("platform bootstrap still requests the retired, unauthorized tag:rke2")
+    single_node_pod_contract = (
+        'rke2_single_node_max_pods: 150',
+        'rke2_default_max_pods: 110',
+        'max-pods={{ rke2_single_node_max_pods }}',
+        'rke2_ready_control_plane_count.stdout | default(\'0\') | int >= 3',
+        'Restart only servers leaving single-node pod capacity',
+        'Verify restored servers advertise the default pod limit',
+    )
+    if any(fragment not in platform_bootstrap for fragment in single_node_pod_contract):
+        fail("RKE2 bootstrap pod headroom does not safely return to the upstream default after HA expansion")
     if 'Using the Cloudflare token authorized during provider setup.' not in setup:
         fail("setup re-prompts for the Cloudflare token captured during first run")
     if 'Using the GitHub credential authorized during repository setup.' not in setup:

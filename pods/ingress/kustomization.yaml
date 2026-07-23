@@ -18,6 +18,7 @@ resources:
   - nginx-routing/homepage-public-ingress.yaml
   - nginx-routing/registry-ingress.yaml
   - nginx-routing/registry-public-ingress.yaml
+  - nginx-routing/rancher-ingress.yaml
   - observability-routing
 
 replacements:
@@ -321,6 +322,16 @@ replacements:
         fieldPaths:
           - spec.rules.0.host
           - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.RANCHER_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: rancher-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
   - source:
       kind: ConfigMap
       name: ingress-cluster-config

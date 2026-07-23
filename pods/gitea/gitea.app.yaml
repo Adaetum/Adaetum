@@ -3,7 +3,7 @@ project: default
 source_type: helm
 source_repo_url: https://dl.gitea.io/charts/
 source_chart: gitea
-source_target_revision: "12.5.0"
+source_target_revision: "12.7.0"
 source_helm_value_files:
   - $values/pods/gitea/gitea-values.yaml
 ignore_differences:

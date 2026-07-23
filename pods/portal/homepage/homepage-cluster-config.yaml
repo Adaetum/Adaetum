@@ -4,7 +4,9 @@ metadata:
   name: homepage-cluster-config
 data:
   GITEA_LOCAL_HOST: 'gitea.mudazukai.local'
+  GITEA_PUBLIC_HOST: 'gitea.mudazukai.cloud'
   ARGOCD_LOCAL_HOST: 'argocd.mudazukai.local'
+  ARGOCD_PUBLIC_HOST: 'argocd.mudazukai.cloud'
   HOMEPAGE_LOCAL_HOST: 'home.mudazukai.local'
   HOMEPAGE_PUBLIC_HOST: 'home.mudazukai.cloud'
   HOMEPAGE_ALLOWED_HOSTS: 'home.mudazukai.local,home.mudazukai.cloud,homepage.homepage.svc.cluster.local,homepage.homepage.svc,localhost,127.0.0.1'
@@ -20,5 +22,7 @@ data:
   GRAFANA_PUBLIC_HOST: 'grafana.mudazukai.cloud'
   PROMETHEUS_LOCAL_HOST: 'prometheus.mudazukai.local'
   PROMETHEUS_PUBLIC_HOST: 'prometheus.mudazukai.cloud'
+  REGISTRY_LOCAL_HOST: 'registry.mudazukai.local'
   REGISTRY_PUBLIC_HOST: 'registry.mudazukai.cloud'
+  RANCHER_LOCAL_HOST: 'rancher.mudazukai.local'
   RANCHER_PUBLIC_HOST: 'rancher.mudazukai.cloud'

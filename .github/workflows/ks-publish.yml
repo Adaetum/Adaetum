@@ -80,10 +80,10 @@ jobs:
       RANCHER_CLOUDFLARED_TUNNEL_TOKEN: ${{ secrets.RANCHER_CLOUDFLARED_TUNNEL_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Cache pip
-        uses: actions/cache@v5
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/ks-publish.yml') }}
@@ -98,7 +98,7 @@ jobs:
           python3 -m pip install awscli jinja2
 
       - name: Install go-task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@v3.0.0
 
       - name: Validate generated kickstarts
         run: |

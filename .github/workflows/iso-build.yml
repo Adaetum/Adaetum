@@ -44,7 +44,7 @@ jobs:
       arches: ${{ steps.matrix.outputs.arches }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Build matrix
         id: matrix
@@ -113,10 +113,10 @@ jobs:
       RANCHER_CLOUDFLARED_TUNNEL_TOKEN: ${{ secrets.RANCHER_CLOUDFLARED_TUNNEL_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Cache pip
-        uses: actions/cache@v5
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/iso-build.yml') }}
@@ -186,7 +186,7 @@ jobs:
 
       - name: Restore golden ISO cache
         id: cache-golden
-        uses: actions/cache@v5
+        uses: actions/cache@v6.1.0
         with:
           path: .cache/iso-cache
           key: golden-iso-${{ steps.resolve-ks.outputs.golden_iso_key }}

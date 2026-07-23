@@ -54,7 +54,7 @@ spec:
           initContainers:
             - name: detect-change
               # Pinned because this pod can mutate Argo CD's credential state.
-              image: bitnami/kubectl:latest@sha256:558420daf32bbc382e3e9af4537f4073085b336ddd47399a3b70e70087115978
+              image: registry.k8s.io/kubectl:v1.35.6@sha256:4d8c68e8c2bf360b1808927c4d39fb13998c106cac903622d127a2275c844126
               imagePullPolicy: IfNotPresent
               command: ["/bin/bash", "-ec"]
               args:
@@ -78,7 +78,7 @@ spec:
                   mountPath: /work
             - name: hash-password
               # htpasswd is used only for the bcrypt operation Argo CD requires.
-              image: httpd:2.4.65-alpine@sha256:07b2fabb7029a0b8aeb2e0fd02651c28fe22c21c5b5a59d6ff5b022791fcd89e
+              image: httpd:2.4.68-alpine@sha256:1b766f17b84026429b7cb243317b142921b24432336e798bc881c43f45ed9567
               imagePullPolicy: IfNotPresent
               command: ["/bin/sh", "-ec"]
               args:
@@ -98,7 +98,7 @@ spec:
                   mountPath: /work
           containers:
             - name: apply-password
-              image: bitnami/kubectl:latest@sha256:558420daf32bbc382e3e9af4537f4073085b336ddd47399a3b70e70087115978
+              image: registry.k8s.io/kubectl:v1.35.6@sha256:4d8c68e8c2bf360b1808927c4d39fb13998c106cac903622d127a2275c844126
               imagePullPolicy: IfNotPresent
               command: ["/bin/bash", "-ec"]
               args:

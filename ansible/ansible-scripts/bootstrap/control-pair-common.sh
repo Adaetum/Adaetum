@@ -587,10 +587,13 @@ PY
     return 0
   fi
   registry_host="$(ansible_runner_registry_host_effective)"
-  printf '%s/%s/%s:latest' \
+  local image_tag=""
+  image_tag="$(python3 "${repo_root}/tasks/scripts/ansible_runner_image.py")" || return 1
+  printf '%s/%s/%s:%s' \
     "${registry_host}" \
     "${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
-    "${ANSIBLE_RUNNER_IMAGE_NAME:-ansible-runner}"
+    "${ANSIBLE_RUNNER_IMAGE_NAME:-ansible-runner}" \
+    "${image_tag}"
 }
 ansible_runner_registry_host_pull() {
   local registry_host="${ANSIBLE_RUNNER_REGISTRY_HOST:-registry.${CLUSTER_DOMAIN}}"
@@ -1155,7 +1158,7 @@ spec:
   source:
     repoURL: ${GITEA_CHART_REPO}
     chart: gitea
-    targetRevision: "12.5.0"
+    targetRevision: "12.7.0"
     helm:
       values: |
         podSecurityContext:

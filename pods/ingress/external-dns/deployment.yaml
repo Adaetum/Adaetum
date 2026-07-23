@@ -23,7 +23,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: external-dns
-          image: registry.k8s.io/external-dns/external-dns:v0.14.2
+          image: registry.k8s.io/external-dns/external-dns:v0.21.0@sha256:f53faaf71cb270d1ca9dce6ea0c94bfebf1a18696263487f0fbc74b9bf2bd7ff
           imagePullPolicy: IfNotPresent
           env:
             - name: EXTERNAL_DNS_DOMAIN_FILTER

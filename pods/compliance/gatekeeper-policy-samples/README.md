@@ -5,8 +5,7 @@ These manifests are the default Gatekeeper policy set applied through GitOps.
 Current sample:
 - `disallow-latest-tags`
   - denies container images that omit a tag or use `:latest`
-  - excludes the `ansible` namespace so `ansible-runner` can remain on `latest`
-  - exempts specific bundled image prefixes that are still intentionally using `:latest`
+  - applies to every namespace; bundled workloads use explicit image versions
 
 Argo CD apps:
 - `pods/compliance/gatekeeper-policy-templates.app.yaml`

@@ -23,3 +23,4 @@ data:
   HEADLAMP_PUBLIC_HOST: 'headlamp.mudazukai.cloud'
   REGISTRY_LOCAL_HOST: 'registry.mudazukai.local'
   REGISTRY_PUBLIC_HOST: 'registry.mudazukai.cloud'
+  RANCHER_LOCAL_HOST: 'rancher.mudazukai.local'

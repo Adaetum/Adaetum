@@ -3,7 +3,7 @@ project: default
 source_type: helm
 source_repo_url: https://prometheus-community.github.io/helm-charts
 source_chart: alertmanager
-source_target_revision: ">=0.0.0"
+source_target_revision: "1.40.3"
 source_helm_values: |
   persistence:
     enabled: true

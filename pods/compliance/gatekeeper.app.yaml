@@ -5,7 +5,7 @@ annotations:
 source_type: helm
 source_repo_url: https://open-policy-agent.github.io/gatekeeper/charts
 source_chart: gatekeeper
-source_target_revision: "3.20.0"
+source_target_revision: "3.23.0"
 source_helm_skip_crds: true
 sync_options:
   - RespectIgnoreDifferences=true

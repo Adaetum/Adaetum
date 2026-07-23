@@ -16,7 +16,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: ingress-vip
-              image: bitnami/kubectl:latest
+              image: registry.k8s.io/kubectl:v1.35.6@sha256:4d8c68e8c2bf360b1808927c4d39fb13998c106cac903622d127a2275c844126
               imagePullPolicy: IfNotPresent
               command:
                 - /bin/sh

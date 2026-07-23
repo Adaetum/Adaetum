@@ -4,7 +4,7 @@ This app provides a baseline cluster portal with curated internal and public
 links plus built-in health indicators.
 
 What it does
-- Exposes a simple service catalog for the known cluster UIs and routes.
+- Exposes one consistent service catalog for every known operator-facing UI.
 - Uses Homepage's `siteMonitor` feature for route status.
 - Uses native Homepage widgets where supported. The current setup forces the
   stable in-cluster widgets on for Argo CD, Gitea, Grafana, and Prometheus.
@@ -12,9 +12,11 @@ What it does
   route they need.
 
 Notes
-- Internal and public reachability are authored as separate cards, but the
-  browser now hides the opposite-scope cards at runtime. Users on `.local`
-  only see the internal cards, and users on `.cloud` only see the public cards.
+- Internal and public views render the same cards, groups, widgets, and labels.
+  The browser changes only the destination hostname: `.local` visitors receive
+  local ingress links while public visitors receive public ingress links.
+- Rancher has an Adaetum-owned local ingress so its card follows the same
+  environment-aware link behavior as the other cluster UIs.
 - Homepage monitors from the cluster, not from each user's browser, so this is
   cluster-vantage health rather than true end-user ISP/LAN vantage.
 - `config/bookmarks.yaml` is intentionally empty so Homepage does not render its

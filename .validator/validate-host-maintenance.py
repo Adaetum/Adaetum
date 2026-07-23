@@ -60,8 +60,8 @@ def main() -> int:
                 f"Kured rendered {key}={configuration.get(key)!r}, expected {expected_value!r}"
             )
 
-    if app.get("source_target_revision") != "5.12.0":
-        failures.append("Kured chart must remain pinned to reviewed version 5.12.0")
+    if app.get("source_target_revision") != "6.1.0":
+        failures.append("Kured chart must remain pinned to reviewed version 6.1.0")
     if "RespectIgnoreDifferences=true" not in app.get("sync_options", []):
         failures.append("Argo must respect Kured's live lock annotation")
     ignored = app.get("ignore_differences", [])

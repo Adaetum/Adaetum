@@ -6,7 +6,7 @@ source_type: helm
 source_repo_url: https://charts.goauthentik.io
 source_chart: authentik
 # Rotation relies on this chart's lifecycle and environment-value rendering.
-source_target_revision: "2026.5.5"
+source_target_revision: "2026.5.6"
 source_helm_values: |
   authentik:
     error_reporting:
@@ -44,7 +44,7 @@ source_helm_values: |
               done
     initContainers:
       - name: wait-for-postgresql
-        image: public.ecr.aws/docker/library/busybox:1.36
+        image: public.ecr.aws/docker/library/busybox:1.38.0@sha256:fd8d9aa63ba2f0982b5304e1ee8d3b90a210bc1ffb5314d980eb6962f1a9715d
         command:
           - sh
           - -ec
@@ -87,7 +87,7 @@ source_helm_values: |
     serviceAccountName: authentik-csi
     initContainers:
       - name: wait-for-postgresql
-        image: public.ecr.aws/docker/library/busybox:1.36
+        image: public.ecr.aws/docker/library/busybox:1.38.0@sha256:fd8d9aa63ba2f0982b5304e1ee8d3b90a210bc1ffb5314d980eb6962f1a9715d
         command:
           - sh
           - -ec

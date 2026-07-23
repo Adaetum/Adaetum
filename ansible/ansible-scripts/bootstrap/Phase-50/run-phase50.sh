@@ -853,14 +853,12 @@ apply_ansible_runner_deployment() {
   write_secret_file ansible_runner_image "${runner_image}"
 
   rendered="$(python3 - <<'PY' "${manifest_path}" "${runner_image}" "${pull_secret}"
-import pathlib, sys
+import pathlib, re, sys
 path = pathlib.Path(sys.argv[1])
 image = sys.argv[2]
 pull_secret = sys.argv[3]
 text = path.read_text(encoding="utf-8")
-text = text.replace("gitea.example.local/gitea-admin/ansible-runner:latest", image)
-text = text.replace("registry.example.local/gitea-admin/ansible-runner:latest", image)
-text = text.replace("gitea-http.gitea.svc.cluster.local:3000/gitea-admin/ansible-runner:latest", image)
+text = re.sub(r"(?m)^(\s+image:)\s+\S+$", rf"\1 {image}", text, count=1)
 text = text.replace("name: gitea-registry-creds", f"name: {pull_secret}")
 print(text, end="")
 PY
@@ -1281,8 +1279,8 @@ ensure_gitea_actions_runner() {
   local runner_token="${1:-}"
   local instance_url="${2:-${GITEA_INTERNAL_URL:-}}"
   local runner_name="${3:-bootstrap-runner}"
-  local runner_image="${GITEA_RUNNER_IMAGE:-gitea/act_runner:latest}"
-  local dind_image="${GITEA_RUNNER_DIND_IMAGE:-docker:27-dind}"
+  local runner_image="${GITEA_RUNNER_IMAGE:-gitea/runner:2.2.0@sha256:968b93c034b6231be037b8abce159dedbf7eb16adbc79ee2b1555c0eea31a4d3}"
+  local dind_image="${GITEA_RUNNER_DIND_IMAGE:-docker:29.6.2-dind@sha256:bfec1f5159c63a81ca6fdedbd81404d2c0e16378ed0feec3bb3fbf3998847659}"
   local runner_labels="${GITEA_RUNNER_LABELS:-ubuntu-latest:docker://gitea/runner-images:ubuntu-latest,ubuntu-24.04:docker://gitea/runner-images:ubuntu-24.04,ubuntu-22.04:docker://gitea/runner-images:ubuntu-22.04}"
 
   if [[ -z "${runner_token}" ]]; then

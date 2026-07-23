@@ -12,12 +12,3 @@ spec:
           - ""
         kinds:
           - Pod
-  parameters:
-    exemptNamespaces:
-      - ansible
-    exemptImages:
-      - "bitnami/kubectl"
-      - "cloudflare/cloudflared"
-      - "ghcr.io/openbao/openbao"
-      - "caronc/apprise"
-      - "quay.io/kubescape/kubescape"

@@ -36,6 +36,9 @@ It currently:
 - uses the repo-local Ansible configuration
 - runs [`platform-bootstrap.yml`](../../../playbooks/platform-bootstrap.yml)
   with `bootstrap_secret_dir` and `platform_distribution`
+- gives the first RKE2 server 150 pod slots for bootstrap rollout headroom;
+  later servers retain RKE2's 110-pod default, and the first server returns to
+  that default only after three control-plane servers are Ready
 
 That means Phase 30 is already behaving primarily as the platform-establishment
 phase. There is not much to change conceptually here beyond keeping the
@@ -55,6 +58,8 @@ Typical outcomes include:
 - foundational platform services
 - enough readiness for Phase 40 to initialize and promote authority into
   OpenBao
+- temporary first-node pod capacity that cannot trigger a control-plane restart
+  before the cluster has three Ready control-plane servers
 
 ## Inputs
 

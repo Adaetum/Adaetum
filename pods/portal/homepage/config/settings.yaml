@@ -6,21 +6,21 @@ quicklaunch:
   searchDescriptions: true
   hideInternetSearch: true
 layout:
-  GitOps and Source of Truth:
+  Cluster Operations:
     style: row
     columns: 2
-  Secrets, Identity, and Policy:
+  GitOps and Source:
     style: row
     columns: 2
-  Cluster Foundation:
+  Secrets and Identity:
     style: row
     columns: 2
-  Observability, Portal, and Automation:
+  Metrics and Alerts:
     style: row
-    columns: 2
-  Networking and Edge Access:
+    columns: 3
+  Network and Delivery:
     style: row
-    columns: 2
+    columns: 4
 providers:
   longhorn:
     url: http://longhorn-frontend.longhorn-system.svc.cluster.local

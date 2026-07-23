@@ -5,7 +5,7 @@ annotations:
 source_type: helm
 source_repo_url: https://kubernetes-sigs.github.io/headlamp/
 source_chart: headlamp
-source_target_revision: "0.41.0"
+source_target_revision: "0.43.0"
 source_helm_values: |
   ingress:
     # Disabled: routing is handled by nginx Ingress manifests in pods/ingress/nginx-routing.

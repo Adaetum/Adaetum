@@ -18,6 +18,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PROFILE = REPO_ROOT / "platform.yaml"
 PODS_RENDERER = REPO_ROOT / "tasks" / "scripts" / "render-pods-config.py"
 PROFILE_VALIDATOR = REPO_ROOT / "tasks" / "scripts" / "validate-platform-profile.py"
+ANSIBLE_RUNNER_IMAGE_HELPER = REPO_ROOT / "tasks" / "scripts" / "ansible_runner_image.py"
+
+
+def ansible_runner_image_tag() -> str:
+    """Load the shared build-input hash without relying on caller import paths."""
+    spec = importlib.util.spec_from_file_location("ansible_runner_image", ANSIBLE_RUNNER_IMAGE_HELPER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load ansible-runner image tag helper")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.image_tag()
 
 
 def load_pods_renderer():
@@ -90,6 +101,7 @@ def config_from_profile(profile: dict) -> dict[str, str]:
         "PROMETHEUS_PUBLIC_HOST": host("prometheus", domain),
         "PROMETHEUS_LOCAL_HOST": host("prometheus", local_domain),
         "RANCHER_PUBLIC_HOST": host("rancher", domain),
+        "RANCHER_LOCAL_HOST": host("rancher", local_domain),
         "AUTHENTIK_PUBLIC_HOST": host("authentik", domain),
         "AUTHENTIK_LOCAL_HOST": host("authentik", local_domain),
         "AUTHENTIK_FORWARD_AUTH_URL": "http://authentik-server.authentik.svc.cluster.local:80/outpost.goauthentik.io/auth/nginx",
@@ -99,7 +111,7 @@ def config_from_profile(profile: dict) -> dict[str, str]:
         "AUTHENTIK_AUTH_SNIPPET": "proxy_set_header X-Forwarded-Host $http_host;",
         "REGISTRY_LOCAL_HOST": host("registry", local_domain),
         "REGISTRY_PUBLIC_HOST": host("registry", domain),
-        "ANSIBLE_RUNNER_IMAGE": f"registry.{domain}/{owner}/ansible-runner:latest",
+        "ANSIBLE_RUNNER_IMAGE": f"registry.{domain}/{owner}/ansible-runner:{ansible_runner_image_tag()}",
         "TAILSCALE_DOMAIN": cluster["overlayDomain"],
         "TAILSCALE_CLUSTER_TAG": cluster["overlayClusterTag"],
         "EXTERNAL_DNS_DOMAIN_FILTER": domain,

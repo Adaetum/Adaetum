@@ -9,9 +9,17 @@
   vars:
     bootstrap_secret_dir: "/var/lib/bootstrap-secrets"
     rke2_role: "{{ hostvars[inventory_hostname].rke2_role | default('server') }}"
-    rke2_version: ""
+    # Rancher 2.14 supports the Kubernetes 1.35 line. Pin its current RKE2
+    # patch so a stable-channel change cannot alter bootstrap behavior.
+    rke2_version: "v1.35.6+rke2r1"
     rke2_channel: "stable"
     rke2_config_path: "/etc/rancher/rke2/config.yaml"
+    # The complete platform briefly shares one kubelet during bootstrap. Keep
+    # its extra pod headroom in a removable drop-in so HA expansion can restore
+    # the upstream kubelet default without rewriting the secret-bearing config.
+    rke2_single_node_pod_limit_path: "/etc/rancher/rke2/config.yaml.d/10-adaetum-single-node-pods.yaml"
+    rke2_single_node_max_pods: 150
+    rke2_default_max_pods: 110
     rke2_server_hosts: "{{ groups['servers'] | default(groups['all'] | default([inventory_hostname])) }}"
     rke2_server_count: "{{ rke2_server_hosts | length }}"
     rke2_join_candidate_hosts: "{{ rke2_server_hosts | reject('equalto', inventory_hostname) | list }}"
@@ -134,13 +142,15 @@
     # by the OpenBao rotation reconciler.
     rancher_chart_version: "2.14.3"
     longhorn_chart_repo: "https://charts.longhorn.io"
+    longhorn_chart_version: "1.12.0"
+    cert_manager_chart_version: "v1.21.0"
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
     # OpenBao Redis ownership and Reloader annotations depend on this chart
     # contract; upgrades require a rendered-secret review.
     argocd_chart_version: "10.1.4"
     argocd_enabled: "{{ (lookup('ansible.builtin.env', 'ARGOCD_ENABLED') | default('false', true)) | bool }}"
     cloudflared_namespace: "cloudflared"
-    cloudflared_image: "cloudflare/cloudflared:latest"
+    cloudflared_image: "cloudflare/cloudflared:2026.7.2@sha256:4f6655284ab3d252b7f28fedb19fe6c8fc82ee5b1295c20ac74d475e5398a52d"
     cloudflared_tunnel_token: "{{ lookup('ansible.builtin.env', 'RANCHER_CLOUDFLARED_TUNNEL_TOKEN') | default('', true) }}"
     cloudflared_enabled: "{{ cloudflared_tunnel_token | length > 0 }}"
     cloudflare_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_API_TOKEN') | default('', true) }}"
@@ -150,12 +160,12 @@
     gitea_runner_image: >-
       {{
         lookup('ansible.builtin.env', 'GITEA_RUNNER_IMAGE')
-        | default('gitea/act_runner:latest', true)
+        | default('gitea/runner:2.2.0@sha256:968b93c034b6231be037b8abce159dedbf7eb16adbc79ee2b1555c0eea31a4d3', true)
       }}
     gitea_runner_dind_image: >-
       {{
         lookup('ansible.builtin.env', 'GITEA_RUNNER_DIND_IMAGE')
-        | default('docker:27-dind', true)
+        | default('docker:29.6.2-dind@sha256:bfec1f5159c63a81ca6fdedbd81404d2c0e16378ed0feec3bb3fbf3998847659', true)
       }}
     gitea_runner_labels: >-
       {{
@@ -634,6 +644,12 @@
         state: directory
         mode: "0755"
 
+    - name: Ensure rke2 config drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ rke2_single_node_pod_limit_path | dirname }}"
+        state: directory
+        mode: "0755"
+
     - name: Write rke2 config (server)
       ansible.builtin.copy:
         dest: "{{ rke2_config_path }}"
@@ -680,6 +696,29 @@
       no_log: true
       when:
         - rke2_role == "agent"
+
+    - name: Give the first server single-node pod headroom
+      ansible.builtin.copy:
+        dest: "{{ rke2_single_node_pod_limit_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Temporary bootstrap capacity. Phase 30 removes this drop-in only
+          # after three control-plane servers are Ready and etcd has HA quorum.
+          kubelet-arg:
+            - "max-pods={{ rke2_single_node_max_pods }}"
+      when:
+        - rke2_role == "server"
+        - inventory_hostname == rke2_primary_host
+        - rke2_server_count | int == 1
+
+    - name: Keep joining nodes on the upstream kubelet pod limit
+      ansible.builtin.file:
+        path: "{{ rke2_single_node_pod_limit_path }}"
+        state: absent
+      when:
+        - inventory_hostname != rke2_primary_host
 
     - name: Install rke2
       ansible.builtin.shell: |
@@ -837,6 +876,105 @@
                   primary rke2-server journal:
                   {{ (rke2_primary_journal_after_failure.stdout | default('')) | trim }}
 
+    - name: Wait for a joining control-plane server to become Ready
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} --kubeconfig {{ kubeconfig_path }} get node \
+          {{ inventory_hostname | regex_replace('\\..*$', '') | quote }} \
+          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' | grep -qx True
+      args:
+        executable: /bin/bash
+      register: rke2_joining_server_ready
+      retries: 60
+      delay: 10
+      until: rke2_joining_server_ready.rc == 0
+      changed_when: false
+      delegate_to: "{{ rke2_primary_host }}"
+      when:
+        - rke2_role == "server"
+        - inventory_hostname != rke2_primary_host
+
+    - name: Count Ready control-plane servers after join
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} --kubeconfig {{ kubeconfig_path }} get nodes \
+          -l node-role.kubernetes.io/control-plane --no-headers \
+          | awk '$2 ~ /^Ready/ {count++} END {print count+0}'
+      args:
+        executable: /bin/bash
+      register: rke2_ready_control_plane_count
+      changed_when: false
+      delegate_to: "{{ rke2_primary_host }}"
+      when:
+        - rke2_role == "server"
+        - inventory_hostname != rke2_primary_host
+
+    - name: Inspect single-node pod-limit drop-ins after HA expansion
+      ansible.builtin.stat:
+        path: "{{ rke2_single_node_pod_limit_path }}"
+      register: rke2_single_node_pod_limit_inspections
+      delegate_to: "{{ item }}"
+      loop: "{{ rke2_server_hosts }}"
+      when:
+        - rke2_role == "server"
+        - inventory_hostname != rke2_primary_host
+        - rke2_ready_control_plane_count.stdout | default('0') | int >= 3
+
+    - name: Remove single-node pod-limit drop-ins after HA expansion
+      ansible.builtin.file:
+        path: "{{ rke2_single_node_pod_limit_path }}"
+        state: absent
+      register: rke2_single_node_pod_limit_removals
+      delegate_to: "{{ item.item }}"
+      loop: "{{ rke2_single_node_pod_limit_inspections.results | default([]) }}"
+      when:
+        - (item.stat | default({})).exists | default(false)
+
+    - name: Restart only servers leaving single-node pod capacity
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: restarted
+      delegate_to: "{{ item.item.item }}"
+      loop: "{{ rke2_single_node_pod_limit_removals.results | default([]) }}"
+      when:
+        - item.changed | default(false)
+
+    - name: Wait for HA control planes after restoring the default pod limit
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ready_count="$({{ kubectl_cmd }} --kubeconfig {{ kubeconfig_path }} get nodes \
+          -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null \
+          | awk '$2 ~ /^Ready/ {count++} END {print count+0}')"
+        test "${ready_count}" -ge 3
+      args:
+        executable: /bin/bash
+      register: rke2_control_planes_ready_after_pod_limit_reset
+      retries: 60
+      delay: 10
+      until: rke2_control_planes_ready_after_pod_limit_reset.rc == 0
+      changed_when: false
+      when:
+        - rke2_single_node_pod_limit_removals is defined
+        - rke2_single_node_pod_limit_removals.results | default([]) | selectattr('changed', 'defined') | selectattr('changed') | list | length > 0
+
+    - name: Verify restored servers advertise the default pod limit
+      ansible.builtin.shell: |
+        set -euo pipefail
+        actual="$({{ kubectl_cmd }} --kubeconfig {{ kubeconfig_path }} get node \
+          {{ item.item.item | regex_replace('\\..*$', '') | quote }} \
+          -o jsonpath='{.status.allocatable.pods}')"
+        test "${actual}" = "{{ rke2_default_max_pods }}"
+      args:
+        executable: /bin/bash
+      register: rke2_default_pod_limit_verified
+      retries: 30
+      delay: 10
+      until: rke2_default_pod_limit_verified.rc == 0
+      changed_when: false
+      loop: "{{ rke2_single_node_pod_limit_removals.results | default([]) }}"
+      when:
+        - item.changed | default(false)
+
     - name: Wait for kubeconfig to exist
       ansible.builtin.wait_for:
         path: "{{ kubeconfig_path }}"
@@ -937,6 +1075,7 @@
         {{ helm_cmd }} repo add jetstack https://charts.jetstack.io
         {{ helm_cmd }} repo update
         {{ helm_cmd }} upgrade --install cert-manager jetstack/cert-manager \
+          --version {{ cert_manager_chart_version }} \
           --namespace cert-manager \
           --set installCRDs=true \
           --wait \
@@ -1464,6 +1603,7 @@
       ansible.builtin.shell: |
         {{ kubectl_cmd }} create namespace longhorn-system --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
         {{ helm_cmd }} upgrade --install longhorn longhorn/longhorn \
+          --version {{ longhorn_chart_version }} \
           --namespace longhorn-system \
           --create-namespace \
           --set persistence.defaultClassReplicaCount={{ longhorn_default_replica_count }} \
@@ -1486,6 +1626,7 @@
       ansible.builtin.shell: |
         {{ kubectl_cmd }} create namespace longhorn-system --dry-run=client -o yaml | {{ kubectl_cmd }} apply -f -
         {{ helm_cmd }} upgrade --install longhorn longhorn/longhorn \
+          --version {{ longhorn_chart_version }} \
           --namespace longhorn-system \
           --create-namespace \
           --set persistence.defaultClassReplicaCount={{ longhorn_default_replica_count }} \
