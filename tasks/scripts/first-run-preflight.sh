@@ -858,7 +858,9 @@ first_run_profile() {
     "Selected from the authorized Tailscale account above. Adaetum uses it for node enrollment and private service DNS."
   adaetum_ui_key_value "Selected" "${first_run_overlay_domain}"
   bootstrap_url="https://bootstrap.${first_run_domain}"
-  first_run_local_domain="${first_run_domain}.local"
+  # The private namespace replaces the public suffix; appending `.local`
+  # would turn mudazukai.cloud into the unintended mudazukai.cloud.local.
+  first_run_local_domain="${first_run_domain%.*}.local"
   first_run_overlay_tag="tag:cluster"
   first_run_repository_owner="gitea-admin"
   first_run_repository_name="cluster"

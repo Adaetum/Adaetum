@@ -765,7 +765,7 @@ tasks:
     internal: true
     desc: Interactive R2 backup wizard (select node, download .7z, extract to dist)
     cmds:
-      - cmd: ./tasks/scripts/download-backup-interactive.sh
+      - cmd: bash ./tasks/scripts/download-backup-interactive.sh
         platforms: [linux, darwin]
       - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/download-backup-interactive.sh
         platforms: [windows]

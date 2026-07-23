@@ -452,6 +452,10 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("normal first-run reruns forget the saved Cloudflare zone")
     if "Reusing saved Tailscale DNS name" not in first_run:
         fail("normal first-run reruns forget the saved Tailscale DNS name")
+    if 'first_run_local_domain="${first_run_domain%.*}.local"' not in first_run:
+        fail("first-run does not replace the public suffix when deriving the local domain")
+    if 'first_run_local_domain="${first_run_domain}.local"' in first_run:
+        fail("first-run still appends .local to the complete public domain")
     if "Tailscale returned no discoverable device DNS names; reusing saved DNS name" not in first_run:
         fail("an empty Tailscale device list discards the saved DNS name")
     if "durable saved OAuth client replaces the expired temporary Tailscale setup token" not in first_run:
