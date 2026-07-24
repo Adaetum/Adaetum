@@ -50,6 +50,7 @@ def show(profile: dict) -> None:
         "overlay_cluster_tag": cluster["overlayClusterTag"],
         "repository_owner": cluster["repository"]["owner"],
         "repository_name": cluster["repository"]["name"],
+        "repository_branch": cluster["repository"]["branch"],
         "bootstrap_base_url": delivery["bootstrapBaseUrl"],
         "r2_bucket": delivery["r2Bucket"],
     }
@@ -68,6 +69,7 @@ def main() -> int:
     parser.add_argument("--overlay-cluster-tag")
     parser.add_argument("--repository-owner")
     parser.add_argument("--repository-name")
+    parser.add_argument("--repository-branch")
     parser.add_argument("--bootstrap-base-url")
     parser.add_argument("--r2-bucket")
     args = parser.parse_args()
@@ -90,7 +92,11 @@ def main() -> int:
     cluster["localDomain"] = args.local_domain.strip().lower()
     cluster["overlayDomain"] = args.overlay_domain.strip().lower()
     cluster["overlayClusterTag"] = args.overlay_cluster_tag.strip()
-    cluster["repository"] = {"owner": args.repository_owner.strip(), "name": args.repository_name.strip()}
+    cluster["repository"] = {
+        "owner": args.repository_owner.strip(),
+        "name": args.repository_name.strip(),
+        "branch": (args.repository_branch or cluster["repository"]["branch"]).strip(),
+    }
     delivery["bootstrapBaseUrl"] = args.bootstrap_base_url.strip().rstrip("/")
     delivery["r2Bucket"] = args.r2_bucket.strip().lower()
 

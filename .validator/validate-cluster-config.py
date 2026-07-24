@@ -19,6 +19,7 @@ REQUIRED_KEYS = (
     "CLUSTER_LOCAL_DOMAIN",
     "GITEA_REPO_OWNER",
     "GITEA_REPO_NAME",
+    "GITOPS_REPO_BRANCH",
     "GITEA_PUBLIC_HOST",
     "GITEA_LOCAL_HOST",
     "GITEA_CANONICAL_HOST",
@@ -173,6 +174,15 @@ def validate_values(values: dict[str, str]) -> list[str]:
         value = values.get(key, "")
         if value and not REPO_RE.fullmatch(value):
             failures.append(f"{CONFIG_PATH.relative_to(REPO_ROOT)}: invalid repo token for {key}: {value}")
+
+    branch = values.get("GITOPS_REPO_BRANCH", "")
+    if branch and (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", branch)
+        or branch.endswith(("/", "."))
+        or ".." in branch
+        or "//" in branch
+    ):
+        failures.append(f"{CONFIG_PATH.relative_to(REPO_ROOT)}: invalid Git branch: {branch}")
 
     tag = values.get("TAILSCALE_CLUSTER_TAG", "")
     if tag and not tag.startswith("tag:"):

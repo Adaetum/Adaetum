@@ -97,6 +97,20 @@ def main() -> int:
         else:
             actual = extract_yaml_value(path, r"(?m)^\s*repoURL:\s*(\S+)\s*$", "source repoURL")
             expect_equal(failures, path, "source repoURL", actual, repo_url)
+        branch_values = re.findall(
+            r"(?m)^\s*(?:revision|targetRevision):\s*['\"]?([^'\"\s]+)",
+            load_text(path),
+        )
+        for branch in branch_values:
+            # Helm chart versions are not repository branches; only validate
+            # self-referential Git sources in these Argo bootstrap manifests.
+            if branch == config["GITOPS_REPO_BRANCH"]:
+                break
+        else:
+            failures.append(
+                f"{path.relative_to(REPO_ROOT)}: missing configured GitOps branch "
+                f"{config['GITOPS_REPO_BRANCH']}"
+            )
 
     gitea_values = load_text(REPO_ROOT / "pods" / "gitea" / "gitea-values.yaml")
     if f"DOMAIN: {config['GITEA_CANONICAL_HOST']}" not in gitea_values:

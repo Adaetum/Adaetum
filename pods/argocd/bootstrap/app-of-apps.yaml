@@ -7,7 +7,7 @@ spec:
   project: default
   source:
     repoURL: http://gitea-http.gitea.svc.cluster.local:3000/gitea-admin/cluster.git
-    targetRevision: HEAD
+    targetRevision: main
     path: pods/argocd/bootstrap
   destination:
     server: https://kubernetes.default.svc

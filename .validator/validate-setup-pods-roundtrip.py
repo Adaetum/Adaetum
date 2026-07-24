@@ -38,6 +38,8 @@ def main() -> int:
         failures.append("profile render did not preserve spec.cluster.repository.owner")
     if values.get("GITEA_REPO_NAME") != cluster["repository"]["name"]:
         failures.append("profile render did not preserve spec.cluster.repository.name")
+    if values.get("GITOPS_REPO_BRANCH") != cluster["repository"]["branch"]:
+        failures.append("profile render did not preserve spec.cluster.repository.branch")
     if values.get("TAILSCALE_CLUSTER_TAG") != cluster["overlayClusterTag"]:
         failures.append("profile render did not preserve spec.cluster.overlayClusterTag")
     if values.get("GITEA_PUBLIC_HOST") != f"gitea.{cluster['domain']}":

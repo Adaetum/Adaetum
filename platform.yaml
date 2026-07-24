@@ -13,6 +13,7 @@ spec:
     repository:
       owner: gitea-admin
       name: cluster
+      branch: main
   delivery:
     bootstrapBaseUrl: https://bootstrap.mudazukai.cloud
     r2Bucket: iso

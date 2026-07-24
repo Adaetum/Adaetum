@@ -11,7 +11,7 @@ spec:
   generators:
     - git:
         repoURL: __INTERNAL_GIT_REPO_URL__
-        revision: HEAD
+        revision: __GITOPS_REPO_BRANCH__
         files:
           - path: pods/*/*.app.yaml
 
@@ -36,7 +36,7 @@ spec:
     spec:
       source:
         repoURL: '__INTERNAL_GIT_REPO_URL__'
-        targetRevision: '{{ .source_target_revision }}'
+        targetRevision: '__GITOPS_REPO_BRANCH__'
         path: '{{ .source_path }}'
       {{- if .ignore_differences }}
       ignoreDifferences:
@@ -73,7 +73,7 @@ spec:
     {{ .source_helm_values | nindent 14 }}
             {{- end }}
         - repoURL: 'http://gitea-http.gitea.svc.cluster.local:3000/gitea-admin/cluster.git'
-          targetRevision: '{{ default "HEAD" .source_values_target_revision }}'
+          targetRevision: '__GITOPS_REPO_BRANCH__'
           ref: '{{ default "values" .source_values_ref }}'
       {{- else }}
       source:

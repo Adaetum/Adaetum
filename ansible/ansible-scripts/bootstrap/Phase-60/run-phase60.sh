@@ -1631,6 +1631,31 @@ except Exception:
 }
 
 
+verify_gitea_seed_branch_tip() {
+  local repo_branch="${1:-}"
+  local expected_tip="${2:-}"
+  local pushed_refs="${3:-}"
+  local actual_tip=""
+
+  if [[ -z "${repo_branch}" || "${repo_branch}" == "HEAD" || -z "${expected_tip}" ]]; then
+    echo "[phase60] cannot verify an unresolved Gitea seed branch tip" >&2
+    return 1
+  fi
+  actual_tip="$(
+    awk -v ref="refs/heads/${repo_branch}" '$2 == ref { print $1; exit }' <<<"${pushed_refs}"
+  )"
+  if [[ -z "${actual_tip}" ]]; then
+    echo "[phase60] mirrored Gitea repo is missing refs/heads/${repo_branch}" >&2
+    return 1
+  fi
+  if [[ "${actual_tip}" != "${expected_tip}" ]]; then
+    echo "[phase60] mirrored Gitea branch tip mismatch for ${repo_branch}: source=${expected_tip} target=${actual_tip}" >&2
+    return 1
+  fi
+  echo "[phase60] verified mirrored Gitea branch tip ${repo_branch}@${actual_tip:0:12}"
+}
+
+
 seed_gitea_bootstrap_repo() {
   local admin_password="${1:-}"
   local canonical_url="${2:-}"
@@ -1672,6 +1697,7 @@ seed_gitea_bootstrap_repo() {
   local source_repo_token_source="none"
   local source_repo_username_source="none"
   local github_app_token=""
+  local expected_branch_tip=""
 
   github_app_refresh_repo_auth || true
   if [[ -z "${source_repo_token}" ]]; then
@@ -1896,6 +1922,13 @@ SH
       if [[ "${git_clone_rc}" == "0" ]]; then
         cloned_remote_repo="1"
         seeded_from_remote="1"
+        expected_branch_tip="$(
+          git -C "${tmp_dir}/repo.git" rev-parse --verify "refs/heads/${source_repo_branch}^{commit}" 2>/dev/null || true
+        )"
+        if [[ -z "${expected_branch_tip}" ]]; then
+          echo "[phase60] ERROR: source repo does not contain refs/heads/${source_repo_branch}" >&2
+          return 1
+        fi
       else
         echo "[phase60] ERROR: remote repo clone failed for ${source_repo_url}" >&2
         return 1
@@ -1950,6 +1983,8 @@ SH
       echo "[phase60] ERROR: mirrored repo push completed but Gitea still exposes no readable refs" >&2
       return 1
     fi
+    verify_gitea_seed_branch_tip \
+      "${source_repo_branch}" "${expected_branch_tip}" "${pushed_refs}" || return 1
   fi
 
   reconcile_gitea_default_branch \

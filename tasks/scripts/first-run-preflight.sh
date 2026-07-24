@@ -869,7 +869,8 @@ first_run_profile() {
   python3 ./tasks/scripts/configure-platform-profile.py --profile ./platform.yaml --output "${proposal}" \
     --domain "${first_run_domain}" --local-domain "${first_run_local_domain}" --overlay-domain "${first_run_overlay_domain}" \
     --overlay-cluster-tag "${first_run_overlay_tag}" --repository-owner "${first_run_repository_owner}" \
-    --repository-name "${first_run_repository_name}" --bootstrap-base-url "${first_run_bootstrap_url}" --r2-bucket "${first_run_r2_bucket}"
+    --repository-name "${first_run_repository_name}" --repository-branch main \
+    --bootstrap-base-url "${first_run_bootstrap_url}" --r2-bucket "${first_run_r2_bucket}"
 }
 
 first_run_review_profile() {

@@ -76,11 +76,22 @@ def validate_profile(profile: dict[str, Any]) -> list[str]:
             if not isinstance(cluster.get(field), str) or not cluster[field].strip():
                 errors.append(f"spec.cluster.{field} must be a non-empty string")
         repository = cluster.get("repository")
+        if isinstance(repository, dict):
+            unknown_repository_fields = set(repository) - {"owner", "name", "branch"}
+            if unknown_repository_fields:
+                errors.append(
+                    "unknown spec.cluster.repository fields: "
+                    + ", ".join(sorted(unknown_repository_fields))
+                )
         if not isinstance(repository, dict) or not all(
             isinstance(repository.get(field), str) and repository[field].strip()
-            for field in ("owner", "name")
+            for field in ("owner", "name", "branch")
         ):
-            errors.append("spec.cluster.repository.owner and .name must be non-empty strings")
+            errors.append("spec.cluster.repository.owner, .name, and .branch must be non-empty strings")
+        elif not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", repository["branch"]):
+            errors.append("spec.cluster.repository.branch must be a valid Git branch name")
+        elif repository["branch"].endswith(("/", ".")) or ".." in repository["branch"] or "//" in repository["branch"]:
+            errors.append("spec.cluster.repository.branch must be a valid Git branch name")
 
     delivery = spec.get("delivery")
     if not isinstance(delivery, dict):

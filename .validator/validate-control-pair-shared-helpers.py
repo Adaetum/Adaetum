@@ -1289,6 +1289,37 @@ fi
     return [f"Gitea default-branch reconciliation failed: {detail}"]
 
 
+def validate_gitea_seed_branch_tip() -> list[str]:
+    """Require the mirrored recovery branch to match its probed source tip."""
+    implementation = functions(PHASE_60).get("verify_gitea_seed_branch_tip")
+    if not implementation:
+        return ["Phase 60 is missing verify_gitea_seed_branch_tip"]
+    fixture = r'''
+set -euo pipefail
+refs=$'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/heads/other'
+verify_gitea_seed_branch_tip main aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "${refs}"
+if verify_gitea_seed_branch_tip main bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "${refs}" >/dev/null 2>&1; then
+  echo 'mismatched mirrored branch tip was accepted' >&2
+  exit 1
+fi
+if verify_gitea_seed_branch_tip missing aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "${refs}" >/dev/null 2>&1; then
+  echo 'missing mirrored branch was accepted' >&2
+  exit 1
+fi
+'''
+    result = subprocess.run(
+        ["bash", "-c", implementation + fixture],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"Gitea seed branch-tip verification failed: {detail}"]
+
+
 def main() -> int:
     phase_50_functions = functions(PHASE_50)
     phase_60_functions = functions(PHASE_60)
@@ -1315,6 +1346,7 @@ def main() -> int:
     failures.extend(validate_rancher_origin_settle())
     failures.extend(validate_secret_foundation_handoff())
     failures.extend(validate_gitea_default_branch_reconciliation())
+    failures.extend(validate_gitea_seed_branch_tip())
     if duplicates:
         print("Move exact shared helpers into control-pair-common.sh:", file=sys.stderr)
         print("\n".join(f"- {name}" for name in duplicates), file=sys.stderr)
