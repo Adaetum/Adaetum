@@ -1585,6 +1585,52 @@ EOF
 
 
 
+reconcile_gitea_default_branch() {
+  local base_url="${1:-}"
+  local admin_token="${2:-}"
+  local target_owner="${3:-}"
+  local target_repo="${4:-}"
+  local repo_branch="${5:-}"
+  local payload=""
+  local repo_meta=""
+  local actual_branch=""
+
+  if [[ -z "${base_url}" || -z "${admin_token}" || -z "${target_owner}" || -z "${target_repo}" ]]; then
+    echo "[phase60] missing inputs for Gitea default-branch reconciliation" >&2
+    return 1
+  fi
+  if [[ -z "${repo_branch}" || "${repo_branch}" == "HEAD" ]]; then
+    echo "[phase60] refusing to leave Gitea bootstrap repo on an unresolved default branch" >&2
+    return 1
+  fi
+
+  payload="$(python3 -c 'import json,sys; print(json.dumps({"default_branch": sys.argv[1]}))' "${repo_branch}")"
+  repo_meta="$(
+    curl -fsS -H "Authorization: token ${admin_token}" \
+      -X PATCH "${base_url}/api/v1/repos/${target_owner}/${target_repo}" \
+      -H "Content-Type: application/json" \
+      -d "${payload}"
+  )" || {
+    echo "[phase60] failed to set Gitea bootstrap repo default branch to ${repo_branch}" >&2
+    return 1
+  }
+  actual_branch="$(
+    printf '%s' "${repo_meta}" | python3 -c '
+import json,sys
+try:
+  print((json.load(sys.stdin).get("default_branch") or "").strip())
+except Exception:
+  print("")
+'
+  )"
+  if [[ "${actual_branch}" != "${repo_branch}" ]]; then
+    echo "[phase60] Gitea bootstrap repo default branch mismatch: expected ${repo_branch}, got ${actual_branch:-<empty>}" >&2
+    return 1
+  fi
+  echo "[phase60] Gitea bootstrap repo default branch -> ${repo_branch}"
+}
+
+
 seed_gitea_bootstrap_repo() {
   local admin_password="${1:-}"
   local canonical_url="${2:-}"
@@ -1905,6 +1951,9 @@ SH
       return 1
     fi
   fi
+
+  reconcile_gitea_default_branch \
+    "${base_url}" "${admin_token}" "${target_owner}" "${target_repo}" "${source_repo_branch}"
 
   echo "[phase60] bootstrap repo auto-render disabled; using seeded repo state as-is"
 

@@ -1241,6 +1241,54 @@ def validate_secret_foundation_handoff() -> list[str]:
     return failures
 
 
+def validate_gitea_default_branch_reconciliation() -> list[str]:
+    """Keep Argo HEAD resolution pinned to the selected recovery branch."""
+    implementation = functions(PHASE_60).get("reconcile_gitea_default_branch")
+    if not implementation:
+        return ["Phase 60 is missing reconcile_gitea_default_branch"]
+    fixture = r'''
+set -euo pipefail
+MOCK_RETURN_BRANCH=main
+PATCH_SEEN=0
+
+curl() {
+  [[ " $* " == *" -X PATCH "* ]]
+  [[ " $* " == *" /api/v1/repos/gitea-admin/cluster "* ]]
+  [[ " $* " == *' "default_branch": "main" '* ]]
+  PATCH_SEEN=1
+  printf '{"default_branch":"%s"}' "${MOCK_RETURN_BRANCH}"
+}
+
+reconcile_gitea_default_branch \
+  http://gitea token gitea-admin cluster main
+[[ "${PATCH_SEEN}" == 1 ]]
+
+MOCK_RETURN_BRANCH=stale
+if reconcile_gitea_default_branch \
+  http://gitea token gitea-admin cluster main >/dev/null 2>&1; then
+  echo 'mismatched Gitea default branch was accepted' >&2
+  exit 1
+fi
+
+if reconcile_gitea_default_branch \
+  http://gitea token gitea-admin cluster HEAD >/dev/null 2>&1; then
+  echo 'unresolved Gitea default branch was accepted' >&2
+  exit 1
+fi
+'''
+    result = subprocess.run(
+        ["bash", "-c", implementation + fixture],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+    return [f"Gitea default-branch reconciliation failed: {detail}"]
+
+
 def main() -> int:
     phase_50_functions = functions(PHASE_50)
     phase_60_functions = functions(PHASE_60)
@@ -1266,6 +1314,7 @@ def main() -> int:
     failures.extend(validate_registry_token_service_discovery())
     failures.extend(validate_rancher_origin_settle())
     failures.extend(validate_secret_foundation_handoff())
+    failures.extend(validate_gitea_default_branch_reconciliation())
     if duplicates:
         print("Move exact shared helpers into control-pair-common.sh:", file=sys.stderr)
         print("\n".join(f"- {name}" for name in duplicates), file=sys.stderr)
