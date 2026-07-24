@@ -96,7 +96,8 @@ spec:
                   mountPath: /work
           containers:
             - name: promote-passwords
-              image: registry.k8s.io/kubectl:v1.35.6@sha256:4d8c68e8c2bf360b1808927c4d39fb13998c106cac903622d127a2275c844126
+              # Promotion needs Bash and jq as well as kubectl.
+              image: alpine/k8s:1.35.6@sha256:b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807
               imagePullPolicy: IfNotPresent
               command: ["/bin/bash", "-ec"]
               args:

@@ -319,7 +319,7 @@ ROTATION_CONTRACTS = {
         "seed_openbao_app_fields authentik/postgresql",
         "authentik-postgresql-desired",
         "read_openbao_app_field authentik/admin bootstrap_password",
-        "read_openbao_app_field gitea/actions-runner token",
+        "mint_gitea_actions_runner_token",
         "seed_openbao_app_fields gitea/actions-runner",
         "bootstrap_wait_for_external_secret_delivery",
         "secret.reloader.stakater.com/reload: gitea-actions-runner",
@@ -701,6 +701,36 @@ def validate_rotation_contracts() -> list[str]:
     return failures
 
 
+def validate_rotation_toolbox_images() -> list[str]:
+    """Keep shell-based rotation jobs on an image containing their required tools."""
+    failures: list[str] = []
+    toolbox_image = (
+        "alpine/k8s:1.35.6@sha256:"
+        "b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807"
+    )
+    rotation_paths = (
+        "pods/authentik/authentik-secret-sync/postgresql-rotation.yaml",
+        "pods/argocd/secret-sync/admin-rotation.yaml",
+        "pods/gitea/gitea-secret-sync/postgresql-rotation.yaml",
+        "pods/observability/grafana-secret-sync/homepage-viewer-rotation.yaml",
+        "pods/secrets/rancher-secret-sync/rotation.yaml",
+    )
+    for relative_path in rotation_paths:
+        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        bash_containers = text.count('command: ["/bin/bash", "-ec"]')
+        toolbox_containers = text.count(f"image: {toolbox_image}")
+        if toolbox_containers != bash_containers:
+            failures.append(
+                f"{relative_path}: each Bash rotation container must use the pinned "
+                "kubectl/curl/jq toolbox image"
+            )
+        if "registry.k8s.io/kubectl" in text and bash_containers:
+            failures.append(
+                f"{relative_path}: the kubectl-only image does not provide /bin/bash"
+            )
+    return failures
+
+
 def validate_ansible_secret_logging() -> list[str]:
     """Require redaction exactly where Ansible handles secret values."""
     failures: list[str] = []
@@ -935,6 +965,7 @@ def main() -> int:
     for path in iter_files():
         failures.extend(validate_file(path))
     failures.extend(validate_rotation_contracts())
+    failures.extend(validate_rotation_toolbox_images())
     failures.extend(validate_ansible_secret_logging())
     failures.extend(validate_post_handoff_secret_writers())
     failures.extend(validate_committed_secret_manifests())

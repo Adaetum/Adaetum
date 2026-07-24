@@ -697,6 +697,33 @@ find_ready_gitea_pod() {
   done
   return 1
 }
+mint_gitea_actions_runner_token() {
+  local pod=""
+  local output=""
+  local token=""
+
+  pod="$(find_ready_gitea_pod)" || {
+    echo "Gitea has no Ready pod; cannot mint an Actions runner registration token" >&2
+    return 1
+  }
+  output="$(
+    "${kubectl_bin}" -n gitea exec "${pod}" -c gitea -- \
+      gitea actions generate-runner-token 2>/dev/null
+  )" || {
+    echo "Gitea failed to mint an Actions runner registration token" >&2
+    return 1
+  }
+  token="$(printf '%s\n' "${output}" | awk 'NF { value=$0 } END { print value }' | tr -d '\r\n')"
+  # Registration tokens are opaque Gitea values. Validate only the transport
+  # contract so future Gitea token-format changes do not break bootstrap.
+  if (( ${#token} < 20 )) || [[ "${token}" =~ [[:space:]] ]]; then
+    echo "Gitea returned a malformed Actions runner registration token" >&2
+    return 1
+  fi
+
+  write_secret_file gitea_runner_token "${token}"
+  printf '%s' "${token}"
+}
 start_gitea_local_portforward() {
   local pod=""
   local pf_port=""

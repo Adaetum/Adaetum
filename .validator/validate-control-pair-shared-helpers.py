@@ -111,6 +111,61 @@ MOCK_ENDPOINT_IP=None
     return [f"Service address helper behavior failed: {detail}"]
 
 
+def validate_gitea_runner_token_mint() -> list[str]:
+    """Require Gitea to mint the runner token after its pod is Ready."""
+    source_path = shlex.quote(str(SHARED_HELPERS))
+    script = rf'''
+set -euo pipefail
+source {source_path}
+
+BOOTSTRAP_SECRET_DIR="$(mktemp -d)"
+trap 'rm -rf "${{BOOTSTRAP_SECRET_DIR}}"' EXIT
+kubectl_bin=mock_kubectl
+MOCK_MODE=valid
+find_ready_gitea_pod() {{ printf '%s' gitea-0; }}
+mock_kubectl() {{
+  case "${{MOCK_MODE}}" in
+    valid) printf '%s\n%s\n' 'registration token:' '0123456789abcdef0123456789abcdef' ;;
+    malformed) printf '%s\n' 'short' ;;
+    failed) return 1 ;;
+  esac
+}}
+
+token="$(mint_gitea_actions_runner_token)"
+[[ "${{token}}" == 0123456789abcdef0123456789abcdef ]]
+[[ "$(cat "${{BOOTSTRAP_SECRET_DIR}}/gitea_runner_token")" == "${{token}}" ]]
+MOCK_MODE=malformed
+if mint_gitea_actions_runner_token >/dev/null 2>&1; then
+  echo 'malformed Gitea runner token was accepted' >&2
+  exit 1
+fi
+MOCK_MODE=failed
+if mint_gitea_actions_runner_token >/dev/null 2>&1; then
+  echo 'failed Gitea token mint was accepted' >&2
+  exit 1
+fi
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    failures: list[str] = []
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+        failures.append(f"Gitea runner token mint behavior failed: {detail}")
+
+    for path in (PHASE_40, REPOSITORY_ROOT / "ansible/playbooks/platform-bootstrap.yml"):
+        if "gitea_runner_token" in path.read_text(encoding="utf-8"):
+            failures.append(f"{path.relative_to(REPOSITORY_ROOT)} pre-generates Gitea's runner token")
+    phase_50 = PHASE_50.read_text(encoding="utf-8")
+    if 'gitea_runner_token_effective="$(mint_gitea_actions_runner_token)"' not in phase_50:
+        failures.append("Phase 50 does not mint the runner registration token from Ready Gitea")
+    return failures
+
+
 def validate_gitea_token_helpers() -> list[str]:
     """Exercise scope rejection and post-promotion stale-token revocation."""
     source_path = shlex.quote(str(SHARED_HELPERS))
@@ -1329,6 +1384,7 @@ def main() -> int:
         if phase_60_functions.get(name) == implementation
     )
     failures = validate_service_address_helper()
+    failures.extend(validate_gitea_runner_token_mint())
     failures.extend(validate_gitea_token_helpers())
     failures.extend(validate_homepage_credential_handoff())
     failures.extend(validate_push_mirror_helper())

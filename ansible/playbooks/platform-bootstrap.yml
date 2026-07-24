@@ -258,7 +258,6 @@
         - { name: "argocd_server_secret_key", length: 48 }
         - { name: "argocd_redis_password", length: 24 }
         - { name: "gitea_admin_password", length: 24 }
-        - { name: "gitea_runner_token", length: 32 }
         - { name: "gitea_secret_key", length: 48 }
         - { name: "gitea_internal_token", length: 48 }
         - { name: "gitea_jwt_secret", length: 48 }
@@ -313,7 +312,6 @@
         - argocd_server_secret_key
         - argocd_redis_password
         - gitea_admin_password
-        - gitea_runner_token
         - gitea_secret_key
         - gitea_internal_token
         - gitea_jwt_secret
@@ -558,7 +556,6 @@
         argocd_server_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/argocd_server_secret_key') | trim }}"
         argocd_redis_password: "{{ lookup('file', bootstrap_secret_dir + '/argocd_redis_password') | trim }}"
         gitea_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/gitea_admin_password') | trim }}"
-        gitea_runner_token: "{{ lookup('file', bootstrap_secret_dir + '/gitea_runner_token') | trim }}"
         gitea_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/gitea_secret_key') | trim }}"
         gitea_internal_token: "{{ lookup('file', bootstrap_secret_dir + '/gitea_internal_token') | trim }}"
         gitea_jwt_secret: "{{ lookup('file', bootstrap_secret_dir + '/gitea_jwt_secret') | trim }}"

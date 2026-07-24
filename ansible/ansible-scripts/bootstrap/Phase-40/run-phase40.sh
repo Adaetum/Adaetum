@@ -1240,10 +1240,6 @@ gitea_admin_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_admi
 if [[ -n "${gitea_admin_password_val}" ]]; then
   platform_kv_args+=("gitea_admin_password=${gitea_admin_password_val}")
 fi
-gitea_runner_token_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
-if [[ -n "${gitea_runner_token_val}" ]]; then
-  platform_kv_args+=("gitea_runner_token=${gitea_runner_token_val}")
-fi
 gitea_secret_key_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_secret_key")"
 if [[ -n "${gitea_secret_key_val}" ]]; then
   platform_kv_args+=("gitea_secret_key=${gitea_secret_key_val}")
@@ -1421,10 +1417,6 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
       "username=${gitea_repo_username_effective:-gitea-admin}" \
       "password=${gitea_admin_password_val}" \
       "email=gitea-admin@example.com"
-  fi
-  if [[ -n "${gitea_runner_token_val}" ]]; then
-    seed_openbao_app_fields gitea/actions-runner "${root_token}" \
-      "token=${gitea_runner_token_val}"
   fi
   if [[ -n "${gitea_secret_key_val}" ]]; then
     seed_openbao_app_fields gitea/encryption "${root_token}" \

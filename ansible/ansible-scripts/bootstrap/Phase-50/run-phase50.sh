@@ -3028,10 +3028,10 @@ else
   run_or_fail \
     "failed configuring rke2 registry runtime for ansible-runner pulls" \
     ensure_ansible_runner_registry_runtime
-  gitea_runner_token_effective="$(read_openbao_app_field gitea/actions-runner token "${openbao_token}" || true)"
-  if [[ -z "${gitea_runner_token_effective}" ]]; then
-    gitea_runner_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_runner_token")"
-  fi
+  # Gitea, rather than bootstrap's random-secret generator, owns the format
+  # and validity of runner registration tokens. Mint only after it is Ready.
+  gitea_runner_token_effective="$(mint_gitea_actions_runner_token)" || \
+    fail_local_requirement "Gitea did not mint a valid actions runner registration token"
   run_or_fail \
     "failed ensuring Gitea actions runner deployment" \
     ensure_gitea_actions_runner \

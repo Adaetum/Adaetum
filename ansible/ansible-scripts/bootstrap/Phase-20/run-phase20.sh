@@ -70,7 +70,6 @@ write_secret "argocd_admin_password" 24
 write_secret "argocd_server_secret_key" 48
 write_secret "argocd_redis_password" 24
 write_secret "gitea_admin_password" 24
-write_secret "gitea_runner_token" 32
 write_secret "gitea_secret_key" 48
 write_secret "gitea_internal_token" 48
 write_secret "gitea_jwt_secret" 48
