@@ -99,6 +99,56 @@ def main() -> int:
         if bad in rendered:
             failures.append(f"rendered ingress kustomize output still contains stale Authentik annotation value: {bad}")
 
+    # The local network is the access boundary for internal routes. Keep
+    # Authentik forward-auth on the separate public Ingress objects only.
+    local_domain = require(config, "CLUSTER_LOCAL_DOMAIN")
+    ingress_documents = re.split(r"(?m)^---\s*$", rendered)
+    auth_annotations = (
+        "nginx.ingress.kubernetes.io/auth-url:",
+        "nginx.ingress.kubernetes.io/auth-snippet:",
+        "nginx.ingress.kubernetes.io/auth-signin:",
+        "nginx.ingress.kubernetes.io/auth-response-headers:",
+    )
+    for document in ingress_documents:
+        if not re.search(r"(?m)^kind:\s+Ingress\s*$", document):
+            continue
+        hosts = re.findall(r"(?m)^\s*-?\s*host:\s+([^\s]+)\s*$", document)
+        if any(host == local_domain or host.endswith(f".{local_domain}") for host in hosts):
+            present = [annotation for annotation in auth_annotations if annotation in document]
+            if present:
+                name_match = re.search(r"(?m)^\s*name:\s+([^\s]+)\s*$", document)
+                name = name_match.group(1) if name_match else "<unknown>"
+                failures.append(
+                    f"rendered internal Ingress {name} still contains Authentik forward-auth annotations"
+                )
+
+    protected_public_ingresses = {
+        "alertmanager-ui-public",
+        "argocd-ui-public",
+        "gitea-ui-public",
+        "grafana-ui-public",
+        "headlamp-ui-public",
+        "homepage-ui-public",
+        "openbao-ui-public",
+        "prometheus-ui-public",
+        "registry-ui-public",
+    }
+    for name in sorted(protected_public_ingresses):
+        document = next(
+            (
+                item
+                for item in ingress_documents
+                if re.search(rf"(?m)^\s*name:\s+{re.escape(name)}\s*$", item)
+            ),
+            "",
+        )
+        if not document:
+            failures.append(f"rendered ingress output is missing protected public Ingress {name}")
+            continue
+        missing = [annotation for annotation in auth_annotations if annotation not in document]
+        if missing:
+            failures.append(f"rendered public Ingress {name} is missing Authentik forward-auth annotations")
+
     # external-dns reads the rendered domain from an environment variable so
     # its command remains stable across profile changes. Kubernetes expands
     # that variable in args at container start; verify both halves of the
