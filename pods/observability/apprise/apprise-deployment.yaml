@@ -14,6 +14,14 @@ spec:
         app: apprise
     spec:
       serviceAccountName: apprise
+      # The image supports a rootless startup path. Starting as root and relying
+      # on supervisord to drop privileges prevents its stdout dispatchers from
+      # opening under Kubernetes' no-new-privileges restriction.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       initContainers:
         - name: seed-config
           image: public.ecr.aws/docker/library/busybox:1.38.0@sha256:fd8d9aa63ba2f0982b5304e1ee8d3b90a210bc1ffb5314d980eb6962f1a9715d

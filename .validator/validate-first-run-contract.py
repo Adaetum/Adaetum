@@ -336,6 +336,15 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
     )
     if any(fragment not in platform_bootstrap for fragment in single_node_pod_contract):
         fail("RKE2 bootstrap pod headroom does not safely return to the upstream default after HA expansion")
+    tailscale_packet_mark_contract = (
+        "Wait for Calico Felix configuration to exist",
+        "Reserve non-overlapping Felix packet-mark bits for Tailscale routing",
+        'desired_mark_mask="4278190080"',
+        '--patch=\'{"spec":{"iptablesMarkMask":4278190080}}\'',
+        "default 0xffff0000 mask overlaps it",
+    )
+    if any(fragment not in platform_bootstrap for fragment in tailscale_packet_mark_contract):
+        fail("Calico packet marks can bypass Tailscale routing for cross-node pod traffic")
     if 'Using the Cloudflare token authorized during provider setup.' not in setup:
         fail("setup re-prompts for the Cloudflare token captured during first run")
     if 'Using the GitHub credential authorized during repository setup.' not in setup:

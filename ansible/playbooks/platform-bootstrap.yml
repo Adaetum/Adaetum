@@ -1014,6 +1014,50 @@
       when:
         - inventory_hostname == rke2_primary_host
 
+    - name: Wait for Calico Felix configuration to exist
+      ansible.builtin.command:
+        argv:
+          - "{{ kubectl_cmd }}"
+          - get
+          - felixconfiguration
+          - default
+      register: calico_felix_configuration
+      retries: 60
+      delay: 5
+      until: calico_felix_configuration.rc == 0
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+
+    - name: Reserve non-overlapping Felix packet-mark bits for Tailscale routing
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        desired_mark_mask="4278190080"
+        current_mark_mask="$({{ kubectl_cmd }} get felixconfiguration default --output=jsonpath='{.spec.iptablesMarkMask}')"
+
+        if [ "${current_mark_mask}" = "${desired_mark_mask}" ]; then
+          echo "Felix packet-mark mask is unchanged."
+          exit 0
+        fi
+
+        {{ kubectl_cmd }} patch felixconfiguration default --type=merge \
+          --patch='{"spec":{"iptablesMarkMask":4278190080}}'
+        echo "Felix packet-mark mask changed."
+      args:
+        executable: /bin/bash
+      register: calico_felix_mark_mask
+      changed_when: "'packet-mark mask changed' in calico_felix_mark_mask.stdout"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        # Tailscale reserves the middle mark byte for policy routing. Calico's
+        # default 0xffff0000 mask overlaps it and sends forwarded pod traffic
+        # for remote Tailnet nodes out the LAN interface instead of tailscale0.
+        - inventory_hostname == rke2_primary_host
+
     - name: Install Helm
       ansible.builtin.shell: |
         set -euo pipefail
