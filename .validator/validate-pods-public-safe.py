@@ -2,6 +2,7 @@
 """Ensure committable outputs remain safe to publish and free of local identity."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import os
 import re
@@ -168,8 +169,19 @@ def known_private_identifier_failures() -> list[str]:
     return failures
 
 
-def main() -> int:
-    failures = known_private_identifier_failures()
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--public-handoff",
+        action="store_true",
+        help="Reject known private identifiers across every committable file.",
+    )
+    args = parser.parse_args(argv[1:])
+
+    # Recovery repositories intentionally commit their own profile and rendered
+    # manifests. The repository-wide private-identity block belongs only to the
+    # explicit upstream handoff performed by task clean.
+    failures = known_private_identifier_failures() if args.public_handoff else []
     if maintainer_template_guard_enabled():
         denylist = build_dynamic_denylist()
         for path in CHECK_PATHS:
@@ -189,4 +201,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))

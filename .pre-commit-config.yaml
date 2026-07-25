@@ -104,7 +104,6 @@ repos:
         entry: python3 .validator/validate-pods-public-safe.py
         language: python
         pass_filenames: false
-        always_run: true
         files: ^(pods/cluster-config/cluster-config\.env|pods/argocd/.+\.ya?ml|pods/ansible/ansible/ansible-cluster-config\.yaml|pods/gitea/gitea\.app\.yaml|pods/ingress/.+cluster-config\.yaml|pods/portal/homepage/homepage-cluster-config\.yaml|tasks/scripts/clean-public-safe-config\.py|\.validator/validate-pods-public-safe\.py)
       - id: validate-cluster-config
         name: Validate cluster config values

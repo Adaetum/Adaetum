@@ -72,7 +72,11 @@ def reset_profile() -> None:
 
 def validate_public_tree() -> None:
     """Fail cleanup if a known private identifier remains committable."""
-    subprocess.run([sys.executable, str(PUBLIC_SAFE_VALIDATOR)], cwd=REPO_ROOT, check=True)
+    subprocess.run(
+        [sys.executable, str(PUBLIC_SAFE_VALIDATOR), "--public-handoff"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
 
 
 def load_render_module():

@@ -873,8 +873,71 @@ first_run_profile() {
     --bootstrap-base-url "${first_run_bootstrap_url}" --r2-bucket "${first_run_r2_bucket}"
 }
 
+first_run_profile_render_is_resumable() {
+  local proposal="$1"
+  cmp -s "${proposal}" ./platform.yaml || return 1
+
+  # A failed hook leaves the reviewed profile and its generated outputs staged.
+  # Resume only that exact publication unit; an unrelated tracked edit must
+  # still stop first-run before git add can absorb it into the recovery commit.
+  python3 - "${repo_root}" <<'PY'
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+profile_path = root / "platform.yaml"
+config_path = root / "pods/cluster-config/cluster-config.env"
+
+profile_spec = importlib.util.spec_from_file_location(
+    "render_platform_profile",
+    root / "tasks/scripts/render-platform-profile.py",
+)
+if profile_spec is None or profile_spec.loader is None:
+    raise SystemExit(1)
+profile_module = importlib.util.module_from_spec(profile_spec)
+profile_spec.loader.exec_module(profile_module)
+
+renderer = profile_module.load_pods_renderer()
+profile = profile_module.load_profile(profile_path)
+profile_module.validate_profile(profile)
+config = profile_module.config_from_profile(profile)
+expected_config = "".join(f"{key}={config[key]}\n" for key in renderer.ENV_KEYS)
+if config_path.read_text(encoding="utf-8") != expected_config:
+    raise SystemExit(1)
+if renderer.render_templates(config, check=True) or renderer.render_app_configs(config, check=True):
+    raise SystemExit(1)
+
+allowed = {"platform.yaml", "pods/cluster-config/cluster-config.env"}
+allowed.update(target for _template, target in renderer.TEMPLATE_TARGETS)
+allowed.update(target for target, _name, _keys in renderer.APP_CONFIG_TARGETS)
+staged = set(
+    subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "HEAD", "--"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+)
+unstaged = set(
+    subprocess.run(
+        ["git", "diff", "--name-only", "--"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+)
+if not staged or staged - allowed or unstaged & allowed:
+    raise SystemExit(1)
+PY
+}
+
 first_run_review_profile() {
-  local proposal="$1" hook_runner="" hook_log="" current_branch="" local_head="" remote_head=""
+  local proposal="$1" hook_runner="" hook_log="" current_branch="" local_head="" remote_head="" resume_render=0
+  local unstaged_before="" unstaged_after=""
   first_run_heading "Review public cluster configuration"
   adaetum_ui_key_value "Public domain" "${first_run_domain}"
   adaetum_ui_key_value "Tailscale tailnet" "${first_run_overlay_domain}"
@@ -890,15 +953,29 @@ first_run_review_profile() {
   # worktree lets this step stage every renderer-owned output without absorbing
   # an operator's unrelated edits into the recovery configuration commit.
   if ! git diff --quiet HEAD; then
-    die "The tracked worktree changed before profile rendering. Commit or stash those changes, then rerun task init."
+    if first_run_profile_render_is_resumable "${proposal}"; then
+      resume_render=1
+      first_run_status info "Resuming the previously rendered profile after interrupted commit validation."
+    else
+      die "The tracked worktree changed before profile rendering. Commit or stash unrelated changes, then rerun task init."
+    fi
   fi
-  mv "${proposal}" ./platform.yaml
-  task platform:render
+  if [ "${resume_render}" != 1 ]; then
+    mv "${proposal}" ./platform.yaml
+    task platform:render
+  fi
   if ! git diff --quiet HEAD; then
     # The clean baseline above means every tracked change was produced by the
     # reviewed profile and its renderer. Commit the profile and generated
     # GitOps inputs together so remote workflows never observe a split state.
-    git add -u
+    if [ "${resume_render}" != 1 ]; then
+      git add -u
+    else
+      # Preserve unrelated unstaged maintainer work while proving validation
+      # hooks did not rewrite it before the staged profile commit proceeds.
+      unstaged_before="$(mktemp)"
+      git diff --binary -- >"${unstaged_before}"
+    fi
     if command -v prek >/dev/null 2>&1; then
       hook_runner="prek"
     elif command -v pre-commit >/dev/null 2>&1; then
@@ -916,7 +993,17 @@ first_run_review_profile() {
       rm -f "${hook_log}"
       die "Fix the reported profile validation failure, then rerun task init."
     fi
-    git diff --quiet || die "Profile validation changed tracked files after staging. Review the changes, then rerun task init."
+    if [ "${resume_render}" = 1 ]; then
+      unstaged_after="$(mktemp)"
+      git diff --binary -- >"${unstaged_after}"
+      if ! cmp -s "${unstaged_before}" "${unstaged_after}"; then
+        rm -f "${unstaged_before}" "${unstaged_after}"
+        die "Profile validation changed unrelated unstaged files. Review the changes, then rerun task init."
+      fi
+      rm -f "${unstaged_before}" "${unstaged_after}"
+    else
+      git diff --quiet || die "Profile validation changed tracked files after staging. Review the changes, then rerun task init."
+    fi
     # The complete staged recovery configuration was validated above. Avoid
     # invoking the hook again, which would only repeat the same result.
     git commit --no-verify -m "Configure Adaetum platform profile"

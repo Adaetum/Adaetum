@@ -191,6 +191,14 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("Cloudflare zone selection still asks a redundant confirmation")
     if 'if ! git diff --quiet HEAD; then' not in first_run:
         fail("profile rendering does not require a clean tracked baseline")
+    if "first_run_profile_render_is_resumable" not in first_run:
+        fail("first-run cannot resume a renderer-owned profile after hook failure")
+    if 'staged - allowed' not in first_run or 'unstaged & allowed' not in first_run or 'renderer.render_templates(config, check=True)' not in first_run:
+        fail("profile resume does not reject unrelated or stale rendered changes")
+    if 'git diff --binary -- >"${unstaged_before}"' not in first_run or 'cmp -s "${unstaged_before}" "${unstaged_after}"' not in first_run:
+        fail("profile resume does not preserve unrelated unstaged maintainer work")
+    if "Resuming the previously rendered profile after interrupted commit validation." not in first_run:
+        fail("profile resume is not visible to the operator")
     if "git add -u" not in first_run:
         fail("profile rendering does not stage its generated tracked outputs")
     if 'run --config .pre-commit-config.yaml --all-files' not in first_run:
@@ -249,7 +257,7 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
     ):
         if safe_value not in clean_public_config:
             fail(f"task clean does not own public-safe placeholder {safe_value}")
-    if "validate_public_tree()" not in clean_public_config:
+    if "validate_public_tree()" not in clean_public_config or '"--public-handoff"' not in clean_public_config:
         fail("task clean does not scan the completed public-safe worktree")
     if "Cloudflare Tunnel: Write" not in first_run:
         fail("Cloudflare token guidance omits the permission required by the tunnel API")
