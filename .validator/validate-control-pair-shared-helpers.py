@@ -1058,7 +1058,7 @@ REFRESHED=0
 
 mock_kubectl() {
   if [[ " $* " == *" get configmap ansible-cluster-config "* ]]; then
-    printf '%s' 'registry.mudazukai.cloud/gitea-admin/ansible-runner:latest'
+    printf '%s' 'registry.example.test/gitea-admin/ansible-runner:latest'
     return 0
   fi
   echo "unexpected mock kubectl call: $*" >&2
@@ -1077,7 +1077,7 @@ ansible_runner_registry_host_push() {
 }
 
 seed_openbao_app_fields() {
-  [[ " $* " == *" host=registry.mudazukai.cloud "* ]]
+  [[ " $* " == *" host=registry.example.test "* ]]
   [[ " $* " == *" push_host=gitea-http.gitea.svc.cluster.local:3000 "* ]]
   [[ " $* " != *"cluster-"*"duck"* ]]
   SEEDED=1
@@ -1154,15 +1154,15 @@ def validate_registry_token_service_discovery() -> list[str]:
     script = rf'''
 set -euo pipefail
 script_dir={parser_dir}
-GITEA_CANONICAL_URL=http://gitea.mudazukai.cloud.local/
+GITEA_CANONICAL_URL=http://gitea.example.test.local/
 GITEA_INTERNAL_SERVICE_HOST=gitea-http.gitea.svc.cluster.local:3000
 gitea_service_cluster_ip() {{ printf '%s' '10.43.53.138'; }}
 curl() {{
-  if [[ " $* " == *" --resolve gitea.mudazukai.cloud.local:80:10.43.53.138 "* ]] && \
-     [[ " $* " == *" http://gitea.mudazukai.cloud.local/v2/ "* ]]; then
+  if [[ " $* " == *" --resolve gitea.example.test.local:80:10.43.53.138 "* ]] && \
+     [[ " $* " == *" http://gitea.example.test.local/v2/ "* ]]; then
     printf '%s\r\n' \
       'HTTP/1.1 401 Unauthorized' \
-      'Www-Authenticate: Bearer realm="http://gitea.mudazukai.cloud.local/v2/token",service="container_registry"'
+      'Www-Authenticate: Bearer realm="http://gitea.example.test.local/v2/token",service="container_registry"'
   else
     printf '%s\r\n' \
       'HTTP/1.1 401 Unauthorized' \
@@ -1171,7 +1171,7 @@ curl() {{
 }}
 {discovery}
 actual="$(discover_gitea_registry_token_service_host)"
-if [[ "${{actual}}" != "gitea.mudazukai.cloud.local" ]]; then
+if [[ "${{actual}}" != "gitea.example.test.local" ]]; then
   echo "unexpected discovered host: ${{actual:-<empty>}}" >&2
   exit 1
 fi

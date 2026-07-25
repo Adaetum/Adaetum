@@ -404,6 +404,7 @@ AUTHENTIK_URL=https://authentik.<public-domain>
 HEADLAMP_URL=https://headlamp.<public-domain>
 ALERTMANAGER_URL=https://alertmanager.<public-domain>
 GRAFANA_URL=https://grafana.<public-domain>
+NTFY_URL=https://ntfy.<public-domain>
 PROMETHEUS_URL=https://prometheus.<public-domain>
 ```
 
@@ -434,6 +435,7 @@ In practice, the normal operator-facing UI hosts are:
 - `headlamp.<public-domain>` and `headlamp.<public-domain>.local`
 - `alertmanager.<public-domain>` and `alertmanager.<public-domain>.local`
 - `grafana.<public-domain>` and `grafana.<public-domain>.local`
+- `ntfy.<public-domain>` and `ntfy.<public-domain>.local`
 - `prometheus.<public-domain>` and `prometheus.<public-domain>.local`
 - `registry.<public-domain>` and `registry.<public-domain>.local`
 
@@ -456,6 +458,7 @@ route, but still wish to access on the same network.
 - `gitea.<public-domain>.local`
 - `alertmanager.<public-domain>.local`
 - `grafana.<public-domain>.local`
+- `ntfy.<public-domain>.local`
 - `prometheus.<public-domain>.local`
 - `authentik.<public-domain>.local`
 - `headlamp.<public-domain>.local`
@@ -712,6 +715,7 @@ At minimum, confirm these cards load and show healthy where expected:
 - `Headlamp`
 - `Alertmanager`
 - `Grafana`
+- `ntfy`
 - `Prometheus`
 - `Registry`
 - `Rancher` as a convenience-only external link
@@ -725,6 +729,11 @@ instead of the shared nginx ingress pattern.
 Homepage is treated like the other operator-facing routed UIs and is expected
 to redirect through Authentik for login rather than using a separate basic-auth
 credential.
+
+ntfy is the deliberate routing exception. Its web UI, PWA, mobile clients, and
+publish API share one endpoint, so an Authentik browser redirect would break
+native clients. Both ntfy routes instead use its generated administrator and
+publisher credentials with anonymous access denied.
 
 ### Additional nodes
 

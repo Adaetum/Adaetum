@@ -46,6 +46,10 @@ def main() -> int:
         failures.append("profile render did not derive GITEA_PUBLIC_HOST from spec.cluster.domain")
     if values.get("ARGOCD_LOCAL_HOST") != f"argocd.{cluster['localDomain']}":
         failures.append("profile render did not derive ARGOCD_LOCAL_HOST from spec.cluster.localDomain")
+    if values.get("NTFY_PUBLIC_HOST") != f"ntfy.{cluster['domain']}":
+        failures.append("profile render did not derive NTFY_PUBLIC_HOST from spec.cluster.domain")
+    if values.get("NTFY_LOCAL_HOST") != f"ntfy.{cluster['localDomain']}":
+        failures.append("profile render did not derive NTFY_LOCAL_HOST from spec.cluster.localDomain")
 
     if failures:
         for failure in failures:

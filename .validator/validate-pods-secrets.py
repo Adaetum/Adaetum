@@ -61,6 +61,12 @@ ROTATION_CONTRACTS = {
         "serviceAccountName: apprise",
         "secretProviderClass: apprise-openbao",
     ),
+    "pods/observability/ntfy/ntfy.yaml": (
+        "serviceAccountName: ntfy",
+        "secretProviderClass: ntfy-openbao",
+        'auth-default-access: "deny-all"',
+        "adaetum-alerts write-only",
+    ),
     "pods/gitea/gitea-secret-sync/csi.yaml": (
         "kind: SecretProviderClass",
         "roleName: gitea",
@@ -305,6 +311,8 @@ ROTATION_CONTRACTS = {
         "seed_openbao_app_fields authentik/postgresql",
         "seed_openbao_app_fields authentik/admin",
         "seed_openbao_app_fields homepage/grafana",
+        "seed_openbao_app_fields observability/ntfy",
+        "ntfy://apprise:%s@ntfy.observability.svc.cluster.local:80/adaetum-alerts",
     ),
     "ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh": (
         "PHASE50_GITEA_POSTGRESQL_SECRET_ATTEMPTS",
@@ -389,6 +397,8 @@ ROTATION_CONTRACTS = {
         "argocd_server_secret_key",
         "argocd_redis_password",
         "homepage_grafana_password",
+        "ntfy_admin_password",
+        "ntfy_apprise_password",
         "redisSecretInit.enabled=false",
         "global.deploymentAnnotations.secret",
         "global.statefulsetAnnotations.secret",
@@ -401,6 +411,8 @@ ROTATION_CONTRACTS = {
         'write_secret "gitea_jwt_secret" 48',
         'write_secret "grafana_secret_key" 48',
         'write_secret "homepage_grafana_password" 24',
+        'write_secret "ntfy_admin_password" 24',
+        "write_ntfy_publisher_password",
     ),
     "ansible/automation-roles/argocd-install/templates/argocd-values.yaml.j2": (
         "server.secretkey",

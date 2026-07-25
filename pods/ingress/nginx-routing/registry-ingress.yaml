@@ -9,7 +9,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: registry.mudazukai.local
+    - host: registry.adaetum.local
       http:
         paths:
           - path: /

@@ -22,7 +22,7 @@ spec:
         - name: gitea-registry-creds
       containers:
         - name: ansible-runner
-          image: registry.mudazukai.cloud/gitea-admin/ansible-runner:build-9a0fdc53e3ba8fc2
+          image: registry.adaetum.invalid/gitea-admin/ansible-runner:build-67fc36dceb83756a
           imagePullPolicy: Always
           env:
             - name: CRON_SCHEDULE
@@ -34,9 +34,9 @@ spec:
             - name: ANSIBLE_EXTRA_ARGS
               value: ""
             - name: TAILSCALE_DOMAIN
-              value: "armadillo-peacock.ts.net"
+              value: "example-tailnet.ts.net"
             - name: TAILSCALE_TAILNET
-              value: "armadillo-peacock.ts.net"
+              value: "example-tailnet.ts.net"
             - name: TAILSCALE_CLUSTER_TAG
               value: "tag:cluster"
           volumeMounts:

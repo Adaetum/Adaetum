@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Ensure committed pod outputs remain safe to publish and free of local secrets."""
+"""Ensure committable outputs remain safe to publish and free of local identity."""
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +15,13 @@ ENV_PATH = REPO_ROOT / ".env"
 CONFIG_PATH = REPO_ROOT / "pods" / "cluster-config" / "cluster-config.env"
 LOCAL_OVERRIDE_PATH = REPO_ROOT / ".maintainer-overrides" / "allow-example-placeholders"
 GIT_DIR_OVERRIDE_PATH = REPO_ROOT / ".git" / "adaetum-allow-example-placeholders"
+# Hashes keep the private identifiers themselves out of the public repository.
+# Token-level matching still catches them inside hostnames, URLs, and comments.
+FORBIDDEN_TOKEN_SHA256 = {
+    "980afcf0c54566554a260a37129bfdf7f98a53e5ece14bc67ad38cfb0490062d",
+    "8997d1107e1bcafe27bf6823f1b7012eaea9f3c21d63b13f2bfbe9c589ffaf21",
+}
+IDENTIFIER_TOKEN = re.compile(rb"[A-Za-z0-9_-]+")
 CHECK_PATHS = [
     CONFIG_PATH,
     REPO_ROOT / "pods" / "argocd" / "bootstrap" / "app-of-apps.yaml",
@@ -24,6 +33,7 @@ CHECK_PATHS = [
     REPO_ROOT / "pods" / "gitea" / "gitea.app.yaml",
     REPO_ROOT / "pods" / "ingress" / "ingress-cluster-config.yaml",
     REPO_ROOT / "pods" / "ingress" / "observability-routing" / "observability-routing-cluster-config.yaml",
+    REPO_ROOT / "pods" / "observability" / "ntfy" / "ntfy-cluster-config.yaml",
     REPO_ROOT / "pods" / "portal" / "homepage" / "homepage-cluster-config.yaml",
 ]
 
@@ -52,6 +62,8 @@ CONFIG_KEYS = (
     "GRAFANA_LOCAL_HOST",
     "PROMETHEUS_PUBLIC_HOST",
     "PROMETHEUS_LOCAL_HOST",
+    "NTFY_PUBLIC_HOST",
+    "NTFY_LOCAL_HOST",
     "RANCHER_PUBLIC_HOST",
     "RANCHER_LOCAL_HOST",
     "AUTHENTIK_PUBLIC_HOST",
@@ -130,23 +142,44 @@ def maintainer_template_guard_enabled() -> bool:
     return False
 
 
-def main() -> int:
-    if not maintainer_template_guard_enabled():
-        return 0
-
-    denylist = build_dynamic_denylist()
-    if not denylist:
-        return 0
-
+def known_private_identifier_failures() -> list[str]:
+    """Scan every tracked or unignored file without printing private values."""
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    )
     failures: list[str] = []
-    for path in CHECK_PATHS:
-        text = path.read_text(encoding="utf-8")
-        for token in denylist:
-            if token in text:
-                failures.append(
-                    f"{path.relative_to(REPO_ROOT)}: found maintainer-specific value: {token} "
-                    f"(run `task clean` to reset tracked public-safe config)"
-                )
+    for raw_path in filter(None, result.stdout.split(b"\0")):
+        path = REPO_ROOT / os.fsdecode(raw_path)
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
+        for match in IDENTIFIER_TOKEN.finditer(content):
+            digest = hashlib.sha256(match.group(0).lower()).hexdigest()
+            if digest not in FORBIDDEN_TOKEN_SHA256:
+                continue
+            line = content.count(b"\n", 0, match.start()) + 1
+            failures.append(
+                f"{path.relative_to(REPO_ROOT)}:{line}: found a known private identifier "
+                "(run `task clean` before publication)"
+            )
+    return failures
+
+
+def main() -> int:
+    failures = known_private_identifier_failures()
+    if maintainer_template_guard_enabled():
+        denylist = build_dynamic_denylist()
+        for path in CHECK_PATHS:
+            text = path.read_text(encoding="utf-8")
+            for token in denylist:
+                if token in text:
+                    failures.append(
+                        f"{path.relative_to(REPO_ROOT)}: found maintainer-specific value: {token} "
+                        f"(run `task clean` to reset tracked public-safe config)"
+                    )
 
     if failures:
         for failure in failures:

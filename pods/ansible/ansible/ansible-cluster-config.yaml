@@ -3,6 +3,6 @@ kind: ConfigMap
 metadata:
   name: ansible-cluster-config
 data:
-  ANSIBLE_RUNNER_IMAGE: 'registry.mudazukai.cloud/gitea-admin/ansible-runner:build-9a0fdc53e3ba8fc2'
-  TAILSCALE_DOMAIN: 'armadillo-peacock.ts.net'
+  ANSIBLE_RUNNER_IMAGE: 'registry.adaetum.invalid/gitea-admin/ansible-runner:build-67fc36dceb83756a'
+  TAILSCALE_DOMAIN: 'example-tailnet.ts.net'
   TAILSCALE_CLUSTER_TAG: 'tag:cluster'

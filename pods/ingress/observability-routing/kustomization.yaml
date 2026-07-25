@@ -3,6 +3,8 @@ resources:
   - alertmanager-public-ingress.yaml
   - grafana-ingress.yaml
   - grafana-public-ingress.yaml
+  - ntfy-ingress.yaml
+  - ntfy-public-ingress.yaml
   - prometheus-ingress.yaml
   - prometheus-public-ingress.yaml
   - observability-routing-cluster-config.yaml
@@ -47,6 +49,27 @@ replacements:
       - select:
           kind: Ingress
           name: grafana-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.NTFY_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: ntfy-api-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: observability-routing-cluster-config
+      fieldPath: data.NTFY_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: ntfy-api-public
         fieldPaths:
           - spec.rules.0.host
           - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]

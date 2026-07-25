@@ -9,7 +9,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: openbao.mudazukai.local
+    - host: openbao.adaetum.local
       http:
         paths:
           - path: /

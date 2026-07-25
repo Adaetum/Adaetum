@@ -79,6 +79,8 @@ def main() -> int:
         "alertmanager public": require(config, "ALERTMANAGER_PUBLIC_HOST"),
         "grafana internal": require(config, "GRAFANA_LOCAL_HOST"),
         "grafana public": require(config, "GRAFANA_PUBLIC_HOST"),
+        "ntfy internal": require(config, "NTFY_LOCAL_HOST"),
+        "ntfy public": require(config, "NTFY_PUBLIC_HOST"),
         "prometheus internal": require(config, "PROMETHEUS_LOCAL_HOST"),
         "prometheus public": require(config, "PROMETHEUS_PUBLIC_HOST"),
     }
@@ -148,6 +150,24 @@ def main() -> int:
         missing = [annotation for annotation in auth_annotations if annotation not in document]
         if missing:
             failures.append(f"rendered public Ingress {name} is missing Authentik forward-auth annotations")
+
+    # ntfy uses the same API for its web UI, PWA, mobile clients, and
+    # publishers. A browser-oriented forward-auth redirect corrupts those API
+    # responses, so native deny-all/token authentication owns both routes.
+    ntfy_public = next(
+        (
+            item
+            for item in ingress_documents
+            if re.search(r"(?m)^\s*name:\s+ntfy-api-public\s*$", item)
+        ),
+        "",
+    )
+    if not ntfy_public:
+        failures.append("rendered ingress output is missing native-auth public Ingress ntfy-api-public")
+    else:
+        present = [annotation for annotation in auth_annotations if annotation in ntfy_public]
+        if present:
+            failures.append("rendered public Ingress ntfy-api-public contains incompatible Authentik forward-auth annotations")
 
     # external-dns reads the rendered domain from an environment variable so
     # its command remains stable across profile changes. Kubernetes expands

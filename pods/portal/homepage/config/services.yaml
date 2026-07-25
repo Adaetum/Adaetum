@@ -84,6 +84,11 @@
         href: https://__ALERTMANAGER_PUBLIC_HOST__/
         description: Alert routing, silences, and active notifications
         siteMonitor: http://alertmanager.observability.svc.cluster.local:9093/-/healthy
+    - ntfy:
+        icon: mdi-message-alert
+        href: https://__NTFY_PUBLIC_HOST__/
+        description: Authenticated push notification inbox for platform alerts
+        siteMonitor: http://ntfy.observability.svc.cluster.local/v1/health
 - Network and Delivery:
     - Container Registry:
         icon: mdi-docker

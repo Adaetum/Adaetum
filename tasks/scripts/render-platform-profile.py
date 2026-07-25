@@ -99,6 +99,8 @@ def config_from_profile(profile: dict) -> dict[str, str]:
         "ALERTMANAGER_LOCAL_HOST": host("alertmanager", local_domain),
         "GRAFANA_PUBLIC_HOST": host("grafana", domain),
         "GRAFANA_LOCAL_HOST": host("grafana", local_domain),
+        "NTFY_PUBLIC_HOST": host("ntfy", domain),
+        "NTFY_LOCAL_HOST": host("ntfy", local_domain),
         "PROMETHEUS_PUBLIC_HOST": host("prometheus", domain),
         "PROMETHEUS_LOCAL_HOST": host("prometheus", local_domain),
         "RANCHER_PUBLIC_HOST": host("rancher", domain),

@@ -263,6 +263,8 @@
         - { name: "gitea_jwt_secret", length: 48 }
         - { name: "grafana_admin_password", length: 24 }
         - { name: "grafana_secret_key", length: 48 }
+        - { name: "ntfy_admin_password", length: 24 }
+        - { name: "ntfy_apprise_password", length: 32, format: "url_password" }
         - { name: "homepage_grafana_password", length: 24 }
         - { name: "authentik_secret_key", length: 48 }
         - { name: "authentik_postgresql_password", length: 24 }
@@ -279,7 +281,16 @@
         }
         trap cleanup EXIT
 
-        if command -v openssl >/dev/null 2>&1; then
+        if [[ "{{ item.item.format | default('password') }}" = "url_password" ]]; then
+          if command -v openssl >/dev/null 2>&1; then
+            openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\r\n' | cut -c1-32 > "${tmp_path}"
+          elif command -v python3 >/dev/null 2>&1; then
+            python3 -c 'import secrets,string; alphabet=string.ascii_letters+string.digits+"-_"; print("".join(secrets.choice(alphabet) for _ in range(32)), end="")' > "${tmp_path}"
+          else
+            echo "No supported random generator found (need openssl or python3)" >&2
+            exit 1
+          fi
+        elif command -v openssl >/dev/null 2>&1; then
           openssl rand -base64 {{ item.item.length }} | tr -d '\n' > "${tmp_path}"
         elif command -v python3 >/dev/null 2>&1; then
           python3 -c 'import secrets,string,sys; length=int(sys.argv[1]); alphabet=string.ascii_letters + string.digits + "-_"; print("".join(secrets.choice(alphabet) for _ in range(length)), end="")' "{{ item.item.length }}" > "${tmp_path}"
@@ -317,6 +328,8 @@
         - gitea_jwt_secret
         - grafana_admin_password
         - grafana_secret_key
+        - ntfy_admin_password
+        - ntfy_apprise_password
         - homepage_grafana_password
         - authentik_secret_key
         - authentik_postgresql_password

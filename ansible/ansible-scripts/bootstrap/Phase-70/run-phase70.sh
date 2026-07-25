@@ -538,6 +538,8 @@ verify_openbao_secret_delivery_phase70() {
   bootstrap_wait_for_csi_secret_delivery \
     "${kubectl_bin}" observability apprise-openbao apprise || return 1
   bootstrap_wait_for_csi_secret_delivery \
+    "${kubectl_bin}" observability ntfy-openbao ntfy || return 1
+  bootstrap_wait_for_csi_secret_delivery \
     "${kubectl_bin}" homepage homepage-openbao homepage || return 1
   bootstrap_wait_for_csi_secret_delivery \
     "${kubectl_bin}" cloudflared cloudflared-openbao cloudflared || return 1
@@ -596,6 +598,7 @@ reconcile_csi_runtime_rotations_phase70() {
 
   restart_csi_workload_phase70 observability grafana grafana-openbao 'app.kubernetes.io/name=grafana' grafana
   restart_csi_workload_phase70 observability apprise apprise-openbao 'app=apprise' apprise
+  restart_csi_workload_phase70 observability ntfy ntfy-openbao 'app=ntfy' ntfy
   restart_csi_workload_phase70 homepage homepage homepage-openbao 'app.kubernetes.io/name=homepage' homepage
   restart_csi_workload_phase70 cloudflared cloudflared cloudflared-openbao 'app=cloudflared' cloudflared
   restart_csi_workload_phase70 ingress external-dns external-dns-openbao 'app=external-dns' external-dns

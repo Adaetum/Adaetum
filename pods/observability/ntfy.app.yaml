@@ -1,0 +1,6 @@
+name: ntfy
+project: default
+source_type: git
+source_target_revision: HEAD
+source_path: pods/observability/ntfy
+destination_namespace: observability

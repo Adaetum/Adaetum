@@ -241,6 +241,16 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("setup credential storage reintroduces the retired plaintext cache")
     if '["git", "show", "HEAD:platform.yaml"]' not in clean_public_config or "reset_profile()" not in clean_public_config:
         fail("task clean does not restore the public-safe platform profile")
+    for safe_value in (
+        "adaetum.invalid",
+        "adaetum.local",
+        "example-tailnet.ts.net",
+        "https://bootstrap.adaetum.invalid",
+    ):
+        if safe_value not in clean_public_config:
+            fail(f"task clean does not own public-safe placeholder {safe_value}")
+    if "validate_public_tree()" not in clean_public_config:
+        fail("task clean does not scan the completed public-safe worktree")
     if "Cloudflare Tunnel: Write" not in first_run:
         fail("Cloudflare token guidance omits the permission required by the tunnel API")
     if '"Connectivity Directory" "Read, Bind, and Admin"' not in first_run:

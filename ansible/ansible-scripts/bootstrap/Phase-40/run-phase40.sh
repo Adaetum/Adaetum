@@ -1335,6 +1335,14 @@ grafana_secret_key_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/grafana_secr
 if [[ -n "${grafana_secret_key_val}" ]]; then
   platform_kv_args+=("grafana_secret_key=${grafana_secret_key_val}")
 fi
+ntfy_admin_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/ntfy_admin_password")"
+if [[ -n "${ntfy_admin_password_val}" ]]; then
+  platform_kv_args+=("ntfy_admin_password=${ntfy_admin_password_val}")
+fi
+ntfy_apprise_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/ntfy_apprise_password")"
+if [[ -n "${ntfy_apprise_password_val}" ]]; then
+  platform_kv_args+=("ntfy_apprise_password=${ntfy_apprise_password_val}")
+fi
 homepage_grafana_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/homepage_grafana_password")"
 authentik_admin_username_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
 if [[ -n "${authentik_admin_username_val}" ]]; then
@@ -1459,6 +1467,11 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
       "admin_password=${grafana_admin_password_val}" \
       "secret_key=${grafana_secret_key_val}"
   fi
+  if [[ -n "${ntfy_admin_password_val}" && -n "${ntfy_apprise_password_val}" ]]; then
+    seed_openbao_app_fields observability/ntfy "${root_token}" \
+      "admin_password=${ntfy_admin_password_val}" \
+      "apprise_password=${ntfy_apprise_password_val}"
+  fi
   if [[ -n "${homepage_grafana_password_val}" ]]; then
     seed_openbao_app_fields homepage/grafana "${root_token}" \
       username=homepage \
@@ -1469,10 +1482,20 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
       "oauth_client_id=${tailscale_oauth_client_id_val}" \
       "oauth_client_secret=${tailscale_oauth_client_secret_val}"
   fi
-  if ! "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-    env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${root_token}" \
-    bao kv get secret/apps/observability/apprise >/dev/null 2>&1; then
-    apprise_default_config=$'version: 1\nurls: []'
+  apprise_empty_config=$'version: 1\nurls: []'
+  apprise_current_config="$(
+    "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
+      env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${root_token}" \
+      bao kv get -field=apprise_yml secret/apps/observability/apprise 2>/dev/null || true
+  )"
+  # Upgrade only the generated empty default. An operator-owned Apprise file
+  # may contain additional destinations and must remain authoritative.
+  if [[ -z "${apprise_current_config}" || "${apprise_current_config}" = "${apprise_empty_config}" ]]; then
+    if [[ -n "${ntfy_apprise_password_val}" ]]; then
+      apprise_default_config="$(printf 'version: 1\nurls:\n  - \"ntfy://apprise:%s@ntfy.observability.svc.cluster.local:80/adaetum-alerts\"' "${ntfy_apprise_password_val}")"
+    else
+      apprise_default_config="${apprise_empty_config}"
+    fi
     seed_openbao_app_fields observability/apprise "${root_token}" \
       "apprise_yml=${apprise_default_config}"
   fi
@@ -1493,6 +1516,7 @@ fi
   --from-file=config.hcl="${policy_dir}/config.hcl" \
   --from-file=external-secrets.hcl="${policy_dir}/external-secrets.hcl" \
   --from-file=apprise.hcl="${policy_dir}/apprise.hcl" \
+  --from-file=ntfy.hcl="${policy_dir}/ntfy.hcl" \
   --from-file=cloudflared.hcl="${policy_dir}/cloudflared.hcl" \
   --from-file=external-dns.hcl="${policy_dir}/external-dns.hcl" \
   --from-file=ansible-runner.hcl="${policy_dir}/ansible-runner.hcl" \

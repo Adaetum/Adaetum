@@ -212,6 +212,8 @@ def main() -> int:
         "ALERTMANAGER_LOCAL_HOST",
         "GRAFANA_PUBLIC_HOST",
         "GRAFANA_LOCAL_HOST",
+        "NTFY_PUBLIC_HOST",
+        "NTFY_LOCAL_HOST",
         "PROMETHEUS_PUBLIC_HOST",
         "PROMETHEUS_LOCAL_HOST",
         "AUTHENTIK_PUBLIC_HOST",
@@ -306,6 +308,9 @@ def main() -> int:
         actual_filter,
         config["EXTERNAL_DNS_DOMAIN_FILTER"],
     )
+    external_dns_rbac = load_text(REPO_ROOT / "pods" / "ingress" / "external-dns" / "rbac.yaml")
+    if 'apiGroups: ["discovery.k8s.io"]' not in external_dns_rbac or 'resources: ["endpointslices"]' not in external_dns_rbac:
+        failures.append("pods/ingress/external-dns/rbac.yaml: external-dns cannot watch EndpointSlices")
 
     if failures:
         for failure in failures:

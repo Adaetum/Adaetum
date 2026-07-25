@@ -707,8 +707,11 @@ pods/ingress/observability-routing/alertmanager-ingress.yaml
 pods/ingress/observability-routing/alertmanager-public-ingress.yaml
 pods/ingress/observability-routing/grafana-ingress.yaml
 pods/ingress/observability-routing/grafana-public-ingress.yaml
+pods/ingress/observability-routing/ntfy-ingress.yaml
+pods/ingress/observability-routing/ntfy-public-ingress.yaml
 pods/ingress/observability-routing/prometheus-ingress.yaml
 pods/ingress/observability-routing/prometheus-public-ingress.yaml
+pods/observability/ntfy/ntfy-cluster-config.yaml
 pods/portal/homepage/homepage-cluster-config.yaml
 EOF
 }

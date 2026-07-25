@@ -104,6 +104,7 @@ repos:
         entry: python3 .validator/validate-pods-public-safe.py
         language: python
         pass_filenames: false
+        always_run: true
         files: ^(pods/cluster-config/cluster-config\.env|pods/argocd/.+\.ya?ml|pods/ansible/ansible/ansible-cluster-config\.yaml|pods/gitea/gitea\.app\.yaml|pods/ingress/.+cluster-config\.yaml|pods/portal/homepage/homepage-cluster-config\.yaml|tasks/scripts/clean-public-safe-config\.py|\.validator/validate-pods-public-safe\.py)
       - id: validate-cluster-config
         name: Validate cluster config values
@@ -163,7 +164,7 @@ repos:
         language: python
         additional_dependencies: [pyyaml]
         pass_filenames: false
-        files: ^(pods/cluster-config/cluster-config\.env|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/kustomization\.yaml|pods/ingress/ingress-cluster-config\.yaml|pods/ansible/ansible/ansible-runner-deployment\.yaml|pods/ingress/external-dns/deployment\.yaml|\.validator/validate-pods-consistency\.py)
+        files: ^(pods/cluster-config/cluster-config\.env|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/kustomization\.yaml|pods/ingress/ingress-cluster-config\.yaml|pods/ansible/ansible/ansible-runner-deployment\.yaml|pods/ingress/external-dns/(deployment|rbac)\.yaml|\.validator/validate-pods-consistency\.py)
       - id: validate-no-example-placeholders
         name: Validate generated config has no example placeholders
         entry: python3 .validator/validate-no-example-placeholders.py

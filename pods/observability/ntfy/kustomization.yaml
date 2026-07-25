@@ -1,0 +1,4 @@
+resources:
+  - csi.yaml
+  - ntfy-cluster-config.yaml
+  - ntfy.yaml

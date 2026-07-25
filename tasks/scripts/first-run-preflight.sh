@@ -859,7 +859,7 @@ first_run_profile() {
   adaetum_ui_key_value "Selected" "${first_run_overlay_domain}"
   bootstrap_url="https://bootstrap.${first_run_domain}"
   # The private namespace replaces the public suffix; appending `.local`
-  # would turn mudazukai.cloud into the unintended mudazukai.cloud.local.
+  # would turn example.test into the unintended example.test.local.
   first_run_local_domain="${first_run_domain%.*}.local"
   first_run_overlay_tag="tag:cluster"
   first_run_repository_owner="gitea-admin"

@@ -12,13 +12,27 @@ source_helm_values: |
   config:
     global: {}
     route:
+      group_by: ["alertname", "namespace"]
       group_wait: "30s"
       group_interval: "5m"
       repeat_interval: "4h"
-      receiver: "apprise"
+      receiver: "null-receiver"
+      routes:
+        # Keep the initial default actionable. Warning and informational alerts
+        # remain visible in Alertmanager without becoming notification noise.
+        - receiver: "apprise"
+          matchers:
+            - 'severity="critical"'
     receivers:
       - name: "apprise"
         webhook_configs:
-          - url: "http://apprise.observability.svc.cluster.local:8000/notify"
+          - url: "http://apprise.observability.svc.cluster.local:8000/notify/apprise"
+            send_resolved: true
+            # Alertmanager 0.32+ can shape its generic webhook for Apprise's
+            # required notification contract without another bridge service.
+            payload:
+              title: '{{ if eq .Status "firing" }}FIRING{{ else }}RESOLVED{{ end }}: {{ .CommonLabels.alertname }}'
+              body: '{{ range .Alerts }}{{ .Annotations.summary }}{{ if .Annotations.description }} - {{ .Annotations.description }}{{ end }}{{ "\n" }}{{ end }}'
+              type: '{{ if eq .Status "firing" }}failure{{ else }}success{{ end }}'
       - name: "null-receiver"
 destination_namespace: observability

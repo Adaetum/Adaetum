@@ -167,6 +167,7 @@ def main() -> int:
         "authentik-openbao authentik",
         "grafana-openbao grafana",
         "apprise-openbao apprise",
+        "ntfy-openbao ntfy",
         "required OpenBao-backed workload secrets did not synchronize",
     ):
         if required not in (ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-70" / "run-phase70.sh").read_text(encoding="utf-8"):

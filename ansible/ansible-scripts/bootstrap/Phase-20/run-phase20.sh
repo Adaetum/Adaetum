@@ -64,6 +64,29 @@ write_literal_secret() {
   echo "[ok] wrote ${path}"
 }
 
+write_ntfy_publisher_password() {
+  local name="ntfy_apprise_password"
+  local path="${BOOTSTRAP_SECRET_DIR}/${name}"
+  if [[ -s "${path}" ]]; then
+    if grep -Eq '^[A-Za-z0-9_-]{32}$' "${path}"; then
+      echo "[skip] ${name} already exists"
+      return 0
+    fi
+    echo "[error] ${name} exists but is not a valid URL-safe password: ${path}" >&2
+    return 2
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\r\n' | cut -c1-32 >"${path}"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import secrets,string; alphabet=string.ascii_letters+string.digits+"-_"; print("".join(secrets.choice(alphabet) for _ in range(32)), end="")' >"${path}"
+  else
+    echo "[error] no supported random generator found (need openssl or python3)" >&2
+    return 3
+  fi
+  chmod 0600 "${path}"
+  echo "[ok] wrote ${path}"
+}
+
 write_secret "rke2_token" 48
 write_secret "rancher_admin_password" 24
 write_secret "argocd_admin_password" 24
@@ -75,6 +98,8 @@ write_secret "gitea_internal_token" 48
 write_secret "gitea_jwt_secret" 48
 write_secret "grafana_admin_password" 24
 write_secret "grafana_secret_key" 48
+write_secret "ntfy_admin_password" 24
+write_ntfy_publisher_password
 # Homepage uses a dedicated Grafana Viewer. Its password is independent of the
 # Grafana administrator so either identity can rotate without widening access.
 write_secret "homepage_grafana_password" 24

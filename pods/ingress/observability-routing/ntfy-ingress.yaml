@@ -1,21 +1,24 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: headlamp-ui-internal
-  namespace: headlamp
+  name: ntfy-api-internal
+  namespace: observability
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
   ingressClassName: nginx
   rules:
-    - host: headlamp.adaetum.local
+    - host: ntfy.adaetum.local
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: headlamp
+                name: ntfy
                 port:
                   number: 80

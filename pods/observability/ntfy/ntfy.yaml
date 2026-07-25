@@ -1,0 +1,148 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy
+  namespace: observability
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ntfy
+  template:
+    metadata:
+      labels:
+        app: ntfy
+    spec:
+      serviceAccountName: ntfy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: configure
+          image: binwiederhier/ntfy:v2.26.3@sha256:081b53dbb20674fcfe05fdb4eb8af9036a2645ef979543d16f7f80803af467b1
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              admin_password="$(cat /run/openbao/admin-password)"
+              apprise_password="$(cat /run/openbao/apprise-password)"
+
+              cat > /etc/ntfy/server.yml <<'EOF'
+              listen-http: ":8080"
+              behind-proxy: true
+              cache-file: "/var/lib/ntfy/cache.db"
+              auth-file: "/var/lib/ntfy/auth.db"
+              attachment-cache-dir: "/var/lib/ntfy/attachments"
+              auth-default-access: "deny-all"
+              enable-login: true
+              require-login: true
+              upstream-base-url: "https://ntfy.sh"
+              EOF
+
+              # Reconcile generated credentials into the persistent auth DB so
+              # a recovery or deliberate OpenBao rotation is deterministic.
+              touch /var/lib/ntfy/auth.db
+              NTFY_PASSWORD="${admin_password}" ntfy user --config=/etc/ntfy/server.yml add --role=admin --ignore-exists admin
+              NTFY_PASSWORD="${admin_password}" ntfy user --config=/etc/ntfy/server.yml change-pass admin
+              NTFY_PASSWORD="${apprise_password}" ntfy user --config=/etc/ntfy/server.yml add --ignore-exists apprise
+              NTFY_PASSWORD="${apprise_password}" ntfy user --config=/etc/ntfy/server.yml change-pass apprise
+              ntfy access --config=/etc/ntfy/server.yml apprise adaetum-alerts write-only
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: ntfy-config
+              mountPath: /etc/ntfy
+            - name: ntfy-data
+              mountPath: /var/lib/ntfy
+            - name: ntfy-openbao
+              mountPath: /run/openbao
+              readOnly: true
+      containers:
+        - name: ntfy
+          image: binwiederhier/ntfy:v2.26.3@sha256:081b53dbb20674fcfe05fdb4eb8af9036a2645ef979543d16f7f80803af467b1
+          args:
+            - serve
+            - --config=/etc/ntfy/server.yml
+          env:
+            - name: NTFY_PUBLIC_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: ntfy-cluster-config
+                  key: NTFY_PUBLIC_HOST
+            - name: NTFY_BASE_URL
+              value: "https://$(NTFY_PUBLIC_HOST)"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: ntfy-config
+              mountPath: /etc/ntfy
+              readOnly: true
+            - name: ntfy-data
+              mountPath: /var/lib/ntfy
+            - name: ntfy-tmp
+              mountPath: /tmp
+      volumes:
+        - name: ntfy-config
+          emptyDir: {}
+        - name: ntfy-data
+          persistentVolumeClaim:
+            claimName: ntfy
+        - name: ntfy-openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ntfy-openbao
+        - name: ntfy-tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ntfy
+  namespace: observability
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntfy
+  namespace: observability
+spec:
+  selector:
+    app: ntfy
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
