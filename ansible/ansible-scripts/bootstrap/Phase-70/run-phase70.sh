@@ -1075,18 +1075,22 @@ verify_phase70_gitops_handoff() {
   echo "[phase70] verified GitOps handoff to Gitea repo ${repo_url} (${repo_branch})"
 }
 
-echo "[phase70] repo: ${repo_root}"
-echo "[phase70] running post-bootstrap healthcheck playbook"
+run_post_bootstrap_healthcheck_phase70() {
+  local mode_raw=""
+  local local_only_raw=""
 
-mode_raw="$(printf '%s' "${BOOTSTRAP_BREAKGLASS}" | tr '[:upper:]' '[:lower:]')"
-local_only_raw="$(printf '%s' "${BOOTSTRAP_PHASE70_LOCAL_ONLY}" | tr '[:upper:]' '[:lower:]')"
-if [[ "${local_only_raw}" == "1" || "${local_only_raw}" == "true" || "${local_only_raw}" == "yes" || "${local_only_raw}" == "on" ]]; then
-  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}" -e break_glass=true
-elif [[ "${mode_raw}" == "1" || "${mode_raw}" == "true" || "${mode_raw}" == "yes" || "${mode_raw}" == "on" ]]; then
-  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}" -e break_glass=true
-else
-  ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}"
-fi
+  mode_raw="$(printf '%s' "${BOOTSTRAP_BREAKGLASS}" | tr '[:upper:]' '[:lower:]')"
+  local_only_raw="$(printf '%s' "${BOOTSTRAP_PHASE70_LOCAL_ONLY}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${local_only_raw}" == "1" || "${local_only_raw}" == "true" || "${local_only_raw}" == "yes" || "${local_only_raw}" == "on" ]]; then
+    ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}" -e break_glass=true
+  elif [[ "${mode_raw}" == "1" || "${mode_raw}" == "true" || "${mode_raw}" == "yes" || "${mode_raw}" == "on" ]]; then
+    ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}" -e break_glass=true
+  else
+    ansible-playbook -i "${ANSIBLE_INVENTORY}" "${ANSIBLE_PLAYBOOK}"
+  fi
+}
+
+echo "[phase70] repo: ${repo_root}"
 
 run_phase70_step "verify GitOps handoff" critical verify_phase70_gitops_handoff
 if (( phase70_critical_failures > 0 )); then
@@ -1114,6 +1118,9 @@ if ! verify_openbao_secret_delivery_phase70; then
 fi
 run_phase70_step "reconcile requested CSI runtime rotations" critical reconcile_csi_runtime_rotations_phase70
 run_phase70_step "reconcile ansible-runner" critical ensure_ansible_runner_phase70
+# This playbook asserts the complete monitor and scrape-target inventory, so it
+# belongs after Phase 70 has realized and reconciled every workload it measures.
+run_phase70_step "run post-bootstrap healthcheck" critical run_post_bootstrap_healthcheck_phase70
 
 if (( phase70_failures > 0 )); then
   echo "[phase70] completed with ${phase70_failures} failed step(s); critical=${phase70_critical_failures}" >&2

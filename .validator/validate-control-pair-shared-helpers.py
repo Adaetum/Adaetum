@@ -904,6 +904,7 @@ wait_for_gitea_registry_bootstrap_path
         "secret-delivery foundation failed; stopping before workload realization checks",
         "GitOps realization checks failed; stopping before secret-delivery reconciliation",
         'run_phase70_step "reconcile Homepage widget secrets"',
+        'run_phase70_step "run post-bootstrap healthcheck"',
         "Homepage widget reconciliation failed; stopping before workload secret verification",
         'registry_host="${runner_image%%/*}"',
         "ansible-cluster-config does not declare ANSIBLE_RUNNER_IMAGE",
@@ -939,6 +940,21 @@ wait_for_gitea_registry_bootstrap_path
         failures.append(
             "Phase 70 must reconcile Homepage's generated credentials before "
             "verifying workload secret mounts"
+        )
+
+    runner_reconcile = phase_70.find(
+        'run_phase70_step "reconcile ansible-runner"'
+    )
+    final_healthcheck = phase_70.find(
+        'run_phase70_step "run post-bootstrap healthcheck"'
+    )
+    if (
+        runner_reconcile < 0
+        or final_healthcheck < 0
+        or runner_reconcile > final_healthcheck
+    ):
+        failures.append(
+            "Phase 70 must run the strict post-bootstrap healthcheck after realization"
         )
 
     phase_70_functions = functions(PHASE_70)
