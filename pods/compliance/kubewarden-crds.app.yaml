@@ -1,0 +1,13 @@
+name: kubewarden-crds
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-20"
+source_type: helm
+source_repo_url: https://charts.kubewarden.io
+source_chart: kubewarden-crds
+source_target_revision: "1.28.0"
+source_helm_values: |
+  # Kubewarden's audit scanner reports against the OpenReports API. Keep those
+  # CRDs owned by the same pinned chart as Kubewarden's policy CRDs.
+  installOpenReportsCRDs: true
+destination_namespace: kubewarden

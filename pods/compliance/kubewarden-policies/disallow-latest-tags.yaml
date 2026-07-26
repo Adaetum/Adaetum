@@ -1,0 +1,27 @@
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: disallow-latest-tags
+spec:
+  # Deny mutable image references while failing open if the policy service
+  # itself is unavailable during bootstrap or recovery.
+  mode: protect
+  policyServer: default
+  module: registry://ghcr.io/kubewarden/policies/trusted-repos:v2.1.3
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - v1
+      resources:
+        - pods
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: false
+  failurePolicy: Ignore
+  backgroundAudit: true
+  settings:
+    tags:
+      reject:
+        - latest

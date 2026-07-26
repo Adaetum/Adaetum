@@ -1,12 +1,11 @@
-name: gatekeeper-policy-constraints
+name: kubewarden-policies
 project: default
 annotations:
   argocd.argoproj.io/sync-wave: "-17"
 source_type: git
 source_target_revision: HEAD
-source_path: pods/compliance/gatekeeper-policy-samples/constraints
+source_path: pods/compliance/kubewarden-policies
 sync_options:
-  - CreateNamespace=true
   - SkipDryRunOnMissingResource=true
   - PruneLast=true
-destination_namespace: gatekeeper-system
+destination_namespace: kubewarden

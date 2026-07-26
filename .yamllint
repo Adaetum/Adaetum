@@ -9,5 +9,4 @@ rules:
 
 ignore: |
   dist/
-  pods/compliance/gatekeeper-crds/
   '**/*.tmpl'

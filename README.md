@@ -136,7 +136,7 @@ concerns rather than cleanup work:
 - OpenBao becomes the authority for Adaetum-managed application credentials.
 - External Secrets and the Secrets Store CSI driver deliver scoped workload
   copies without making Kubernetes Secrets the master record.
-- Gatekeeper and Kubescape provide policy and security feedback.
+- Kubewarden and Kubescape provide admission policy and security feedback.
 - Prometheus, Grafana, and Alertmanager expose platform health.
 - `dnf-automatic` and Kured apply host updates with a cluster lock, drain
   safety, maintenance controls, and a default reboot concurrency of one.
@@ -153,7 +153,7 @@ depends on replicas, storage placement, and valid PodDisruptionBudgets.
 | --- | --- |
 | Host and Kubernetes foundation | Rocky Linux 10, Ansible, RKE2, Rancher, Longhorn, cert-manager |
 | GitOps and source control | Argo CD, Gitea, Gitea Actions |
-| Secrets, identity, and policy | OpenBao, External Secrets, Secrets Store CSI, Authentik, Gatekeeper, Kubescape |
+| Secrets, identity, and policy | OpenBao, External Secrets, Secrets Store CSI, Authentik, Kubewarden, Kubescape |
 | Networking and edge | Tailscale, ingress-nginx, external-dns, Cloudflare, cloudflared, kube-vip |
 | Operations | Homepage, Headlamp, Prometheus, Grafana, Alertmanager, Kured |
 
