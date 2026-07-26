@@ -751,6 +751,10 @@ def validate_phase70_realization_gate() -> list[str]:
         '"http://${canonical_host}/v2/"',
         'ensure_gitea_runtime_host_aliases "${registry_token_service_host}"',
         "registry-token-preflight",
+        "backoffLimit: 4",
+        '/busybox/wget -q -O /dev/null -T 10 http://${registry_token_service_host}/api/healthz',
+        "status.conditions[?(@.type==\"Failed\")].status",
+        'if [[ "${failed}" == "True" ]]; then',
         "Kaniko Job is missing the required",
     ):
         if required not in phase_60:

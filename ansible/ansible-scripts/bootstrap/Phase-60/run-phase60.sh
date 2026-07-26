@@ -839,7 +839,10 @@ metadata:
   name: ${job_name}
   namespace: ansible
 spec:
-  backoffLimit: 0
+  # Gitea can briefly lose ready Service endpoints while GitOps and secret
+  # delivery finish their post-handoff reconciliation. Retry the pod-level
+  # registry preflight, but keep publication bounded and strictly gated.
+  backoffLimit: 4
   ttlSecondsAfterFinished: 3600
   template:
     spec:
@@ -904,14 +907,16 @@ if not any(item.get("ip") == expected_ip and expected_host in (item.get("hostnam
 
   while (( elapsed < timeout_secs )); do
     succeeded="$("${kubectl_bin}" -n ansible get job "${job_name}" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)"
-    failed="$("${kubectl_bin}" -n ansible get job "${job_name}" -o jsonpath='{.status.failed}' 2>/dev/null || true)"
+    # A failed pod is only an attempt while the Job still has backoff budget.
+    # Stop only when the controller declares the Job itself terminally Failed.
+    failed="$("${kubectl_bin}" -n ansible get job "${job_name}" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
     active="$("${kubectl_bin}" -n ansible get job "${job_name}" -o jsonpath='{.status.active}' 2>/dev/null || true)"
 
     if [[ "${succeeded}" =~ ^[1-9][0-9]*$ ]]; then
       wait_rc=0
       break
     fi
-    if [[ "${failed}" =~ ^[1-9][0-9]*$ ]]; then
+    if [[ "${failed}" == "True" ]]; then
       wait_rc=1
       break
     fi
