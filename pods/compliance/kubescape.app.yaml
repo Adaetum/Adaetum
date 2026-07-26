@@ -30,21 +30,16 @@ source_helm_values: |
 
   kubescape:
     serviceMonitor:
-      enabled: true
-      # Producing scan metrics can take substantially longer than an ordinary
-      # HTTP scrape. Preserve the chart's intended collection window instead
-      # of inheriting Prometheus's shorter global timeout.
-      interval: 200s
-      scrapeTimeout: 150s
+      # Chart 1.40.3 also applies these labels to the dedicated exporter's
+      # ServiceMonitor. Do not scrape the scanner's /v1/metrics endpoint: it
+      # performs scan work and can return HTTP 500 while the pod is Ready.
+      enabled: false
       additionalLabels:
         release: rancher-monitoring
 
-  nodeAgent:
-    config:
-      # The ServiceMonitor alone does not start the node-agent listener.
-      prometheusExporter: enable
+  prometheusExporter:
+    # The enabled capability deploys a purpose-built metrics workload. Monitor
+    # that stable /metrics endpoint instead of the node-agent runtime listener.
     serviceMonitor:
       enabled: true
-      additionalLabels:
-        release: rancher-monitoring
 destination_namespace: kubescape

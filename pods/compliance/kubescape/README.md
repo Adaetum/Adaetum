@@ -8,8 +8,8 @@ What it does
   CronJob model.
 - Turns on continuous scan features so findings are available in-cluster instead
   of only as JSON files on a PVC.
-- Enables Prometheus `ServiceMonitor` objects that are discovered by both
-  Adaetum Prometheus and Rancher Monitoring.
+- Enables Kubescape's dedicated Prometheus exporter and its `ServiceMonitor`,
+  which are discovered by both Adaetum Prometheus and Rancher Monitoring.
 
 Notes
 - The Argo CD app definition lives in [`kubescape.app.yaml`](../kubescape.app.yaml).

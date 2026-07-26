@@ -70,8 +70,6 @@ def main() -> int:
         ("pods/observability/grafana.app.yaml", ("serviceMonitor", "labels")),
         ("pods/secrets/external-secrets.app.yaml", ("serviceMonitor", "additionalLabels")),
         ("pods/secrets/reloader.app.yaml", ("reloader", "podMonitor", "labels")),
-        ("pods/compliance/kubescape.app.yaml", ("kubescape", "serviceMonitor", "additionalLabels")),
-        ("pods/compliance/kubescape.app.yaml", ("nodeAgent", "serviceMonitor", "additionalLabels")),
         ("pods/authentik/authentik.app.yaml", ("server", "metrics", "serviceMonitor", "labels")),
         ("pods/authentik/authentik.app.yaml", ("worker", "metrics", "serviceMonitor", "labels")),
     ]
@@ -150,10 +148,9 @@ def main() -> int:
         "external-secrets-webhook-metrics",
         "gitea",
         "grafana",
-        "kubescape-monitor",
         "kured",
+        "prometheus-exporter",
         "reloader-reloader",
-        "runtime-monitor",
     }
     if required_live_monitors != expected_monitors | chart_monitor_names:
         failures.append("the live healthcheck monitor inventory is out of sync with desired state")
@@ -199,12 +196,16 @@ def main() -> int:
         )
 
     kubescape = helm_values("pods/compliance/kubescape.app.yaml")
-    if nested(kubescape, "kubescape", "serviceMonitor", "interval") != "200s":
-        failures.append("Kubescape scan metrics must retain their 200s scrape interval")
-    if nested(kubescape, "kubescape", "serviceMonitor", "scrapeTimeout") != "150s":
-        failures.append("Kubescape scan metrics must retain their 150s scrape timeout")
-    if nested(kubescape, "nodeAgent", "config", "prometheusExporter") != "enable":
-        failures.append("Kubescape's node-agent monitor requires its Prometheus listener")
+    if nested(kubescape, "capabilities", "prometheusExporter") != "enable":
+        failures.append("Kubescape must deploy its dedicated Prometheus exporter")
+    if nested(kubescape, "prometheusExporter", "serviceMonitor", "enabled") is not True:
+        failures.append("Kubescape's dedicated Prometheus exporter monitor must be enabled")
+    if nested(kubescape, "kubescape", "serviceMonitor", "enabled") is not False:
+        failures.append("Kubescape's scan-triggering metrics endpoint must not be monitored")
+    if nested(kubescape, "nodeAgent", "serviceMonitor", "enabled") is True:
+        failures.append("Kubescape's node-agent runtime listener must not be monitored")
+    if nested(kubescape, "kubescape", "serviceMonitor", "additionalLabels", "release") != "rancher-monitoring":
+        failures.append("Kubescape's exporter monitor is not discoverable by Rancher monitoring")
 
     argocd_values = (ROOT / "ansible/automation-roles/argocd-install/templates/argocd-values.yaml.j2").read_text(
         encoding="utf-8"

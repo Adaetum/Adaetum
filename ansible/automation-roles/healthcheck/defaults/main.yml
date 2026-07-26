@@ -48,7 +48,6 @@ healthcheck_required_monitor_names:
   - gitea
   - grafana
   - kube-vip
-  - kubescape-monitor
   - kured
+  - prometheus-exporter
   - reloader-reloader
-  - runtime-monitor
