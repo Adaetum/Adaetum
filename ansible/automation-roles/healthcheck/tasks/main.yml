@@ -154,7 +154,7 @@
       - >-
         healthcheck_required_monitor_names
         | difference(
-            (health_monitor_resources.stdout | from_json).items
+            (health_monitor_resources.stdout | from_json)['items']
             | map(attribute='metadata.name')
             | list
           )

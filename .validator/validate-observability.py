@@ -135,6 +135,13 @@ def main() -> int:
     healthcheck_defaults = yaml.safe_load(
         (ROOT / "ansible/automation-roles/healthcheck/defaults/main.yml").read_text(encoding="utf-8")
     )
+    healthcheck_tasks = (
+        ROOT / "ansible/automation-roles/healthcheck/tasks/main.yml"
+    ).read_text(encoding="utf-8")
+    if "(health_monitor_resources.stdout | from_json)['items']" not in healthcheck_tasks:
+        failures.append(
+            "healthcheck must access the monitor JSON items key without resolving dict.items"
+        )
     required_live_monitors = set(healthcheck_defaults.get("healthcheck_required_monitor_names", []))
     chart_monitor_names = {
         "alertmanager",
