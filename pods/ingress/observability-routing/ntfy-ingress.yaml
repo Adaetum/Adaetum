@@ -6,6 +6,9 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # The ntfy web client stores subscriptions locally. Opening the service
+    # root must deep-link every operator client into Adaetum's alert inbox.
+    nginx.ingress.kubernetes.io/app-root: /adaetum-alerts
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"

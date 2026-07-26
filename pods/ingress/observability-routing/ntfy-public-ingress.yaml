@@ -7,6 +7,9 @@ metadata:
     # Native ntfy clients require API responses, not an Authentik browser
     # redirect. The workload enforces deny-all native authentication instead.
     external-dns.alpha.kubernetes.io/hostname: ntfy.adaetum.invalid
+    # A topic deep link subscribes each authenticated web client locally while
+    # leaving native publish and subscribe API paths unchanged.
+    nginx.ingress.kubernetes.io/app-root: /adaetum-alerts
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"

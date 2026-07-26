@@ -169,6 +169,21 @@ def main() -> int:
         if present:
             failures.append("rendered public Ingress ntfy-api-public contains incompatible Authentik forward-auth annotations")
 
+    # ntfy has no server-side per-user topic subscription. Its supported topic
+    # deep link subscribes each web or mobile client locally, so both operator
+    # entrypoints must turn the bare service URL into the Adaetum alert inbox.
+    for name in ("ntfy-api-internal", "ntfy-api-public"):
+        document = next(
+            (
+                item
+                for item in ingress_documents
+                if re.search(rf"(?m)^\s*name:\s+{re.escape(name)}\s*$", item)
+            ),
+            "",
+        )
+        if "nginx.ingress.kubernetes.io/app-root: /adaetum-alerts" not in document:
+            failures.append(f"rendered ntfy Ingress {name} does not open the Adaetum alert topic")
+
     # external-dns reads the rendered domain from an environment variable so
     # its command remains stable across profile changes. Kubernetes expands
     # that variable in args at container start; verify both halves of the
