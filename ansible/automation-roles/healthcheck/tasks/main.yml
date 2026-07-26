@@ -166,7 +166,7 @@
   when:
     - healthcheck_check_observability | bool
     - health_monitor_resources is defined
-    - health_monitor_resources.rc == 0
+    - (health_monitor_resources.rc | default(1)) == 0
 
 - name: Query Adaetum Prometheus active scrape targets
   ansible.builtin.command:
@@ -229,7 +229,7 @@
   when:
     - healthcheck_check_observability | bool
     - health_adaetum_prometheus_targets is defined
-    - health_adaetum_prometheus_targets.rc == 0
+    - (health_adaetum_prometheus_targets.rc | default(1)) == 0
 
 - name: Detect Rancher Monitoring Prometheus
   ansible.builtin.command: >-
@@ -268,7 +268,7 @@
   when:
     - healthcheck_check_observability | bool
     - health_rancher_prometheus_service is defined
-    - health_rancher_prometheus_service.rc == 0
+    - (health_rancher_prometheus_service.rc | default(1)) == 0
 
 - name: Verify Rancher Prometheus discovered every required monitor
   ansible.builtin.assert:
@@ -290,7 +290,7 @@
   when:
     - healthcheck_check_observability | bool
     - health_rancher_prometheus_targets is defined
-    - health_rancher_prometheus_targets.rc == 0
+    - (health_rancher_prometheus_targets.rc | default(1)) == 0
 
 - name: Collect service logs
   ansible.builtin.command: "journalctl -u {{ item }} -n {{ healthcheck_log_lines }} --no-pager"

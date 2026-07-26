@@ -178,6 +178,14 @@ def main() -> int:
     if "map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\\1')" in healthcheck_tasks:
         failures.append("Prometheus target checks must not use a Jinja-escaped regex backreference")
     for marker in (
+        "(health_monitor_resources.rc | default(1)) == 0",
+        "(health_adaetum_prometheus_targets.rc | default(1)) == 0",
+        "(health_rancher_prometheus_service.rc | default(1)) == 0",
+        "(health_rancher_prometheus_targets.rc | default(1)) == 0",
+    ):
+        if healthcheck_tasks.count(marker) != 1:
+            failures.append(f"optional observability results must safely guard missing rc with {marker}")
+    for marker in (
         "--selector=release=rancher-monitoring",
         "services/http:prometheus-operated:9090/proxy/api/v1/targets?state=active",
         "services/http:rancher-monitoring-prometheus:9090/proxy/api/v1/targets?state=active",
