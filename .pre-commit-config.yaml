@@ -48,6 +48,13 @@ repos:
         additional_dependencies: [pyyaml]
         pass_filenames: false
         files: ^(platform\.yaml|tasks/scripts/(render-platform-profile|render-pods-config|validate-platform-profile)\.py|ansible/playbooks/day2\.yml|ansible/automation-roles/host-maintenance/.*|pods/(operations/kured\.app\.yaml(\.tmpl)?|observability/prometheus\.app\.yaml)|\.validator/validate-host-maintenance\.py)$
+      - id: validate-observability
+        name: Validate metrics and notification routing
+        entry: python3 .validator/validate-observability.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        files: ^(ansible/(ansible-scripts/bootstrap/Phase-40/run-phase40\.sh|automation-roles/(argocd-install/templates/argocd-values\.yaml\.j2|healthcheck/(defaults|tasks)/main\.yml))|pods/(authentik/authentik\.app\.yaml|cloudflared/.+|compliance/(kubescape|kubewarden-controller)\.app\.yaml|gitea/gitea-values\.yaml(\.tmpl)?|ingress/(external-dns|kube-vip)/.+|observability/.+|operations/kured\.app\.yaml(\.tmpl)?|secrets/(external-secrets|reloader)\.app\.yaml)|\.validator/validate-observability\.py)$
       - id: validate-doc-links
         name: Validate repository Markdown links
         entry: python3 .validator/validate-doc-links.py

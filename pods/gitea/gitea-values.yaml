@@ -67,6 +67,12 @@ ingress:
 # Keep these aligned with the Phase 50 local bootstrap install so Argo takeover
 # is a no-op instead of rolling Gitea onto a different inline config secret.
 gitea:
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: rancher-monitoring
   # Reconcile the internal admin account from the OpenBao-backed Secret on
   # every pod start. Database delivery changes happen only after PostgreSQL is
   # updated, then Reloader starts Gitea with both current credentials.

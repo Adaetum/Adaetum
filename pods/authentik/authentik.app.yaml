@@ -12,7 +12,21 @@ source_helm_values: |
     error_reporting:
       enabled: false
 
+  # Use Authentik's maintained recording and alerting rules rather than
+  # duplicating product-specific PromQL in Adaetum.
+  prometheus:
+    rules:
+      enabled: true
+      labels:
+        release: rancher-monitoring
+
   server:
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        labels:
+          release: rancher-monitoring
     serviceAccountName: authentik-csi
     volumes:
       - name: authentik-openbao
@@ -84,6 +98,12 @@ source_helm_values: |
       enabled: false
 
   worker:
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        labels:
+          release: rancher-monitoring
     serviceAccountName: authentik-csi
     initContainers:
       - name: wait-for-postgresql

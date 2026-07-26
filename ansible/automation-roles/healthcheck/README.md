@@ -14,7 +14,11 @@ useful for troubleshooting, and low on side effects.
 - DNS resolution and outbound ping.
 - Tailscale status (non-fatal).
 - Required services are running.
-- Optional kube API `/healthz` check if `kubectl_cmd` is set.
+- Kube API `/healthz` check using an explicitly supplied or locally detected
+  RKE2 `kubectl`.
+- Live verification that every required ServiceMonitor or PodMonitor exists,
+  Adaetum Prometheus has an active healthy scrape pool for each one, and an
+  installed Rancher Monitoring Prometheus has discovered the same resources.
 - Recent logs for key services with error pattern matching.
 - Writes a report to disk (optional).
 
@@ -34,6 +38,10 @@ the role runs:
 - `healthcheck_ping_target`: IP/host to ping.
 - `healthcheck_cpu_load_max_per_core`: 1m load threshold per core.
 - `healthcheck_check_kube_api`: enable kube API `/healthz` check.
+- `healthcheck_check_observability`: verify monitor resources and Prometheus
+  target discovery.
+- `healthcheck_required_monitor_names`: stable monitor names required after
+  GitOps reconciliation.
 
 ## Example overrides
 

@@ -53,7 +53,7 @@ source_helm_values: |
     create: true
     namespace: observability
     labels:
-      release: prometheus
+      release: rancher-monitoring
   service:
     create: true
 

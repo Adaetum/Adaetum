@@ -25,6 +25,12 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - manager
+          ports:
+            # kube-vip exposes Prometheus metrics on this default port. A
+            # PodMonitor preserves one target per host-networked DaemonSet pod.
+            - name: metrics
+              containerPort: 2112
+              protocol: TCP
           env:
             - name: vip_arp
               value: "true"

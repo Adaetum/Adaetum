@@ -6,6 +6,11 @@ source_chart: grafana
 # Rotation relies on this chart's command override and persistent-volume shape.
 source_target_revision: "10.5.15"
 source_helm_values: |
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: rancher-monitoring
+
   serviceAccount:
     create: false
     name: grafana

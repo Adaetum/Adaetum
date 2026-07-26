@@ -1,0 +1,54 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: adaetum-notification-pipeline
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: adaetum-observability
+    release: rancher-monitoring
+spec:
+  groups:
+    - name: adaetum-notification-pipeline
+      rules:
+        - alert: AdaetumAlertmanagerConfigReloadFailed
+          expr: alertmanager_config_last_reload_successful == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: Alertmanager cannot load its notification configuration
+            description: Alertmanager has rejected its configuration for at least 10 minutes; alerts may not reach Apprise and ntfy.
+        - alert: AdaetumNotificationDeliveryFailed
+          expr: increase(alertmanager_notifications_failed_total{integration="webhook"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Alertmanager webhook delivery is failing
+            description: Alertmanager has failed to deliver one or more notifications to the Apprise webhook during the last 10 minutes.
+    - name: adaetum-argocd
+      rules:
+        - alert: ArgoCDApplicationDataMissing
+          expr: absent(argocd_app_info) == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: Argo CD is not reporting application state
+            description: Argo CD has exposed no application information for 15 minutes, so GitOps reconciliation health cannot be verified.
+        - alert: ArgoCDApplicationNotSynced
+          expr: argocd_app_info{sync_status!="Synced"} == 1
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: Argo CD application is not synchronized
+            description: Application {{ $labels.name }} has remained outside its desired Git state for one hour.
+        - alert: ArgoCDApplicationUnhealthy
+          expr: argocd_app_info{health_status!~"Healthy|Progressing"} == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: Argo CD application is unhealthy
+            description: Application {{ $labels.name }} has reported health status {{ $labels.health_status }} for 15 minutes.

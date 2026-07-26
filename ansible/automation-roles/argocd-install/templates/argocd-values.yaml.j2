@@ -24,6 +24,10 @@ configs:
   params:
     server.insecure: "true"
 
+controller:
+  metrics:
+    enabled: true
+
 server:
   deploymentAnnotations:
     # Component annotations replace the global map in this chart, so retain
@@ -31,8 +35,12 @@ server:
     secret.reloader.stakater.com/reload: argocd-secret,argocd-redis
   service:
     type: ClusterIP
+  metrics:
+    enabled: true
 
 repoServer:
+  metrics:
+    enabled: true
   resources:
     requests:
       cpu: 100m
@@ -50,6 +58,14 @@ repoServer:
     timeoutSeconds: 10
     periodSeconds: 20
     failureThreshold: 10
+
+applicationSet:
+  metrics:
+    enabled: true
+
+notifications:
+  metrics:
+    enabled: true
 
 # Adaetum provisions argocd-redis before Helm and later reconciles its `auth`
 # field from OpenBao. Disable the chart Job so it cannot become a competing

@@ -1,0 +1,11 @@
+name: monitoring-integrations
+project: default
+annotations:
+  # The Prometheus Operator CRDs are established by kube-prometheus-stack.
+  argocd.argoproj.io/sync-wave: "1"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/observability/monitoring-integrations
+sync_options:
+  - SkipDryRunOnMissingResource=true
+destination_namespace: observability

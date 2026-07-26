@@ -21,6 +21,7 @@ COMMANDS = [
     ("pods docs contract", [sys.executable, ".validator/validate-pods-docs.py"]),
     ("pods secret patterns", [sys.executable, ".validator/validate-pods-secrets.py"]),
     ("pods consistency", [sys.executable, ".validator/validate-pods-consistency.py"]),
+    ("observability", [sys.executable, ".validator/validate-observability.py"]),
 ]
 
 

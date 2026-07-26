@@ -22,3 +22,30 @@ healthcheck_dns_name: "tailscale.com"
 healthcheck_ping_target: "1.1.1.1"
 healthcheck_cpu_load_max_per_core: 1.5
 healthcheck_check_kube_api: true
+healthcheck_check_observability: true
+# These names are the stable handoff between workload-owned metrics and both
+# Adaetum and Rancher Prometheus discovery. The live healthcheck verifies the
+# resources and active scrape pools after GitOps reconciliation.
+healthcheck_required_monitor_names:
+  - alertmanager
+  - argocd-application-controller
+  - argocd-applicationset-controller
+  - argocd-notifications-controller
+  - argocd-repo-server
+  - argocd-server
+  - authentik-server
+  - authentik-worker
+  - cloudflared
+  - external-dns
+  - external-secrets-cert-controller-metrics
+  - external-secrets-metrics
+  - external-secrets-webhook-metrics
+  - gitea
+  - grafana
+  - kube-vip
+  - kubescape-monitor
+  - kubewarden-controller
+  - kubewarden-policy-server
+  - kured
+  - reloader-reloader
+  - runtime-monitor

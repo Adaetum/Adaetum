@@ -51,6 +51,10 @@ spec:
             limits:
               cpu: 250m
               memory: 256Mi
+          ports:
+            - name: metrics
+              containerPort: 7979
+              protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -72,3 +76,18 @@ spec:
             readOnly: true
             volumeAttributes:
               secretProviderClass: external-dns-openbao
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-dns-metrics
+  namespace: ingress
+  labels:
+    app: external-dns
+spec:
+  selector:
+    app: external-dns
+  ports:
+    - name: metrics
+      port: 7979
+      targetPort: metrics

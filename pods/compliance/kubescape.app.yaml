@@ -31,8 +31,12 @@ source_helm_values: |
   kubescape:
     serviceMonitor:
       enabled: true
+      additionalLabels:
+        release: rancher-monitoring
 
   nodeAgent:
     serviceMonitor:
       enabled: true
+      additionalLabels:
+        release: rancher-monitoring
 destination_namespace: kubescape

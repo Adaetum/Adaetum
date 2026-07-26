@@ -72,6 +72,19 @@ source_helm_values: |
 
   prometheus:
     prometheusSpec:
+      # Application charts own their monitor and rule resources. Discover them
+      # cluster-wide instead of requiring this Helm release's label.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelector: {}
+      serviceMonitorNamespaceSelector: {}
+      podMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelector: {}
+      podMonitorNamespaceSelector: {}
+      ruleSelectorNilUsesHelmValues: false
+      ruleSelector: {}
+      ruleNamespaceSelector: {}
+      externalLabels:
+        cluster: adaetum
       alerting:
         alertmanagers:
           - namespace: observability

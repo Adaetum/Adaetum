@@ -104,14 +104,156 @@
   changed_when: false
   failed_when: false
 
+- name: Detect kubectl for read-only cluster health checks
+  ansible.builtin.shell: |
+    set -o pipefail
+    if command -v kubectl >/dev/null 2>&1; then
+      command -v kubectl
+    elif [ -x /var/lib/rancher/rke2/bin/kubectl ]; then
+      printf '%s\n' /var/lib/rancher/rke2/bin/kubectl
+    fi
+  args:
+    executable: /bin/bash
+  register: health_kubectl_detect
+  changed_when: false
+  failed_when: false
+  when: kubectl_cmd is not defined or (kubectl_cmd | string | length == 0)
+
+- name: Resolve kubectl for read-only cluster health checks
+  ansible.builtin.set_fact:
+    healthcheck_kubectl_cmd: >-
+      {{
+        kubectl_cmd
+        | default(health_kubectl_detect.stdout | default('') | trim, true)
+      }}
+
 - name: Check kube API health
-  ansible.builtin.command: "{{ kubectl_cmd }} get --raw=/healthz"
+  ansible.builtin.command: "{{ healthcheck_kubectl_cmd }} get --raw=/healthz"
   register: health_kube
   changed_when: false
   failed_when: false
   when:
     - healthcheck_check_kube_api | bool
-    - kubectl_cmd is defined
+    - healthcheck_kubectl_cmd | length > 0
+
+- name: Collect Rancher-compatible monitor resources
+  ansible.builtin.command: >-
+    {{ healthcheck_kubectl_cmd }} get servicemonitors,podmonitors
+    --all-namespaces
+    --selector=release=rancher-monitoring
+    --output=json
+  register: health_monitor_resources
+  changed_when: false
+  when:
+    - healthcheck_check_observability | bool
+    - healthcheck_kubectl_cmd | length > 0
+
+- name: Verify every required workload monitor exists
+  ansible.builtin.assert:
+    that:
+      - >-
+        healthcheck_required_monitor_names
+        | difference(
+            (health_monitor_resources.stdout | from_json).items
+            | map(attribute='metadata.name')
+            | list
+          )
+        | length == 0
+    fail_msg: >-
+      Required Rancher-compatible ServiceMonitor or PodMonitor resources are
+      missing after GitOps reconciliation.
+    quiet: true
+  when:
+    - healthcheck_check_observability | bool
+    - health_monitor_resources is defined
+    - health_monitor_resources.rc == 0
+
+- name: Query Adaetum Prometheus active scrape targets
+  ansible.builtin.command:
+    argv:
+      - "{{ healthcheck_kubectl_cmd }}"
+      - get
+      - >-
+        --raw=/api/v1/namespaces/observability/services/http:prometheus-operated:9090/proxy/api/v1/targets?state=active
+  register: health_adaetum_prometheus_targets
+  changed_when: false
+  when:
+    - healthcheck_check_observability | bool
+    - healthcheck_kubectl_cmd | length > 0
+
+- name: Verify Adaetum Prometheus discovered every required monitor
+  ansible.builtin.assert:
+    that:
+      - >-
+        healthcheck_required_monitor_names
+        | difference(
+            (health_adaetum_prometheus_targets.stdout | from_json).data.activeTargets
+            | map(attribute='scrapePool')
+            | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
+            | list
+          )
+        | length == 0
+      - >-
+        (health_adaetum_prometheus_targets.stdout | from_json).data.activeTargets
+        | selectattr('health', 'equalto', 'down')
+        | map(attribute='scrapePool')
+        | select('search', '/(' + (healthcheck_required_monitor_names | join('|')) + ')/')
+        | list
+        | length == 0
+    fail_msg: >-
+      Adaetum Prometheus is missing a required scrape pool or reports a required
+      workload metrics target as down.
+    quiet: true
+  when:
+    - healthcheck_check_observability | bool
+    - health_adaetum_prometheus_targets is defined
+    - health_adaetum_prometheus_targets.rc == 0
+
+- name: Detect Rancher Monitoring Prometheus
+  ansible.builtin.command: >-
+    {{ healthcheck_kubectl_cmd }} --namespace cattle-monitoring-system
+    get service rancher-monitoring-prometheus --output=name
+  register: health_rancher_prometheus_service
+  changed_when: false
+  failed_when: false
+  when:
+    - healthcheck_check_observability | bool
+    - healthcheck_kubectl_cmd | length > 0
+
+- name: Query Rancher Prometheus active scrape targets
+  ansible.builtin.command:
+    argv:
+      - "{{ healthcheck_kubectl_cmd }}"
+      - get
+      - >-
+        --raw=/api/v1/namespaces/cattle-monitoring-system/services/http:rancher-monitoring-prometheus:9090/proxy/api/v1/targets?state=active
+  register: health_rancher_prometheus_targets
+  changed_when: false
+  when:
+    - healthcheck_check_observability | bool
+    - health_rancher_prometheus_service is defined
+    - health_rancher_prometheus_service.rc == 0
+
+- name: Verify Rancher Prometheus discovered every required monitor
+  ansible.builtin.assert:
+    that:
+      - >-
+        healthcheck_required_monitor_names
+        | difference(
+            (health_rancher_prometheus_targets.stdout | from_json).data.activeTargets
+            | map(attribute='scrapePool')
+            | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
+            | list
+          )
+        | length == 0
+    fail_msg: >-
+      Rancher Monitoring is installed but its Prometheus instance has not
+      discovered every Adaetum ServiceMonitor and PodMonitor.
+    quiet: true
+  when:
+    - healthcheck_check_observability | bool
+    - health_rancher_prometheus_targets is defined
+    - health_rancher_prometheus_targets.rc == 0
 
 - name: Collect service logs
   ansible.builtin.command: "journalctl -u {{ item }} -n {{ healthcheck_log_lines }} --no-pager"

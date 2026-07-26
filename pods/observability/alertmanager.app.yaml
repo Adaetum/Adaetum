@@ -9,6 +9,12 @@ source_helm_values: |
     enabled: true
     storageClass: longhorn
     size: 5Gi
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      # Rancher's cluster Prometheus selects monitors with this label;
+      # Adaetum's Prometheus intentionally discovers all monitor resources.
+      release: rancher-monitoring
   config:
     global: {}
     route:
@@ -18,11 +24,24 @@ source_helm_values: |
       repeat_interval: "4h"
       receiver: "null-receiver"
       routes:
-        # Keep the initial default actionable. Warning and informational alerts
-        # remain visible in Alertmanager without becoming notification noise.
+        # Keep dead-man and informational control alerts visible without
+        # generating periodic ntfy noise.
+        - receiver: "null-receiver"
+          matchers:
+            - 'alertname=~"Watchdog|InfoInhibitor"'
+        # Both actionable severities use the supported notification path:
+        # Alertmanager -> Apprise -> authenticated ntfy publisher.
         - receiver: "apprise"
           matchers:
-            - 'severity="critical"'
+            - 'severity=~"warning|critical"'
+    inhibit_rules:
+      # When the same fault escalates, send the critical notification and
+      # suppress its warning counterpart.
+      - source_matchers:
+          - 'severity="critical"'
+        target_matchers:
+          - 'severity="warning"'
+        equal: ["alertname", "namespace"]
     receivers:
       - name: "apprise"
         webhook_configs:
@@ -32,7 +51,7 @@ source_helm_values: |
             # required notification contract without another bridge service.
             payload:
               title: '{{ if eq .Status "firing" }}FIRING{{ else }}RESOLVED{{ end }}: {{ .CommonLabels.alertname }}'
-              body: '{{ range .Alerts }}{{ .Annotations.summary }}{{ if .Annotations.description }} - {{ .Annotations.description }}{{ end }}{{ "\n" }}{{ end }}'
-              type: '{{ if eq .Status "firing" }}failure{{ else }}success{{ end }}'
+              body: '{{ range .Alerts }}{{ .Annotations.summary }}{{ if .Annotations.description }} - {{ .Annotations.description }}{{ else if .Annotations.message }} - {{ .Annotations.message }}{{ end }}{{ "\n" }}{{ end }}'
+              type: '{{ if eq .Status "resolved" }}success{{ else if eq .CommonLabels.severity "warning" }}warning{{ else }}failure{{ end }}'
       - name: "null-receiver"
 destination_namespace: observability
