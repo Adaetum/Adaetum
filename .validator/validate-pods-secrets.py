@@ -387,8 +387,12 @@ ROTATION_CONTRACTS = {
     ),
     "ansible/playbooks/platform-bootstrap.yml": (
         'rancher_chart_version: "2.14.3"',
+        'kubewarden_ui_extension_chart_version: "4.1.5"',
         'argocd_chart_version: "10.1.4"',
         "--version {{ rancher_chart_version }}",
+        "patch features.management.cattle.io uiextension",
+        "upgrade --install kubewarden rancher-ui-plugins/kubewarden",
+        "get uiplugins.catalog.cattle.io kubewarden",
         "create secret generic authentik-encryption",
         "create secret generic authentik-postgresql",
         "create secret generic gitea-encryption",
