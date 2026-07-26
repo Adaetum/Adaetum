@@ -31,9 +31,8 @@ health endpoints; a monitor must scrape Prometheus-format metrics.
 | Authentik server and worker | Chart-native ServiceMonitors | Authentik-maintained recording and alert rules |
 | Gitea, Grafana, Alertmanager, External Secrets, Kured, and Kubescape | Chart-native ServiceMonitors | Product metrics plus upstream workload and target rules |
 | Reloader | Chart-native PodMonitor | Upstream workload and target rules |
-| Kubewarden controller and default PolicyServer | ServiceMonitors in this app | Upstream workload and target rules; policy decisions remain audit data |
 | external-dns, cloudflared, and kube-vip | Native metrics ports plus monitors in this app | Upstream workload and target rules |
-| Apprise, ntfy, Homepage, Headlamp, ansible-runner, CSI providers, and secret-sync resources | kube-state-metrics; no fake metrics endpoints | Upstream Deployment, StatefulSet, DaemonSet, Job, pod, and PVC rules |
+| Kubewarden, Apprise, ntfy, Homepage, Headlamp, ansible-runner, CSI providers, and secret-sync resources | kube-state-metrics; no fake or unowned metrics endpoints | Upstream Deployment, StatefulSet, DaemonSet, Job, pod, and PVC rules |
 
 OpenBao's metrics endpoint requires an authenticated token unless explicitly
 made public. Adaetum does not weaken that boundary or persist a monitoring token

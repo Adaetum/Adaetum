@@ -49,8 +49,6 @@ healthcheck_required_monitor_names:
   - grafana
   - kube-vip
   - kubescape-monitor
-  - kubewarden-controller
-  - kubewarden-policy-server
   - kured
   - reloader-reloader
   - runtime-monitor

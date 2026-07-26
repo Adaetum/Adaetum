@@ -120,8 +120,6 @@ def main() -> int:
         "argocd-notifications-controller",
         "argocd-repo-server",
         "argocd-server",
-        "kubewarden-controller",
-        "kubewarden-policy-server",
         "external-dns",
         "cloudflared",
         "kube-vip",
@@ -195,8 +193,18 @@ def main() -> int:
                 failures.append(f"{path} is missing its native metrics contract: {marker}")
 
     kubewarden = helm_values("pods/compliance/kubewarden-controller.app.yaml")
-    if nested(kubewarden, "telemetry", "metrics") is not True:
-        failures.append("Kubewarden telemetry metrics must remain enabled")
+    if nested(kubewarden, "telemetry", "metrics") is not False:
+        failures.append(
+            "Kubewarden telemetry must remain disabled without an owned OpenTelemetry Operator"
+        )
+
+    kubescape = helm_values("pods/compliance/kubescape.app.yaml")
+    if nested(kubescape, "kubescape", "serviceMonitor", "interval") != "200s":
+        failures.append("Kubescape scan metrics must retain their 200s scrape interval")
+    if nested(kubescape, "kubescape", "serviceMonitor", "scrapeTimeout") != "150s":
+        failures.append("Kubescape scan metrics must retain their 150s scrape timeout")
+    if nested(kubescape, "nodeAgent", "config", "prometheusExporter") != "enable":
+        failures.append("Kubescape's node-agent monitor requires its Prometheus listener")
 
     argocd_values = (ROOT / "ansible/automation-roles/argocd-install/templates/argocd-values.yaml.j2").read_text(
         encoding="utf-8"

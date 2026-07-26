@@ -15,8 +15,10 @@ source_helm_values: |
     policyReporter: false
 
   telemetry:
-    # Rancher scrapes the controller and PolicyServer services produced by
-    # Kubewarden's sidecar telemetry mode.
-    metrics: true
+    # Sidecar telemetry requires the OpenTelemetry Operator to inject and own
+    # an OpenTelemetryCollector. Adaetum does not carry that additional
+    # operator solely for Kubewarden, whose workload state remains covered by
+    # kube-state-metrics.
+    metrics: false
     tracing: false
 destination_namespace: kubewarden

@@ -99,25 +99,6 @@ spec:
       scrapeTimeout: 10s
 ---
 apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: kubewarden-controller
-  namespace: observability
-  labels:
-    release: rancher-monitoring
-spec:
-  namespaceSelector:
-    matchNames:
-      - kubewarden
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: kubewarden-controller
-  endpoints:
-    - port: metrics
-      interval: 30s
-      scrapeTimeout: 10s
----
-apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: kube-vip
@@ -132,25 +113,6 @@ spec:
     matchLabels:
       app: kube-vip
   podMetricsEndpoints:
-    - port: metrics
-      interval: 30s
-      scrapeTimeout: 10s
----
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: kubewarden-policy-server
-  namespace: observability
-  labels:
-    release: rancher-monitoring
-spec:
-  namespaceSelector:
-    matchNames:
-      - kubewarden
-  selector:
-    matchLabels:
-      app: kubewarden-policy-server-default
-  endpoints:
     - port: metrics
       interval: 30s
       scrapeTimeout: 10s
