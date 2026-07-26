@@ -140,42 +140,64 @@ tasks:
   reset:
     desc: Clean generated state and return the checkout to public Adaetum main
     cmds:
-      - task: clean
       - cmd: |
           set -euo pipefail
           public_origin="https://github.com/Adaetum/Adaetum.git"
+          public_ref="refs/remotes/adaetum-reset/main"
           if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
             echo "task reset must run inside a Git checkout." >&2
             exit 1
           fi
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "task reset will not discard remaining worktree changes. Commit, stash, or remove them, then rerun." >&2
+          if [ "$(git branch --show-current)" != "main" ]; then
+            echo "task reset must run from main; it will not switch branches." >&2
             exit 1
           fi
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "task reset will not discard worktree changes. Commit, stash, or remove them, then rerun." >&2
+            exit 1
+          fi
+          # A private recovery checkout may contain profile commits that public
+          # main must not retain. Discard them only after proving that the
+          # current commit is already recoverable from the configured origin.
+          git fetch origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "task reset will not discard commits that are not published to origin/main." >&2
+            exit 1
+          fi
+          # Fetch canonical public main before cleanup changes tracked profile
+          # outputs, so a network failure cannot strand a dirty checkout.
+          git fetch "${public_origin}" "+refs/heads/main:${public_ref}"
+          python3 ./tasks/scripts/clean-public-safe-config.py
+          python3 ./tasks/scripts/clean-derived-setup-artifacts.py
           git remote set-url origin "${public_origin}"
           git remote set-url --push origin "${public_origin}"
-          git fetch origin main
-          if git show-ref --verify --quiet refs/heads/main; then
-            git switch main
-          else
-            git switch --track -c main origin/main
-          fi
-          git merge --ff-only origin/main
+          # This destructive step is the explicit contract of task reset. The
+          # clean-worktree and publication guards above protect local work.
+          git reset --hard "${public_ref}"
+          git update-ref refs/remotes/origin/main "${public_ref}"
+          git update-ref -d "${public_ref}"
           git branch --set-upstream-to=origin/main main >/dev/null
           echo "Reset complete: $(git rev-parse --short HEAD) on public main."
         platforms: [linux, darwin]
       - cmd: |
           $ErrorActionPreference = 'Stop'
           $publicOrigin = 'https://github.com/Adaetum/Adaetum.git'
+          $publicRef = 'refs/remotes/adaetum-reset/main'
           git rev-parse --is-inside-work-tree *> $null
           if ($LASTEXITCODE -ne 0) { throw 'task reset must run inside a Git checkout.' }
-          if ((git status --porcelain)) { throw 'task reset will not discard remaining worktree changes. Commit, stash, or remove them, then rerun.' }
+          if ((git branch --show-current) -ne 'main') { throw 'task reset must run from main; it will not switch branches.' }
+          if ((git status --porcelain)) { throw 'task reset will not discard worktree changes. Commit, stash, or remove them, then rerun.' }
+          git fetch origin '+refs/heads/main:refs/remotes/origin/main'
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'task reset will not discard commits that are not published to origin/main.' }
+          git fetch $publicOrigin "+refs/heads/main:${publicRef}"
+          python ./tasks/scripts/clean-public-safe-config.py
+          python ./tasks/scripts/clean-derived-setup-artifacts.py
           git remote set-url origin $publicOrigin
           git remote set-url --push origin $publicOrigin
-          git fetch origin main
-          git show-ref --verify --quiet refs/heads/main
-          if ($LASTEXITCODE -eq 0) { git switch main } else { git switch --track -c main origin/main }
-          git merge --ff-only origin/main
+          git reset --hard $publicRef
+          git update-ref refs/remotes/origin/main $publicRef
+          git update-ref -d $publicRef
           git branch --set-upstream-to=origin/main main
           Write-Output ("Reset complete: " + (git rev-parse --short HEAD) + ' on public main.')
         platforms: [windows]

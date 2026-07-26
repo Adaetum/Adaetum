@@ -499,6 +499,19 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("fresh-input first-run mode is not exposed as task init:clean")
     if "init:silent:" not in taskfile or "ADAETUM_INIT_SILENT" not in env_tasks:
         fail("saved-state first-run replay is not exposed as task init:silent")
+    reset_block = taskfile.split("\n  reset:\n", 1)[1].split("\n  maintainer-on:\n", 1)[0]
+    reset_clean = "python3 ./tasks/scripts/clean-public-safe-config.py"
+    reset_public_fetch = 'git fetch "${public_origin}" "+refs/heads/main:${public_ref}"'
+    if reset_block.find('git status --porcelain') > reset_block.find(reset_clean):
+        fail("task reset checks for worktree changes only after creating public-safe output changes")
+    if reset_block.find(reset_public_fetch) > reset_block.find(reset_clean):
+        fail("task reset can dirty the profile before proving canonical public main is available")
+    if "git merge-base --is-ancestor HEAD origin/main" not in reset_block:
+        fail("task reset can discard commits that are not published to the recovery origin")
+    if 'git reset --hard "${public_ref}"' not in reset_block:
+        fail("task reset does not actually return main to canonical public history")
+    if "git switch" in reset_block or "- task: clean" in reset_block:
+        fail("task reset still switches branches or dirties the checkout before its safety checks")
     if "adaetum_ui_silent_enabled" not in gum_ui or "Silent replay" not in gum_ui:
         fail("first-run questions cannot replay saved/default decisions")
     if "Silent replay could not load a valid saved Cloudflare token" not in first_run:
