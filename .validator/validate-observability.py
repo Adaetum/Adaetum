@@ -84,6 +84,12 @@ def main() -> int:
         if not isinstance(labels, dict) or labels.get("release") != "rancher-monitoring":
             failures.append(f"{path} monitor is not discoverable by Rancher monitoring")
 
+    external_secrets = helm_values("pods/secrets/external-secrets.app.yaml")
+    if nested(external_secrets, "serviceMonitor", "renderMode") != "skipIfMissing":
+        failures.append(
+            "External Secrets must defer ServiceMonitors until the monitoring CRD exists"
+        )
+
     authentik = helm_values("pods/authentik/authentik.app.yaml")
     if nested(authentik, "prometheus", "rules", "enabled") is not True:
         failures.append("Authentik's maintained Prometheus rules must remain enabled")
