@@ -168,6 +168,16 @@ def main() -> int:
         if healthcheck_tasks.count(marker) != 2:
             failures.append(f"both Prometheus target checks must use {marker}")
     for marker in (
+        "map('regex_replace', '/[0-9]+$', '')",
+        "map('regex_replace', '^.*/', '')",
+    ):
+        if healthcheck_tasks.count(marker) != 4:
+            failures.append(
+                f"all Prometheus target checks must extract scrape-pool names with {marker}"
+            )
+    if "map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\\1')" in healthcheck_tasks:
+        failures.append("Prometheus target checks must not use a Jinja-escaped regex backreference")
+    for marker in (
         "--selector=release=rancher-monitoring",
         "services/http:prometheus-operated:9090/proxy/api/v1/targets?state=active",
         "services/http:rancher-monitoring-prometheus:9090/proxy/api/v1/targets?state=active",

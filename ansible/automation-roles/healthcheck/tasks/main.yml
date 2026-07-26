@@ -184,7 +184,8 @@
     | difference(
         ((health_adaetum_prometheus_targets.stdout | from_json)['data']['activeTargets'])
         | map(attribute='scrapePool')
-        | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
+        | map('regex_replace', '/[0-9]+$', '')
+        | map('regex_replace', '^.*/', '')
         | list
       )
     | length == 0
@@ -209,7 +210,8 @@
         | difference(
             (health_adaetum_prometheus_targets.stdout | from_json)['data']['activeTargets']
             | map(attribute='scrapePool')
-            | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
+            | map('regex_replace', '/[0-9]+$', '')
+            | map('regex_replace', '^.*/', '')
             | list
           )
         | length == 0
@@ -256,7 +258,8 @@
     | difference(
         ((health_rancher_prometheus_targets.stdout | from_json)['data']['activeTargets'])
         | map(attribute='scrapePool')
-        | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
+        | map('regex_replace', '/[0-9]+$', '')
+        | map('regex_replace', '^.*/', '')
         | list
       )
     | length == 0
@@ -275,7 +278,8 @@
         | difference(
             (health_rancher_prometheus_targets.stdout | from_json)['data']['activeTargets']
             | map(attribute='scrapePool')
-            | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
+            | map('regex_replace', '/[0-9]+$', '')
+            | map('regex_replace', '^.*/', '')
             | list
           )
         | length == 0
