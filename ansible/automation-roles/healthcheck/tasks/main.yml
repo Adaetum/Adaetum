@@ -177,6 +177,26 @@
         --raw=/api/v1/namespaces/observability/services/http:prometheus-operated:9090/proxy/api/v1/targets?state=active
   register: health_adaetum_prometheus_targets
   changed_when: false
+  until: >-
+    health_adaetum_prometheus_targets.rc == 0
+    and
+    healthcheck_required_monitor_names
+    | difference(
+        ((health_adaetum_prometheus_targets.stdout | from_json)['data']['activeTargets'])
+        | map(attribute='scrapePool')
+        | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
+        | list
+      )
+    | length == 0
+    and
+    ((health_adaetum_prometheus_targets.stdout | from_json)['data']['activeTargets'])
+    | selectattr('health', 'equalto', 'down')
+    | map(attribute='scrapePool')
+    | select('search', '/(' + (healthcheck_required_monitor_names | join('|')) + ')/')
+    | list
+    | length == 0
+  retries: "{{ healthcheck_observability_target_retries | int }}"
+  delay: "{{ healthcheck_observability_target_delay | int }}"
   when:
     - healthcheck_check_observability | bool
     - healthcheck_kubectl_cmd | length > 0
@@ -187,14 +207,14 @@
       - >-
         healthcheck_required_monitor_names
         | difference(
-            (health_adaetum_prometheus_targets.stdout | from_json).data.activeTargets
+            (health_adaetum_prometheus_targets.stdout | from_json)['data']['activeTargets']
             | map(attribute='scrapePool')
             | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
             | list
           )
         | length == 0
       - >-
-        (health_adaetum_prometheus_targets.stdout | from_json).data.activeTargets
+        (health_adaetum_prometheus_targets.stdout | from_json)['data']['activeTargets']
         | selectattr('health', 'equalto', 'down')
         | map(attribute='scrapePool')
         | select('search', '/(' + (healthcheck_required_monitor_names | join('|')) + ')/')
@@ -229,6 +249,19 @@
         --raw=/api/v1/namespaces/cattle-monitoring-system/services/http:rancher-monitoring-prometheus:9090/proxy/api/v1/targets?state=active
   register: health_rancher_prometheus_targets
   changed_when: false
+  until: >-
+    health_rancher_prometheus_targets.rc == 0
+    and
+    healthcheck_required_monitor_names
+    | difference(
+        ((health_rancher_prometheus_targets.stdout | from_json)['data']['activeTargets'])
+        | map(attribute='scrapePool')
+        | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
+        | list
+      )
+    | length == 0
+  retries: "{{ healthcheck_observability_target_retries | int }}"
+  delay: "{{ healthcheck_observability_target_delay | int }}"
   when:
     - healthcheck_check_observability | bool
     - health_rancher_prometheus_service is defined
@@ -240,7 +273,7 @@
       - >-
         healthcheck_required_monitor_names
         | difference(
-            (health_rancher_prometheus_targets.stdout | from_json).data.activeTargets
+            (health_rancher_prometheus_targets.stdout | from_json)['data']['activeTargets']
             | map(attribute='scrapePool')
             | map('regex_replace', '^.*/([^/]+)/[0-9]+$', '\1')
             | list

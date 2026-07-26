@@ -159,9 +159,19 @@ def main() -> int:
     }
     if required_live_monitors != expected_monitors | chart_monitor_names:
         failures.append("the live healthcheck monitor inventory is out of sync with desired state")
-    healthcheck_tasks = (
-        ROOT / "ansible/automation-roles/healthcheck/tasks/main.yml"
-    ).read_text(encoding="utf-8")
+    for setting in (
+        "healthcheck_observability_target_retries",
+        "healthcheck_observability_target_delay",
+    ):
+        value = healthcheck_defaults.get(setting)
+        if not isinstance(value, int) or value < 1:
+            failures.append(f"{setting} must define a positive bounded convergence value")
+    for marker in (
+        'retries: "{{ healthcheck_observability_target_retries | int }}"',
+        'delay: "{{ healthcheck_observability_target_delay | int }}"',
+    ):
+        if healthcheck_tasks.count(marker) != 2:
+            failures.append(f"both Prometheus target checks must use {marker}")
     for marker in (
         "--selector=release=rancher-monitoring",
         "services/http:prometheus-operated:9090/proxy/api/v1/targets?state=active",

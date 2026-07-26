@@ -40,6 +40,9 @@ the role runs:
 - `healthcheck_check_kube_api`: enable kube API `/healthz` check.
 - `healthcheck_check_observability`: verify monitor resources and Prometheus
   target discovery.
+- `healthcheck_observability_target_retries` and
+  `healthcheck_observability_target_delay`: bound how long the role waits for
+  Prometheus target discovery to converge after GitOps reconciliation.
 - `healthcheck_required_monitor_names`: stable monitor names required after
   GitOps reconciliation.
 

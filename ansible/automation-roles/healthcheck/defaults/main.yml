@@ -23,6 +23,11 @@ healthcheck_ping_target: "1.1.1.1"
 healthcheck_cpu_load_max_per_core: 1.5
 healthcheck_check_kube_api: true
 healthcheck_check_observability: true
+# Prometheus discovers newly reconciled monitor resources asynchronously. Keep
+# the healthcheck strict, but allow the controllers a bounded convergence
+# window before declaring the GitOps handoff unhealthy.
+healthcheck_observability_target_retries: 30
+healthcheck_observability_target_delay: 10
 # These names are the stable handoff between workload-owned metrics and both
 # Adaetum and Rancher Prometheus discovery. The live healthcheck verifies the
 # resources and active scrape pools after GitOps reconciliation.
