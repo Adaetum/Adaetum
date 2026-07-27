@@ -838,7 +838,7 @@ MONOREPO_GITHUB_APP_PRIVATE_KEY_B64=${MONOREPO_GITHUB_APP_PRIVATE_KEY_B64}
 
 # Optional monorepo convenience defaults
 # MONOREPO_GITHUB_REPO_URL=https://github.com/YOUR_ORG/YOUR_REPO.git
-# MONOREPO_GITHUB_REPO_BRANCH=master
+# MONOREPO_GITHUB_REPO_BRANCH=main
 # MONOREPO_GITHUB_USERNAME=oauth2
 # MONOREPO_GITHUB_TOKEN=
 
@@ -956,8 +956,9 @@ fi
 
 default_ttl="$(existing_value TAILSCALE_OAUTH_TTL)"
 default_ttl="${default_ttl:-1h}"
-default_gh_branch="$(existing_value ARGOCD_GITHUB_REPO_BRANCH)"
-default_gh_branch="${default_gh_branch:-master}"
+# The private recovery repository, Gitea seed, and Argo all share one branch
+# contract. Do not carry a retired development branch forward from an old env.
+default_gh_branch="main"
 default_gh_user="$(existing_value ARGOCD_GITHUB_USERNAME)"
 if [ "${default_gh_user}" = "oauth2" ]; then
   default_gh_user=""
@@ -1293,7 +1294,7 @@ if [ -z "${default_argocd_github_repo_url}" ]; then
   default_argocd_github_repo_url="$(infer_github_repo_url || true)"
 fi
 ARGOCD_GITHUB_REPO_URL="$(prompt_value ARGOCD_GITHUB_REPO_URL 'ARGOCD_GITHUB_REPO_URL' "${default_argocd_github_repo_url}")"
-ARGOCD_GITHUB_REPO_BRANCH="$(prompt_value ARGOCD_GITHUB_REPO_BRANCH 'ARGOCD_GITHUB_REPO_BRANCH' "${default_gh_branch}")"
+ARGOCD_GITHUB_REPO_BRANCH="main"
 
 # Gitea seed inputs (source GitHub repo -> target Gitea repo).
 GITEA_SEED_ENABLED="$(existing_value GITEA_SEED_ENABLED)"
@@ -1303,9 +1304,7 @@ default_seed_source_repo="$(existing_value GITEA_SEED_SOURCE_REPO_URL)"
 [ -n "${default_seed_source_repo}" ] || default_seed_source_repo="${ARGOCD_GITHUB_REPO_URL}"
 GITEA_SEED_SOURCE_REPO_URL="$(prompt_value GITEA_SEED_SOURCE_REPO_URL 'GITEA_SEED_SOURCE_REPO_URL' "${default_seed_source_repo}")"
 
-default_seed_source_branch="$(existing_value GITEA_SEED_SOURCE_REPO_BRANCH)"
-[ -n "${default_seed_source_branch}" ] || default_seed_source_branch="${ARGOCD_GITHUB_REPO_BRANCH}"
-GITEA_SEED_SOURCE_REPO_BRANCH="$(prompt_value GITEA_SEED_SOURCE_REPO_BRANCH 'GITEA_SEED_SOURCE_REPO_BRANCH' "${default_seed_source_branch}")"
+GITEA_SEED_SOURCE_REPO_BRANCH="main"
 
 default_seed_source_username="$(existing_value GITEA_SEED_SOURCE_USERNAME)"
 [ "${default_seed_source_username}" = "oauth2" ] && default_seed_source_username=""

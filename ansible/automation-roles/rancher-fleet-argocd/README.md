@@ -26,5 +26,5 @@ Key settings in `defaults/main.yml`:
 
 ```yaml
 fleet_argocd_repo_url: "https://github.com/BingelsWorth/Cluster"
-fleet_argocd_repo_branch: "master"
+fleet_argocd_repo_branch: "main"
 ```

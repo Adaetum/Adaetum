@@ -94,14 +94,14 @@ def main() -> int:
         fail("first-run does not verify private visibility and administrative access")
     if ".fork // false" not in first_run or "contents/Taskfile.yml" not in first_run:
         fail("first-run can accept a fork or unrelated private repository")
-    if "first_run_track_recovery_branch" not in first_run or "Refreshing the existing recovery branch" not in first_run:
-        fail("reused recovery repositories do not restore branch tracking")
-    if 'git merge --no-edit "origin/${current_branch}"' not in first_run:
-        fail("reused recovery repositories do not reconcile existing cluster history")
-    if 'git push origin "${current_branch}"' not in first_run or "Publishing local recovery updates" not in first_run:
-        fail("first-run retries do not publish validated local commits that are ahead of recovery origin")
-    if "this checkout has uncommitted changes" not in first_run:
-        fail("recovery branch reconciliation can overwrite an uncommitted worktree")
+    if "first_run_track_recovery_branch" not in first_run or "Publishing authoritative recovery main" not in first_run:
+        fail("reused recovery repositories do not publish authoritative main")
+    if 'git push "--force-with-lease=refs/heads/main:${remote_head}" origin HEAD:refs/heads/main' not in first_run:
+        fail("authoritative recovery publication lacks concurrent-update protection")
+    if 'git merge --no-edit "origin/${current_branch}"' in first_run:
+        fail("task init can merge stale private branch history back into recovery main")
+    if 'git ls-remote --heads origin main' not in first_run or "origin/main does not match local HEAD" not in first_run:
+        fail("task init does not verify authoritative recovery main")
     if "git remote rename origin upstream" in first_run:
         fail("recovery remote setup can leave origin missing after a partial rename")
     if "The current repository will not be deleted" not in first_run:
@@ -209,8 +209,8 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("validated profile publication still invokes the hook twice")
     if 'git commit --no-verify -m "Configure Adaetum platform profile" -- platform.yaml' in first_run:
         fail("profile publication still excludes generated GitOps outputs from its commit")
-    if 'git ls-remote --heads origin "${current_branch}"' not in first_run:
-        fail("profile publication does not verify the pushed recovery branch")
+    if 'git push origin HEAD:refs/heads/main' not in first_run or 'git ls-remote --heads origin main' not in first_run:
+        fail("profile publication does not push and verify recovery main")
     if 'first_run_status success "Profile commit checks passed."' not in first_run or '>"${hook_log}" 2>&1' not in first_run:
         fail("successful profile publication still exposes skipped hook noise")
     if 'first_run_heading "Profile commit checks failed"' not in first_run or 'cat "${hook_log}"' not in first_run:
@@ -400,6 +400,10 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("installer handoff does not offer a Downloads-folder copy")
     if 'adaetum_ui_confirm "Download the installer ISO now?" y' not in setup:
         fail("installer download is not an explicit default-yes operator choice")
+    if "Replacing the older machine installer in Downloads." not in setup:
+        fail("task init can leave an obsolete same-named machine installer in Downloads")
+    if "Existing download left unchanged" in setup:
+        fail("task init still permits an obsolete machine installer to survive its replacement build")
     if 'if [ "${dry_run}" = "1" ]; then' not in setup or "Dry run would save the generated machine installer" not in setup:
         fail("installer download does not preserve the no-mutation dry-run contract")
     if "attach this ISO to the target physical host or VM" not in setup:
@@ -441,10 +445,17 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         fail("private recovery repositories do not validate GitHub Actions registration")
     if "adaetum_github_repository_from_url" not in first_run:
         fail("GitHub API calls can retain the github.com URL prefix")
-    if "Initialize the workflow branch" not in first_run or "HEAD:refs/heads/main" not in first_run:
+    actions_function = first_run.split("first_run_ensure_github_actions() {", 1)[1].split("\n}", 1)[0]
+    if "HEAD:refs/heads/main" not in first_run:
         fail("new private repositories do not establish the main workflow branch")
+    if actions_function.index(".default_branch // empty") > actions_function.index("actions/workflows"):
+        fail("GitHub workflow fast path can bypass main default-branch reconciliation")
     if '--default-branch main' not in first_run:
-        fail("new private repositories can use an incompatible development branch as their default")
+        fail("private recovery repositories can retain a development branch as their default")
+    if 'default_gh_branch="main"' not in env_renderer or 'ARGOCD_GITHUB_REPO_BRANCH="main"' not in env_renderer:
+        fail("runtime generation can retain a stale GitHub recovery branch")
+    if 'GITEA_SEED_SOURCE_REPO_BRANCH="main"' not in env_renderer:
+        fail("runtime generation can retain a stale Gitea seed branch")
     secret_sync_block = initial_setup.split("done <<'EOF'", 1)[1].split("EOF", 1)[0]
     if "GITHUB_SYNC_TOKEN" in secret_sync_block:
         fail("bootstrap tries to create a GitHub secret with the reserved GITHUB_ prefix")

@@ -483,10 +483,10 @@ offer_installer_download() {
       adaetum_ui_key_value "Downloaded ISO" "${download_path}"
       return 0
     fi
-    if ! adaetum_ui_confirm "Replace the older ISO already at this download location?" n; then
-      adaetum_ui_status info "Existing download left unchanged; use ${installer_iso} for this installation."
-      return 0
-    fi
+    # This filename is an Adaetum-owned derived installer handoff, not operator
+    # source data. Keeping an older same-named copy can rerun obsolete embedded
+    # bootstrap code even after task init built and verified a replacement.
+    adaetum_ui_status info "Replacing the older machine installer in Downloads."
   fi
 
   mkdir -p "${download_dir}" || die "Unable to create the installer download directory: ${download_dir}"

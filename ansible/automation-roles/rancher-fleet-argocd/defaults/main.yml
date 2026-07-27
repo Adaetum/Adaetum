@@ -12,7 +12,7 @@ fleet_argocd_repo_url: >-
 fleet_argocd_repo_branch: >-
   {{
     lookup('ansible.builtin.env', 'ARGOCD_REPO_BRANCH')
-    | default(lookup('ansible.builtin.env', 'ARGOCD_GITHUB_REPO_BRANCH') | default('master', true), true)
+    | default(lookup('ansible.builtin.env', 'ARGOCD_GITHUB_REPO_BRANCH') | default('main', true), true)
   }}
 fleet_argocd_repo_path: "pods/argocd"
 

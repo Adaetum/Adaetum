@@ -135,7 +135,7 @@ first_run_ensure_github_login() {
 
 first_run_ensure_github_actions() {
   local origin="" repository="" workflow_count="" attempt=1 is_fork="false"
-  local default_branch="" workflow_file_count="" actions_enabled="" current_branch=""
+  local default_branch="" workflow_file_count="" actions_enabled=""
   origin="$(adaetum_origin_url || true)"
   repository="$(adaetum_github_repository_from_url "${origin}" || true)"
   [ -n "${repository}" ] || die "Unable to determine the recovery repository for GitHub Actions setup."
@@ -143,6 +143,18 @@ first_run_ensure_github_actions() {
   if [ "${dry_run}" = 1 ]; then
     first_run_status success "GitHub Actions registration simulated for the private recovery repository."
     return 0
+  fi
+
+  # Recovery always executes from main. Correct repository metadata before the
+  # workflow fast path: an existing repository can already have registered
+  # workflows while still naming a retired development branch as its default.
+  default_branch="$(gh api "repos/${repository}" --jq '.default_branch // empty' 2>/dev/null || true)"
+  if [ "${default_branch}" != main ]; then
+    if ! gh api "repos/${repository}/branches/main" >/dev/null 2>&1; then
+      first_run_with_progress "Publishing the main workflow branch..." git push origin HEAD:refs/heads/main
+    fi
+    first_run_with_progress "Selecting main as the default workflow branch..." gh repo edit "${repository}" --default-branch main
+    default_branch="main"
   fi
 
   first_run_heading "GitHub workflow readiness"
@@ -157,33 +169,8 @@ first_run_ensure_github_actions() {
     attempt=$((attempt + 1))
   done
 
-  default_branch="$(gh api "repos/${repository}" --jq '.default_branch // empty' 2>/dev/null || true)"
   actions_enabled="$(gh api "repos/${repository}/actions/permissions" --jq '.enabled // false' 2>/dev/null || printf 'false')"
   workflow_file_count="$(gh api "repos/${repository}/contents/.github/workflows?ref=${default_branch}" --jq 'length' 2>/dev/null || printf '0')"
-
-  if [ "${default_branch}" != main ] && [ "${actions_enabled}" = true ]; then
-    current_branch="$(git branch --show-current)"
-    first_run_heading "Initialize the workflow branch"
-    first_run_message "${ADAETUM_UI_MUTED}" "Adaetum's workflow triggers use main, but this new repository currently defaults to ${default_branch}. Adaetum will publish the current commit to main and make main the repository's workflow branch. Your ${current_branch} development branch remains unchanged and available."
-    adaetum_ui_confirm "Create and select the main workflow branch now?" y || exit 0
-    if ! gh api "repos/${repository}/branches/main" >/dev/null 2>&1; then
-      first_run_with_progress "Publishing the main workflow branch..." git push origin HEAD:refs/heads/main
-    fi
-    first_run_with_progress "Selecting main as the default workflow branch..." gh repo edit "${repository}" --default-branch main
-    first_run_status info "Main is ready. Waiting for GitHub workflow registration..."
-    attempt=1
-    while [ "${attempt}" -le 10 ]; do
-      workflow_count="$(gh api "repos/${repository}/actions/workflows" --jq '.total_count // 0' 2>/dev/null || printf '0')"
-      if [ "${workflow_count}" -gt 0 ] 2>/dev/null; then
-        first_run_status success "GitHub Actions is enabled with ${workflow_count} registered workflow(s)."
-        return 0
-      fi
-      sleep 2
-      attempt=$((attempt + 1))
-    done
-    default_branch="main"
-    workflow_file_count="$(gh api "repos/${repository}/contents/.github/workflows?ref=main" --jq 'length' 2>/dev/null || printf '0')"
-  fi
 
   is_fork="$(gh api "repos/${repository}" --jq '.fork // false' 2>/dev/null || printf 'false')"
   if [ "${is_fork}" = true ]; then
@@ -227,35 +214,29 @@ first_run_set_recovery_origin() {
 }
 
 first_run_track_recovery_branch() {
-  local current_branch=""
+  local current_branch="" local_head="" remote_head=""
   current_branch="$(git branch --show-current)"
   [ -n "${current_branch}" ] || die "Setup requires a named Git branch before it can publish recovery state."
 
-  if git ls-remote --exit-code --heads origin "${current_branch}" >/dev/null 2>&1; then
-    first_run_with_progress "Refreshing the existing recovery branch..." \
-      git fetch origin "+refs/heads/${current_branch}:refs/remotes/origin/${current_branch}"
-    if ! git merge-base --is-ancestor "origin/${current_branch}" HEAD; then
-      if ! git diff --quiet || ! git diff --cached --quiet; then
-        die "The existing recovery branch must be merged, but this checkout has uncommitted changes. Commit or stash them, then rerun task init."
-      fi
-      first_run_status info "Restoring existing cluster configuration and recovery history from ${current_branch}..."
-      if ! first_run_with_progress "Merging the existing recovery branch..." \
-        git merge --no-edit "origin/${current_branch}"; then
-        die "The existing recovery branch conflicts with this checkout. Resolve or abort the Git merge, then rerun task init."
-      fi
-    fi
-    git branch --set-upstream-to="origin/${current_branch}" "${current_branch}" >/dev/null
-    if [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/${current_branch}")" ]; then
-      # A failed setup can leave validated local commits ahead of the private
-      # branch. Publish them during recovery instead of waiting for a later
-      # profile change that may not exist on the retry.
-      first_run_with_progress "Publishing local recovery updates..." \
-        git push origin "${current_branch}"
-    fi
-    first_run_status success "Reusing ${current_branch} from the private recovery repository."
+  local_head="$(git rev-parse HEAD)"
+  remote_head="$(git ls-remote --heads origin main | awk 'NR == 1 {print $1}')"
+  if [ -n "${remote_head}" ]; then
+    # The reviewed local checkout is authoritative during task init. A precise
+    # lease prevents overwriting a concurrent remote update while still
+    # replacing stale recovery history instead of merging it back into a new
+    # installation.
+    first_run_with_progress "Publishing authoritative recovery main..." \
+      git push "--force-with-lease=refs/heads/main:${remote_head}" origin HEAD:refs/heads/main
   else
-    first_run_with_progress "Publishing the current development branch..." git push --set-upstream origin HEAD
+    first_run_with_progress "Publishing authoritative recovery main..." git push origin HEAD:refs/heads/main
   fi
+  remote_head="$(git ls-remote --heads origin main | awk 'NR == 1 {print $1}')"
+  [ "${remote_head}" = "${local_head}" ] || die "Recovery publication failed: origin/main does not match local HEAD."
+  if [ "${current_branch}" = main ]; then
+    git fetch origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null
+    git branch --set-upstream-to=origin/main main >/dev/null
+  fi
+  first_run_status success "Private recovery main now matches the local checkout."
 }
 
 first_run_move_resume_credentials() {
@@ -360,7 +341,7 @@ first_run_find_preferred_recovery_destination() {
 
 first_run_configure_recovery_repository() {
   local origin="$(adaetum_origin_url || true)" login="" repository="" recovery_url=""
-  local visibility="" can_admin="" is_fork="" owner="" name="" suggested="" current_repository="" repository_size="" created=0
+  local visibility="" can_admin="" is_fork="" owner="" name="" suggested="" current_repository="" repository_size=""
 
   first_run_ensure_github_login
   login="${first_run_github_login}"
@@ -435,14 +416,9 @@ first_run_configure_recovery_repository() {
     else
       adaetum_ui_confirm "Create ${repository} as a private repository now?" y || exit 0
       first_run_with_progress "Creating private recovery repository..." gh repo create "${repository}" --private --description "Private Adaetum cluster configuration and recovery"
-      created=1
     fi
     first_run_move_resume_credentials "${origin}" "${recovery_url}"
     first_run_set_recovery_origin "${recovery_url}"
-    if [ "${created}" = 1 ]; then
-      first_run_with_progress "Publishing the main workflow branch..." git push origin HEAD:refs/heads/main
-      first_run_with_progress "Selecting main as the default workflow branch..." gh repo edit "${repository}" --default-branch main
-    fi
     first_run_track_recovery_branch
     break
   done
@@ -1007,12 +983,11 @@ first_run_review_profile() {
     # The complete staged recovery configuration was validated above. Avoid
     # invoking the hook again, which would only repeat the same result.
     git commit --no-verify -m "Configure Adaetum platform profile"
-    current_branch="$(git rev-parse --abbrev-ref HEAD)"
-    git push origin "${current_branch}"
+    git push origin HEAD:refs/heads/main
     local_head="$(git rev-parse HEAD)"
-    remote_head="$(git ls-remote --heads origin "${current_branch}" | awk 'NR == 1 {print $1}')"
+    remote_head="$(git ls-remote --heads origin main | awk 'NR == 1 {print $1}')"
     [ -n "${remote_head}" ] && [ "${remote_head}" = "${local_head}" ] || \
-      die "Profile push verification failed: origin/${current_branch} does not match local HEAD."
+      die "Profile push verification failed: origin/main does not match local HEAD."
   fi
 }
 

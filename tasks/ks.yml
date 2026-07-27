@@ -61,7 +61,7 @@ tasks:
         # Optional convenience: if MONOREPO_GITHUB_* is set, use it as the default
         # for both Argo CD bootstrap repo settings and kickstart repo fetch settings.
         MONOREPO_GITHUB_REPO_URL="${MONOREPO_GITHUB_REPO_URL:-}"
-        MONOREPO_GITHUB_REPO_BRANCH="${MONOREPO_GITHUB_REPO_BRANCH:-master}"
+        MONOREPO_GITHUB_REPO_BRANCH="${MONOREPO_GITHUB_REPO_BRANCH:-main}"
         MONOREPO_GITHUB_USERNAME="${MONOREPO_GITHUB_USERNAME:-}"
         MONOREPO_GITHUB_TOKEN="${MONOREPO_GITHUB_TOKEN:-}"
         GITHUB_SYNC_TOKEN="${GITHUB_SYNC_TOKEN:-}"
@@ -172,7 +172,7 @@ tasks:
           printf '%s' "${1:-}" | sed -e 's/[&\\#]/\\&/g'
         }
         gitea_seed_source_repo_url_esc="$(escape_sed_replacement "${GITEA_SEED_SOURCE_REPO_URL:-${ARGOCD_GITHUB_REPO_URL:-}}")"
-        gitea_seed_source_repo_branch_esc="$(escape_sed_replacement "${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH:-master}}")"
+        gitea_seed_source_repo_branch_esc="$(escape_sed_replacement "${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH:-main}}")"
         canonical_seed_source_token="${GITEA_SEED_SOURCE_TOKEN:-}"
         if [ -n "${repo_auth_fallback_token}" ]; then
           canonical_seed_source_token="${repo_auth_fallback_token}"
@@ -196,7 +196,7 @@ tasks:
         BOOTSTRAP_RUNTIME_ENV_URL_RENDERED="${bootstrap_runtime_env_url_rendered:-}" \
         BOOTSTRAP_BACKUP_URL_RENDERED="${bootstrap_backup_url_rendered:-}" \
         GITEA_SEED_SOURCE_REPO_URL_RENDERED="${GITEA_SEED_SOURCE_REPO_URL:-${ARGOCD_GITHUB_REPO_URL:-}}" \
-        GITEA_SEED_SOURCE_REPO_BRANCH_RENDERED="${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH:-master}}" \
+        GITEA_SEED_SOURCE_REPO_BRANCH_RENDERED="${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH:-main}}" \
         GITEA_SEED_TARGET_OWNER_RENDERED="${GITEA_SEED_TARGET_OWNER:-gitea-admin}" \
         GITEA_SEED_TARGET_REPO_RENDERED="${GITEA_SEED_TARGET_REPO:-cluster}" \
         python3 - <<'PY'

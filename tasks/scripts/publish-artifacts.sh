@@ -234,7 +234,7 @@ if [ -z "${branch}" ]; then
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 fi
 if [ -z "${branch}" ] || [ "${branch}" = "HEAD" ]; then
-  branch="master"
+  branch="main"
 fi
 
 iso_workflow_input=""

@@ -2884,10 +2884,10 @@ if [[ -z "${argocd_redis_password}" && -n "${BOOTSTRAP_SECRET_DIR:-}" ]]; then
 fi
 
 preferred_seed_repo_url="${GITEA_SEED_SOURCE_REPO_URL:-${ARGOCD_GITHUB_REPO_URL:-}}"
-preferred_seed_repo_branch="${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH:-HEAD}}"
+preferred_seed_repo_branch="${GITEA_SEED_SOURCE_REPO_BRANCH:-${ARGOCD_GITHUB_REPO_BRANCH:-main}}"
 preferred_seed_repo_token="${GITEA_SEED_SOURCE_TOKEN:-${ARGOCD_GITHUB_TOKEN:-}}"
 bootstrap_seed_repo_url="${preferred_seed_repo_url:-${ARGOCD_REPO_URL:-}}"
-bootstrap_seed_repo_branch="${preferred_seed_repo_branch:-${ARGOCD_REPO_BRANCH:-HEAD}}"
+bootstrap_seed_repo_branch="${preferred_seed_repo_branch:-${ARGOCD_REPO_BRANCH:-main}}"
 bootstrap_seed_repo_token="${preferred_seed_repo_token:-}"
 
 gitea_repo_username_effective="$(read_openbao_app_field gitea/admin username "${openbao_token}" || true)"
@@ -3278,7 +3278,7 @@ if [[ -z "${bootstrap_seed_repo_url}" ]]; then
   bootstrap_seed_repo_url="${preferred_seed_repo_url:-${ARGOCD_REPO_URL:-}}"
 fi
 if [[ -z "${bootstrap_seed_repo_branch}" ]]; then
-  bootstrap_seed_repo_branch="${preferred_seed_repo_branch:-${ARGOCD_REPO_BRANCH:-HEAD}}"
+  bootstrap_seed_repo_branch="${preferred_seed_repo_branch:-${ARGOCD_REPO_BRANCH:-main}}"
 fi
 if [[ -z "${bootstrap_seed_repo_token}" ]]; then
   bootstrap_seed_repo_token="${preferred_seed_repo_token:-}"
@@ -3296,12 +3296,12 @@ fi
 if [[ -n "${ARGOCD_REPO_URL:-}" ]] && printf '%s' "${ARGOCD_REPO_URL}" | grep -q '/gitea-admin/cluster\.git'; then
   if [[ -n "${preferred_seed_repo_url:-}" ]]; then
     bootstrap_seed_repo_url="${preferred_seed_repo_url}"
-    bootstrap_seed_repo_branch="${preferred_seed_repo_branch:-${bootstrap_seed_repo_branch:-HEAD}}"
+    bootstrap_seed_repo_branch="${preferred_seed_repo_branch:-${bootstrap_seed_repo_branch:-main}}"
     bootstrap_seed_repo_token="${preferred_seed_repo_token:-${bootstrap_seed_repo_token}}"
   elif [[ -n "${ARGOCD_REPO_TOKEN:-}" ]]; then
     echo "[phase60] Argo CD already points at the Gitea bootstrap repo; skipping GitHub source reseed"
     bootstrap_seed_repo_url="${ARGOCD_REPO_URL}"
-    bootstrap_seed_repo_branch="${ARGOCD_REPO_BRANCH:-${bootstrap_seed_repo_branch:-HEAD}}"
+    bootstrap_seed_repo_branch="${ARGOCD_REPO_BRANCH:-${bootstrap_seed_repo_branch:-main}}"
     bootstrap_seed_repo_token="${ARGOCD_REPO_TOKEN}"
     unset GITEA_SEED_SOURCE_REPO_URL || true
   else
