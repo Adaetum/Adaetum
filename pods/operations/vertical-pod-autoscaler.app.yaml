@@ -1,0 +1,58 @@
+name: vertical-pod-autoscaler
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "5"
+source_type: helm
+source_repo_url: https://kubernetes.github.io/autoscaler
+source_chart: vertical-pod-autoscaler
+source_target_revision: "0.11.0"
+source_helm_values: |
+  admissionController:
+    replicas: 2
+    extraArgs:
+      - --feature-gates=InPlace=true
+    mutatingWebhookConfiguration:
+      # Pod admission must continue if the recommender stack is unavailable.
+      failurePolicy: Ignore
+      timeoutSeconds: 5
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  recommender:
+    replicas: 2
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+
+  updater:
+    replicas: 2
+    extraArgs:
+      # InPlace mode must wait rather than evict if a live resize is not safe.
+      - --in-place-skip-disruption-budget=true
+      - --feature-gates=InPlace=true
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+destination_namespace: autoscaling-system

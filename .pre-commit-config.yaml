@@ -48,6 +48,13 @@ repos:
         additional_dependencies: [pyyaml]
         pass_filenames: false
         files: ^(platform\.yaml|tasks/scripts/(render-platform-profile|render-pods-config|validate-platform-profile)\.py|ansible/playbooks/day2\.yml|ansible/automation-roles/host-maintenance/.*|pods/(operations/kured\.app\.yaml(\.tmpl)?|observability/prometheus\.app\.yaml)|\.validator/validate-host-maintenance\.py)$
+      - id: validate-workload-autoscaling
+        name: Validate safe workload autoscaling
+        entry: python3 .validator/validate-workload-autoscaling.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        files: ^(pods/(cloudflared/cloudflared|observability/apprise|portal/homepage|operations/(descheduler|goldilocks|vertical-pod-autoscaler|workload-autosizing)).*\.ya?ml|\.validator/validate-workload-autoscaling\.py)$
       - id: validate-observability
         name: Validate metrics and notification routing
         entry: python3 .validator/validate-observability.py

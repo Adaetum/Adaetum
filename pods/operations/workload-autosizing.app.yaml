@@ -1,0 +1,12 @@
+name: workload-autosizing
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "6"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/operations/workload-autosizing
+sync_options:
+  # The first Argo pass may race the VPA chart's CRD installation. Argo retries
+  # the actual apply after discovery without weakening server-side validation.
+  - SkipDryRunOnMissingResource=true
+destination_namespace: autoscaling-system

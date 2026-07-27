@@ -1,3 +1,4 @@
 resources:
   - apprise-deployment.yaml
   - csi.yaml
+  - autoscaling.yaml

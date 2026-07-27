@@ -1,0 +1,64 @@
+name: descheduler
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "7"
+source_type: helm
+source_repo_url: https://kubernetes-sigs.github.io/descheduler/
+source_chart: descheduler
+source_target_revision: "0.35.1"
+source_helm_values: |
+  kind: CronJob
+  # Re-evaluate placement periodically without creating a continuously active
+  # eviction controller. A run cannot overlap or outlive its interval.
+  schedule: "*/30 * * * *"
+  activeDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  deschedulerPolicy:
+    maxNoOfPodsToEvictPerNode: 1
+    maxNoOfPodsToEvictPerNamespace: 1
+    maxNoOfPodsToEvictTotal: 3
+    profiles:
+      - name: adaetum-safe-rebalance
+        pluginConfig:
+          - name: DefaultEvictor
+            args:
+              nodeFit: true
+              minReplicas: 2
+              labelSelector:
+                matchLabels:
+                  autoscaling.adaetum.io/rebalance: "true"
+              podProtections:
+                # The default protections retain DaemonSets, critical pods,
+                # failed pods, and pods using local storage.
+                extraEnabled:
+                  - PodsWithPVC
+                  - PodsWithoutPDB
+          - name: RemoveDuplicates
+          - name: RemovePodsViolatingTopologySpreadConstraint
+          - name: LowNodeUtilization
+            args:
+              thresholds:
+                cpu: 30
+                memory: 30
+                pods: 30
+              targetThresholds:
+                cpu: 70
+                memory: 70
+                pods: 70
+        plugins:
+          balance:
+            enabled:
+              - RemoveDuplicates
+              - RemovePodsViolatingTopologySpreadConstraint
+              - LowNodeUtilization
+
+destination_namespace: autoscaling-system

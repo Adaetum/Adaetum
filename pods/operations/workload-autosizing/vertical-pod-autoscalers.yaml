@@ -1,0 +1,82 @@
+# CPU belongs exclusively to each HPA. These VPAs may only tune memory requests,
+# leaving hard limits and horizontal scaling stable and Git-owned.
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cloudflared
+  updatePolicy:
+    updateMode: InPlace
+    minReplicas: 2
+  resourcePolicy:
+    containerPolicies:
+      - containerName: cloudflared
+        mode: Auto
+        controlledResources:
+          - memory
+        controlledValues: RequestsOnly
+        minAllowed:
+          memory: 32Mi
+        maxAllowed:
+          memory: 256Mi
+      - containerName: "*"
+        mode: "Off"
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: apprise
+  namespace: observability
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: apprise
+  updatePolicy:
+    updateMode: InPlace
+    minReplicas: 2
+  resourcePolicy:
+    containerPolicies:
+      - containerName: apprise
+        mode: Auto
+        controlledResources:
+          - memory
+        controlledValues: RequestsOnly
+        minAllowed:
+          memory: 32Mi
+        maxAllowed:
+          memory: 256Mi
+      - containerName: "*"
+        mode: "Off"
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: homepage
+  namespace: homepage
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: homepage
+  updatePolicy:
+    updateMode: InPlace
+    minReplicas: 2
+  resourcePolicy:
+    containerPolicies:
+      - containerName: homepage
+        mode: Auto
+        controlledResources:
+          - memory
+        controlledValues: RequestsOnly
+        minAllowed:
+          memory: 64Mi
+        maxAllowed:
+          memory: 512Mi
+      - containerName: "*"
+        mode: "Off"

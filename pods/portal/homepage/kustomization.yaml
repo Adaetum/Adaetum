@@ -6,6 +6,7 @@ resources:
   - clusterrolebinding.yaml
   - homepage-cluster-config.yaml
   - deployment.yaml
+  - autoscaling.yaml
   - service.yaml
 
 generatorOptions:

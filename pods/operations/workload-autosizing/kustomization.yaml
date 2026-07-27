@@ -1,0 +1,2 @@
+resources:
+  - vertical-pod-autoscalers.yaml

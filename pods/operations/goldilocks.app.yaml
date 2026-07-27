@@ -1,0 +1,30 @@
+name: goldilocks
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "6"
+source_type: helm
+source_repo_url: https://charts.fairwinds.com/stable
+source_chart: goldilocks
+source_target_revision: "10.4.1"
+source_helm_values: |
+  # Adaetum owns explicit VPA policies in Git. Goldilocks only presents their
+  # accumulated recommendations and must not generate a second set of VPAs.
+  controller:
+    enabled: false
+  vpa:
+    enabled: false
+  metrics-server:
+    enabled: false
+  dashboard:
+    enabled: true
+    replicaCount: 2
+    flags:
+      show-all: true
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+destination_namespace: autoscaling-system

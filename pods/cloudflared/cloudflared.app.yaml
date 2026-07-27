@@ -3,4 +3,14 @@ project: default
 source_type: git
 source_target_revision: HEAD
 source_path: pods/cloudflared/cloudflared
+ignore_differences:
+  - group: apps
+    kind: Deployment
+    name: cloudflared
+    namespace: cloudflared
+    jsonPointers:
+      # The HPA, rather than Argo, owns the live replica count.
+      - /spec/replicas
+sync_options:
+  - RespectIgnoreDifferences=true
 destination_namespace: cloudflared

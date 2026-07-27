@@ -4,7 +4,12 @@ metadata:
   name: apprise
   namespace: observability
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: apprise
@@ -12,8 +17,16 @@ spec:
     metadata:
       labels:
         app: apprise
+        autoscaling.adaetum.io/rebalance: "true"
     spec:
       serviceAccountName: apprise
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: apprise
       # The image supports a rootless startup path. Starting as root and relying
       # on supervisord to drop privileges prevents its stdout dispatchers from
       # opening under Kubernetes' no-new-privileges restriction.
@@ -43,6 +56,18 @@ spec:
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: NotRequired
           env:
             - name: APPRISE_STATEFUL_MODE
               value: simple

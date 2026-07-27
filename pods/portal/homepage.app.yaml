@@ -16,6 +16,12 @@ ignore_differences:
       - /spec
       - /spec/finalizers
       - /status
+  - group: apps
+    kind: Deployment
+    name: homepage
+    namespace: homepage
+    jsonPointers:
+      - /spec/replicas
 sync_options:
   - RespectIgnoreDifferences=true
 destination_namespace: homepage

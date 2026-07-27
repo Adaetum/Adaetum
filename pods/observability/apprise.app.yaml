@@ -3,4 +3,13 @@ project: default
 source_type: git
 source_target_revision: HEAD
 source_path: pods/observability/apprise
+ignore_differences:
+  - group: apps
+    kind: Deployment
+    name: apprise
+    namespace: observability
+    jsonPointers:
+      - /spec/replicas
+sync_options:
+  - RespectIgnoreDifferences=true
 destination_namespace: observability
