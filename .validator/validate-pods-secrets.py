@@ -13,6 +13,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCAN_PATHS = [REPO_ROOT / "pods", REPO_ROOT / "setup.md"]
 
 ROTATION_CONTRACTS = {
+    "pods/games/crafty/crafty.yaml": (
+        "serviceAccountName: crafty-credential-sync",
+        "role=crafty-credential-sync",
+        "secret/apps/games/crafty/admin",
+        "@/crafty-config/default-creds.txt",
+    ),
+    "pods/secrets/openbao/policies/crafty-credential-sync.hcl": (
+        'path "secret/data/apps/games/crafty/admin"',
+        'capabilities = ["create", "update"]',
+    ),
+    "pods/secrets/openbao/config/job.yaml": (
+        "bao policy write crafty-credential-sync /policies/crafty-credential-sync.hcl",
+        "auth/kubernetes/role/crafty-credential-sync",
+        "bound_service_account_names=crafty-credential-sync",
+        "bound_service_account_namespaces=games",
+        "token_policies=crafty-credential-sync",
+    ),
     "ansible/playbooks/day2.yml": (
         "tailscale-user-sync",
         "healthcheck",

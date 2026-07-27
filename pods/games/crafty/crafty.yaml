@@ -1,3 +1,9 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crafty-credential-sync
+  namespace: games
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +25,9 @@ spec:
       labels:
         app.kubernetes.io/name: crafty
     spec:
+      # This identity can write only Crafty's generated administrator
+      # credential to its dedicated OpenBao path.
+      serviceAccountName: crafty-credential-sync
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -106,6 +115,42 @@ spec:
             - name: data
               mountPath: /crafty/import
               subPath: import
+        - name: credential-sync
+          image: ghcr.io/openbao/openbao:2.6.1@sha256:5b2486ab0fb90bbc788cc345b0a08616dfb375873ee8be5df3a2fd4d378a67e0
+          env:
+            - name: BAO_ADDR
+              value: http://openbao.openbao.svc.cluster.local:8200
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              # Crafty creates this JSON file on its first start. Promote the
+              # native username/password into durable recovery storage without
+              # exposing either value in process arguments or Kubernetes logs.
+              until [ -s /crafty-config/default-creds.txt ]; do
+                sleep 2
+              done
+              BAO_TOKEN="$(bao write -field=token auth/kubernetes/login \
+                role=crafty-credential-sync \
+                jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)")"
+              export BAO_TOKEN
+              bao kv put secret/apps/games/crafty/admin \
+                @/crafty-config/default-creds.txt >/dev/null
+              unset BAO_TOKEN
+
+              # Keep this one-shot companion healthy after the promotion. A
+              # pod restart retries the write if OpenBao was temporarily down.
+              while :; do sleep 3600; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /crafty-config
+              subPath: config
+              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:

@@ -5,10 +5,8 @@ metadata:
   namespace: games
   annotations:
     external-dns.alpha.kubernetes.io/hostname: crafty.example.services
-    nginx.ingress.kubernetes.io/auth-url: __AUTHENTIK_FORWARD_AUTH_URL__
-    nginx.ingress.kubernetes.io/auth-snippet: __AUTHENTIK_AUTH_SNIPPET__
-    nginx.ingress.kubernetes.io/auth-signin: __AUTHENTIK_PUBLIC_AUTH_SIGNIN__
-    nginx.ingress.kubernetes.io/auth-response-headers: __AUTHENTIK_AUTH_RESPONSE_HEADERS__
+    # Crafty's native administrator login owns this route. Avoid stacking an
+    # Authentik redirect in front of the default no-MFA login flow.
     nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
     nginx.ingress.kubernetes.io/proxy-body-size: "2g"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"

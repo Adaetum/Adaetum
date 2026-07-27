@@ -48,7 +48,9 @@ spec:
     - hosts: [gitea]
   defaultBackend:
     service:
-      name: gitea-http
+      # The chart's gitea-http Service is intentionally headless. ProxyGroup
+      # L7 routes need a ClusterIP to reach the healthy Gitea endpoints.
+      name: gitea-tailnet-backend
       port:
         number: 3000
 ---
@@ -65,7 +67,7 @@ spec:
     - hosts: [registry]
   defaultBackend:
     service:
-      name: gitea-http
+      name: gitea-tailnet-backend
       port:
         number: 3000
 ---

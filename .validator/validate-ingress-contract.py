@@ -102,8 +102,8 @@ def main() -> int:
     expected_tailnet_routes = {
         "argocd-tailnet": ("argocd", "argocd-server", "80"),
         "openbao-tailnet": ("openbao", "openbao", "8200"),
-        "gitea-tailnet": ("gitea", "gitea-http", "3000"),
-        "registry-tailnet": ("registry", "gitea-http", "3000"),
+        "gitea-tailnet": ("gitea", "gitea-tailnet-backend", "3000"),
+        "registry-tailnet": ("registry", "gitea-tailnet-backend", "3000"),
         "authentik-tailnet": ("authentik", "authentik-server", "80"),
         "headlamp-tailnet": ("headlamp", "headlamp", "80"),
         "home-tailnet": ("home", "homepage", "3000"),
@@ -137,6 +137,24 @@ def main() -> int:
                 failures.append(f"tailnet Ingress {name} is missing {label}")
         if "nginx.ingress.kubernetes.io/auth-" in document or "outpost.goauthentik.io" in document:
             failures.append(f"trusted tailnet Ingress {name} contains Authentik forward-auth")
+
+    gitea_tailnet_backend = next(
+        (
+            item
+            for item in tailnet_documents
+            if re.search(r"(?m)^kind:\s+Service\s*$", item)
+            and re.search(r"(?m)^\s*name:\s+gitea-tailnet-backend\s*$", item)
+        ),
+        "",
+    )
+    for required, message in (
+        ("type: ClusterIP", "Gitea Tailnet backend is not a ClusterIP Service"),
+        ("app.kubernetes.io/instance: gitea", "Gitea Tailnet backend does not select the Gitea release"),
+        ("port: 3000", "Gitea Tailnet backend does not expose HTTP port 3000"),
+        ("targetPort: 3000", "Gitea Tailnet backend does not target the Gitea HTTP container"),
+    ):
+        if required not in gitea_tailnet_backend:
+            failures.append(message)
 
     bedrock_service = next(
         (
@@ -257,7 +275,6 @@ def main() -> int:
     protected_public_ingresses = {
         "alertmanager-ui-public",
         "argocd-ui-public",
-        "crafty-ui-public",
         "gitea-ui-public",
         "grafana-ui-public",
         "headlamp-ui-public",
@@ -281,6 +298,24 @@ def main() -> int:
         missing = [annotation for annotation in auth_annotations if annotation not in document]
         if missing:
             failures.append(f"rendered public Ingress {name} is missing Authentik forward-auth annotations")
+
+    # Crafty uses its own generated administrator account. Keep the public and
+    # local routes on the same native, no-MFA login instead of stacking an
+    # Authentik browser redirect in front of the panel.
+    crafty_public = next(
+        (
+            item
+            for item in ingress_documents
+            if re.search(r"(?m)^\s*name:\s+crafty-ui-public\s*$", item)
+        ),
+        "",
+    )
+    if not crafty_public:
+        failures.append("rendered ingress output is missing native-auth public Ingress crafty-ui-public")
+    else:
+        present = [annotation for annotation in auth_annotations if annotation in crafty_public]
+        if present:
+            failures.append("rendered public Ingress crafty-ui-public contains incompatible Authentik forward-auth annotations")
 
     # ntfy uses the same API for its web UI, PWA, mobile clients, and
     # publishers. A browser-oriented forward-auth redirect corrupts those API
