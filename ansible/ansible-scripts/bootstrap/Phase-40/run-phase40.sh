@@ -1539,6 +1539,7 @@ fi
   --from-file=cloudflared.hcl="${policy_dir}/cloudflared.hcl" \
   --from-file=external-dns.hcl="${policy_dir}/external-dns.hcl" \
   --from-file=ansible-runner.hcl="${policy_dir}/ansible-runner.hcl" \
+  --from-file=tailscale-operator.hcl="${policy_dir}/tailscale-operator.hcl" \
   --from-file=homepage.hcl="${policy_dir}/homepage.hcl" \
   --from-file=grafana.hcl="${policy_dir}/grafana.hcl" \
   --from-file=authentik.hcl="${policy_dir}/authentik.hcl" \

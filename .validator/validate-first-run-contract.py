@@ -472,6 +472,14 @@ git merge-base --is-ancestor "${public_head}" HEAD
     )
     if any(fragment not in platform_bootstrap for fragment in tailscale_packet_mark_contract):
         fail("Calico packet marks can bypass Tailscale routing for cross-node pod traffic")
+    tailscale_calico_mtu_contract = (
+        "rke2_calico_tailnet_mtu: 1230",
+        "Keep Calico VXLAN within the effective node network MTU",
+        "name: rke2-calico",
+        "mtu: {{ rke2_calico_mtu_effective }}",
+    )
+    if any(fragment not in platform_bootstrap for fragment in tailscale_calico_mtu_contract):
+        fail("Calico VXLAN MTU can exceed the Tailnet node path MTU")
     if 'Using the Cloudflare token authorized during provider setup.' not in setup:
         fail("setup re-prompts for the Cloudflare token captured during first run")
     if 'Using the GitHub credential authorized during repository setup.' not in setup:

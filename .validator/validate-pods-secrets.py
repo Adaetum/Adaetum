@@ -944,6 +944,28 @@ def validate_csi_workload_identities() -> list[str]:
     return failures
 
 
+def validate_openbao_phase40_policy_bundle() -> list[str]:
+    """Keep every policy consumed by the config Job in Phase 40's ConfigMap."""
+    job_path = REPO_ROOT / "pods/secrets/openbao/config/job.yaml"
+    phase_path = REPO_ROOT / "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh"
+    job_text = job_path.read_text(encoding="utf-8")
+    phase_text = phase_path.read_text(encoding="utf-8")
+    consumed = set(re.findall(r"bao policy write\s+\S+\s+/policies/([A-Za-z0-9_.-]+)", job_text))
+    bundled = set(
+        re.findall(
+            r'--from-file=[A-Za-z0-9_.-]+="\$\{policy_dir\}/([A-Za-z0-9_.-]+)"',
+            phase_text,
+        )
+    )
+    missing = sorted(consumed - bundled)
+    if not missing:
+        return []
+    return [
+        "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh: "
+        "openbao-policies ConfigMap is missing Job inputs: " + ", ".join(missing)
+    ]
+
+
 def main() -> int:
     failures: list[str] = []
     openbao_csi_app = (
@@ -987,6 +1009,7 @@ def main() -> int:
     failures.extend(validate_committed_secret_manifests())
     failures.extend(validate_secret_reference_ownership())
     failures.extend(validate_csi_workload_identities())
+    failures.extend(validate_openbao_phase40_policy_bundle())
 
     if failures:
         for failure in failures:

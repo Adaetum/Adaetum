@@ -20,6 +20,11 @@
     rke2_single_node_pod_limit_path: "/etc/rancher/rke2/config.yaml.d/10-adaetum-single-node-pods.yaml"
     rke2_single_node_max_pods: 150
     rke2_default_max_pods: 110
+    # Tailscale interfaces use MTU 1280. Calico's IPv4 VXLAN header consumes
+    # another 50 bytes, so Tailnet-backed node traffic must use MTU 1230.
+    rke2_calico_tailnet_mtu: 1230
+    rke2_calico_lan_mtu: 1450
+    rke2_calico_chart_config_path: "/var/lib/rancher/rke2/server/manifests/rke2-calico-config.yaml"
     rke2_server_hosts: "{{ groups['servers'] | default(groups['all'] | default([inventory_hostname])) }}"
     rke2_server_count: "{{ rke2_server_hosts | length }}"
     rke2_join_candidate_hosts: "{{ rke2_server_hosts | reject('equalto', inventory_hostname) | list }}"
@@ -651,6 +656,12 @@
             if (rke2_tailscale_ip_cmd.stdout | default('') | trim | length) > 0
             else rke2_node_ip
           }}
+        rke2_calico_mtu_effective: >-
+          {{
+            rke2_calico_tailnet_mtu
+            if (rke2_tailscale_ip_cmd.stdout | default('') | trim | length) > 0
+            else rke2_calico_lan_mtu
+          }}
 
     - name: Ensure rke2 config directory exists
       ansible.builtin.file:
@@ -663,6 +674,38 @@
         path: "{{ rke2_single_node_pod_limit_path | dirname }}"
         state: directory
         mode: "0755"
+
+    - name: Ensure primary rke2 server manifests directory exists
+      ansible.builtin.file:
+        path: "{{ rke2_calico_chart_config_path | dirname }}"
+        state: directory
+        mode: "0755"
+      when:
+        - rke2_role == "server"
+        - inventory_hostname == rke2_primary_host
+
+    - name: Keep Calico VXLAN within the effective node network MTU
+      ansible.builtin.copy:
+        dest: "{{ rke2_calico_chart_config_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          apiVersion: helm.cattle.io/v1
+          kind: HelmChartConfig
+          metadata:
+            name: rke2-calico
+            namespace: kube-system
+          spec:
+            valuesContent: |-
+              installation:
+                calicoNetwork:
+                  mtu: {{ rke2_calico_mtu_effective }}
+      when:
+        # RKE2's static-manifest controller applies this cluster-scoped chart
+        # override. One source on the selected primary avoids competing owners.
+        - rke2_role == "server"
+        - inventory_hostname == rke2_primary_host
 
     - name: Write rke2 config (server)
       ansible.builtin.copy:
