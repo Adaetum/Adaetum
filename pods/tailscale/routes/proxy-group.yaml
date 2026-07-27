@@ -1,0 +1,11 @@
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: adaetum-ingress
+spec:
+  # Two replicas share every private route. On the initial single-node cluster
+  # this protects pod rollouts; later nodes turn the same contract into node HA.
+  type: ingress
+  replicas: 2
+  tags:
+    - tag:k8s

@@ -126,6 +126,9 @@ Recovery roots are intentionally outside the store they recover:
   non-reusable installer credential. The OAuth client under
   `secret/apps/ansible/tailscale` is the durable application credential used to
   mint later enrollment keys.
+- The separate OAuth client under `secret/apps/tailscale/operator` has only the
+  operator's device, auth-key, and service scopes. Secrets Store CSI mounts it
+  into the operator; node enrollment never reuses that identity.
 - Kubernetes service-account tokens and controller-generated TLS private keys
   remain with Kubernetes and their owning controllers. They are identities or
   controller state, not application configuration to mirror into KV.

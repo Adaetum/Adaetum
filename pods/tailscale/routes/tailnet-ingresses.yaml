@@ -1,0 +1,206 @@
+# These are additive aliases for the existing nginx .local routes. Tailscale
+# owns TLS and access control, so Authentik forward-auth annotations do not
+# belong on these trusted-tailnet entry points.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-tailnet
+  namespace: argocd
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [argocd]
+  defaultBackend:
+    service:
+      name: argocd-server
+      port:
+        number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openbao-tailnet
+  namespace: openbao
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [openbao]
+  defaultBackend:
+    service:
+      name: openbao
+      port:
+        number: 8200
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitea-tailnet
+  namespace: gitea
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [gitea]
+  defaultBackend:
+    service:
+      name: gitea-http
+      port:
+        number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: registry-tailnet
+  namespace: gitea
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [registry]
+  defaultBackend:
+    service:
+      name: gitea-http
+      port:
+        number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: authentik-tailnet
+  namespace: authentik
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [authentik]
+  defaultBackend:
+    service:
+      name: authentik-server
+      port:
+        number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: headlamp-tailnet
+  namespace: headlamp
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [headlamp]
+  defaultBackend:
+    service:
+      name: headlamp
+      port:
+        number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: home-tailnet
+  namespace: homepage
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [home]
+  defaultBackend:
+    service:
+      name: homepage
+      port:
+        number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rancher-tailnet
+  namespace: cattle-system
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [rancher]
+  defaultBackend:
+    service:
+      name: rancher
+      port:
+        number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: alertmanager-tailnet
+  namespace: observability
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [alertmanager]
+  defaultBackend:
+    service:
+      name: alertmanager
+      port:
+        number: 9093
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana-tailnet
+  namespace: observability
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [grafana]
+  defaultBackend:
+    service:
+      name: grafana
+      port:
+        number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ntfy-tailnet
+  namespace: observability
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [ntfy]
+  defaultBackend:
+    service:
+      name: ntfy
+      port:
+        number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus-tailnet
+  namespace: observability
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [prometheus]
+  defaultBackend:
+    service:
+      name: prometheus-operated
+      port:
+        number: 9090

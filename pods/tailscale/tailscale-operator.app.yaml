@@ -1,0 +1,31 @@
+name: tailscale-operator
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "-13"
+source_type: helm
+source_repo_url: https://pkgs.tailscale.com/helmcharts
+source_chart: tailscale-operator
+source_target_revision: "1.98.9"
+source_helm_values: |
+  installCRDs: true
+
+  # OpenBao remains the credential source of truth. The chart mounts these
+  # two files directly and never creates a Git-managed OAuth Secret.
+  oauthSecretVolume:
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: tailscale-operator-openbao
+
+  operatorConfig:
+    defaultTags:
+      - tag:k8s-operator
+
+  proxyConfig:
+    defaultTags: tag:k8s
+
+  apiServerProxyConfig:
+    mode: "false"
+    allowImpersonation: "false"
+destination_namespace: tailscale

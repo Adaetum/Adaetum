@@ -1378,6 +1378,20 @@ fi
 if [[ -n "${tailscale_oauth_client_secret_val}" ]]; then
   platform_kv_args+=("tailscale_oauth_client_secret=${tailscale_oauth_client_secret_val}")
 fi
+tailscale_operator_oauth_client_id_val="${TAILSCALE_OPERATOR_OAUTH_CLIENT_ID:-}"
+if [[ -z "${tailscale_operator_oauth_client_id_val}" ]]; then
+  tailscale_operator_oauth_client_id_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/tailscale_operator_oauth_client_id")"
+fi
+tailscale_operator_oauth_client_secret_val="${TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET:-}"
+if [[ -z "${tailscale_operator_oauth_client_secret_val}" ]]; then
+  tailscale_operator_oauth_client_secret_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/tailscale_operator_oauth_client_secret")"
+fi
+if [[ -n "${tailscale_operator_oauth_client_id_val}" ]]; then
+  platform_kv_args+=("tailscale_operator_oauth_client_id=${tailscale_operator_oauth_client_id_val}")
+fi
+if [[ -n "${tailscale_operator_oauth_client_secret_val}" ]]; then
+  platform_kv_args+=("tailscale_operator_oauth_client_secret=${tailscale_operator_oauth_client_secret_val}")
+fi
 ingress_internal_vip_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/ingress_internal_vip")"
 if [[ -n "${ingress_internal_vip_val}" ]]; then
   platform_kv_args+=("ingress_internal_vip=${ingress_internal_vip_val}")
@@ -1481,6 +1495,11 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
     seed_openbao_app_fields ansible/tailscale "${root_token}" \
       "oauth_client_id=${tailscale_oauth_client_id_val}" \
       "oauth_client_secret=${tailscale_oauth_client_secret_val}"
+  fi
+  if [[ -n "${tailscale_operator_oauth_client_id_val}" && -n "${tailscale_operator_oauth_client_secret_val}" ]]; then
+    seed_openbao_app_fields tailscale/operator "${root_token}" \
+      "client_id=${tailscale_operator_oauth_client_id_val}" \
+      "client_secret=${tailscale_operator_oauth_client_secret_val}"
   fi
   apprise_empty_config=$'version: 1\nurls: []'
   apprise_current_config="$(

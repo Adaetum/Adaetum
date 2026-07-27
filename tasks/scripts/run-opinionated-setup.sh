@@ -587,6 +587,8 @@ default_ts_user_token="${SETUP_TAILSCALE_USER_API_TOKEN:-}"
 default_ts_domain="${SETUP_TAILSCALE_DOMAIN:-}"
 default_ts_oauth_client_id="${SETUP_TAILSCALE_OAUTH_CLIENT_ID:-}"
 default_ts_oauth_client_secret="${SETUP_TAILSCALE_OAUTH_CLIENT_SECRET:-}"
+default_ts_operator_oauth_client_id="${SETUP_TAILSCALE_OPERATOR_OAUTH_CLIENT_ID:-}"
+default_ts_operator_oauth_client_secret="${SETUP_TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET:-}"
 default_backup_passphrase="${SETUP_BOOTSTRAP_BACKUP_PASSPHRASE:-}"
 default_backup_passphrase_b64="${SETUP_BOOTSTRAP_BACKUP_PASSPHRASE_B64:-}"
 default_zone_input="${SETUP_ZONE_INPUT:-example.services}"
@@ -598,6 +600,8 @@ if [ "${dry_run}" = "1" ]; then
   default_ts_user_token="${default_ts_user_token:-tskey-api-dry-run-placeholder}"
   default_ts_oauth_client_id="${default_ts_oauth_client_id:-dry-run-client-id}"
   default_ts_oauth_client_secret="${default_ts_oauth_client_secret:-dry-run-client-secret}"
+  default_ts_operator_oauth_client_id="${default_ts_operator_oauth_client_id:-dry-run-operator-client-id}"
+  default_ts_operator_oauth_client_secret="${default_ts_operator_oauth_client_secret:-dry-run-operator-client-secret}"
 fi
 default_cf_token="$(normalize_compact "${default_cf_token}")"
 default_cf_account_id="$(normalize_compact "${default_cf_account_id}")"
@@ -606,11 +610,19 @@ default_ts_user_token="$(normalize_compact "${default_ts_user_token}")"
 default_ts_domain="$(normalize_compact "${default_ts_domain}")"
 default_ts_oauth_client_id="$(normalize_compact "${default_ts_oauth_client_id}")"
 default_ts_oauth_client_secret="$(normalize_compact "${default_ts_oauth_client_secret}")"
+default_ts_operator_oauth_client_id="$(normalize_compact "${default_ts_operator_oauth_client_id}")"
+default_ts_operator_oauth_client_secret="$(normalize_compact "${default_ts_operator_oauth_client_secret}")"
 if [ -z "${default_ts_oauth_client_id}" ]; then
   default_ts_oauth_client_id="$(normalize_compact "$(existing_env_value .env TAILSCALE_OAUTH_CLIENT_ID)")"
 fi
 if [ -z "${default_ts_oauth_client_secret}" ]; then
   default_ts_oauth_client_secret="$(normalize_compact "$(existing_env_value .env TAILSCALE_OAUTH_CLIENT_SECRET)")"
+fi
+if [ -z "${default_ts_operator_oauth_client_id}" ]; then
+  default_ts_operator_oauth_client_id="$(normalize_compact "$(existing_env_value .env TAILSCALE_OPERATOR_OAUTH_CLIENT_ID)")"
+fi
+if [ -z "${default_ts_operator_oauth_client_secret}" ]; then
+  default_ts_operator_oauth_client_secret="$(normalize_compact "$(existing_env_value .env TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET)")"
 fi
 default_zone_input="$(normalize_compact "${default_zone_input}")"
 py_cmd="$(resolve_python_cmd || true)"
@@ -645,6 +657,8 @@ fi
 # Initialize early so set -u does not fail before OAuth prompts run.
 ts_oauth_client_id="${default_ts_oauth_client_id}"
 ts_oauth_client_secret="${default_ts_oauth_client_secret}"
+ts_operator_oauth_client_id="${default_ts_operator_oauth_client_id}"
+ts_operator_oauth_client_secret="${default_ts_operator_oauth_client_secret}"
 selected_step="${SETUP_STEP:-${SETUP_ONLY_STEP:-}}"
 selected_substep="${SETUP_SUBSTEP:-}"
 if [ -n "${selected_step}" ]; then
@@ -1029,6 +1043,49 @@ ensure_tailscale_oauth_ready() {
   ok "Stored and validated Tailscale OAuth credentials."
 }
 
+ensure_tailscale_operator_oauth_ready() {
+  local operator_output="" key="" value=""
+
+  sub_step "2.2a" "Tailscale Kubernetes Operator OAuth credentials"
+  if [ -n "${default_ts_operator_oauth_client_id}" ] && [ -n "${default_ts_operator_oauth_client_secret}" ]; then
+    ts_operator_oauth_client_id="${default_ts_operator_oauth_client_id}"
+    ts_operator_oauth_client_secret="${default_ts_operator_oauth_client_secret}"
+    if [ "${dry_run}" != "1" ]; then
+      printf '%s\n%s\n' "${ts_operator_oauth_client_id}" "${ts_operator_oauth_client_secret}" \
+        | python3 ./tasks/scripts/bootstrap-tailscale.py \
+          --oauth-credentials-stdin --validate-operator-oauth-only >/dev/null \
+        || die "Unable to validate the saved Tailscale Kubernetes Operator OAuth client."
+    fi
+  else
+    if [ -z "${ts_user_token}" ]; then
+      [ "${silent_run}" != "1" ] || die "A temporary Tailscale API token is required once to create the missing Kubernetes Operator OAuth client."
+      prepare_tailscale_user_token
+      ts_user_token="$(prompt_value "Tailscale user token (TAILSCALE_USER_API_TOKEN)" "" 1)"
+    fi
+    if [ "${dry_run}" = "1" ]; then
+      ts_operator_oauth_client_id="dry-run-operator-client-id"
+      ts_operator_oauth_client_secret="dry-run-operator-client-secret"
+    else
+      operator_output="$(printf '%s' "${ts_user_token}" | python3 ./tasks/scripts/bootstrap-tailscale.py \
+        --user-token-stdin --tailnet "${ts_domain}" --create-operator-oauth-client)" \
+        || die "Unable to create the Tailscale Kubernetes Operator OAuth client."
+      while IFS='=' read -r key value; do
+        case "${key}" in
+          TAILSCALE_OPERATOR_OAUTH_CLIENT_ID) ts_operator_oauth_client_id="${value}" ;;
+          TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET) ts_operator_oauth_client_secret="${value}" ;;
+        esac
+      done <<< "${operator_output}"
+    fi
+  fi
+  [ -n "${ts_operator_oauth_client_id}" ] && [ -n "${ts_operator_oauth_client_secret}" ] \
+    || die "Tailscale Kubernetes Operator OAuth credentials are incomplete."
+  if [ "${dry_run}" != "1" ]; then
+    upsert_env_value .env TAILSCALE_OPERATOR_OAUTH_CLIENT_ID "${ts_operator_oauth_client_id}"
+    upsert_env_value .env TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET "${ts_operator_oauth_client_secret}"
+  fi
+  ok "Stored and validated the separate Tailscale Kubernetes Operator OAuth client."
+}
+
 if [ "${selected_substep}" = "2.2" ]; then
   main_step "2" "Build local installer"
   sub_step "2.2" "Build local install ISO only"
@@ -1095,6 +1152,7 @@ if step_enabled "2"; then
   normalize_and_compute_ks_base
   validate_required_inputs "0"
   ensure_tailscale_oauth_ready "2.1" "2.2"
+  ensure_tailscale_operator_oauth_ready
   ensure_cached_backup_passphrase
   if [ "${dry_run}" = "1" ]; then
     sub_step "2.3" "Render environment values"
@@ -1145,6 +1203,8 @@ TAILSCALE_USER_API_TOKEN=${ts_user_token}
 TAILSCALE_DOMAIN=${ts_domain}
 TAILSCALE_OAUTH_CLIENT_ID=${ts_oauth_client_id}
 TAILSCALE_OAUTH_CLIENT_SECRET=${ts_oauth_client_secret}
+TAILSCALE_OPERATOR_OAUTH_CLIENT_ID=${ts_operator_oauth_client_id}
+TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET=${ts_operator_oauth_client_secret}
 KS_BASE_URL=${ks_base_url}
 GITHUB_SYNC_TOKEN=${gh_token}
 ARGOCD_GITHUB_REPO_URL=${recovery_repo_url}

@@ -11,6 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_CONFIG = REPO_ROOT / "pods" / "cluster-config" / "cluster-config.env"
 INGRESS_APP = REPO_ROOT / "pods" / "ingress" / "ingress-routing.app.yaml"
+TAILSCALE_OPERATOR_APP = REPO_ROOT / "pods" / "tailscale" / "tailscale-operator.app.yaml"
 REALIZATION_PHASES = (
     REPO_ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-50" / "run-phase50.sh",
     REPO_ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-60" / "run-phase60.sh",
@@ -57,7 +58,9 @@ def assert_contains(haystack: str, needle: str, message: str, failures: list[str
 def main() -> int:
     config = parse_env_file(CLUSTER_CONFIG)
     rendered = run_kustomize(REPO_ROOT / "pods" / "ingress")
+    tailnet_rendered = run_kustomize(REPO_ROOT / "pods" / "tailscale" / "routes")
     ingress_app_text = INGRESS_APP.read_text(encoding="utf-8")
+    operator_app_text = TAILSCALE_OPERATOR_APP.read_text(encoding="utf-8")
 
     cluster_domain = require(config, "EXTERNAL_DNS_DOMAIN_FILTER")
     expected_hosts = {
@@ -86,6 +89,71 @@ def main() -> int:
     }
 
     failures: list[str] = []
+
+    # The Tailscale routes are aliases, not replacements. Each current private
+    # service gets one HTTPS MagicDNS label through the shared ProxyGroup and
+    # none of those trusted-tailnet entry points invoke Authentik.
+    tailnet_documents = re.split(r"(?m)^---\s*$", tailnet_rendered)
+    expected_tailnet_routes = {
+        "argocd-tailnet": ("argocd", "argocd-server", "80"),
+        "openbao-tailnet": ("openbao", "openbao", "8200"),
+        "gitea-tailnet": ("gitea", "gitea-http", "3000"),
+        "registry-tailnet": ("registry", "gitea-http", "3000"),
+        "authentik-tailnet": ("authentik", "authentik-server", "80"),
+        "headlamp-tailnet": ("headlamp", "headlamp", "80"),
+        "home-tailnet": ("home", "homepage", "3000"),
+        "rancher-tailnet": ("rancher", "rancher", "80"),
+        "alertmanager-tailnet": ("alertmanager", "alertmanager", "9093"),
+        "grafana-tailnet": ("grafana", "grafana", "80"),
+        "ntfy-tailnet": ("ntfy", "ntfy", "80"),
+        "prometheus-tailnet": ("prometheus", "prometheus-operated", "9090"),
+    }
+    for name, (hostname, service, port) in expected_tailnet_routes.items():
+        document = next(
+            (
+                item
+                for item in tailnet_documents
+                if re.search(rf"(?m)^\s*name:\s+{re.escape(name)}\s*$", item)
+                and re.search(r"(?m)^kind:\s+Ingress\s*$", item)
+            ),
+            "",
+        )
+        if not document:
+            failures.append(f"tailnet routes are missing Ingress {name}")
+            continue
+        for required, label in (
+            ("ingressClassName: tailscale", "Tailscale ingress class"),
+            ("tailscale.com/proxy-group: adaetum-ingress", "shared ProxyGroup annotation"),
+            (f"- {hostname}", f"MagicDNS label {hostname}"),
+            (f"name: {service}", f"backend Service {service}"),
+            (f"number: {port}", f"backend port {port}"),
+        ):
+            if required not in document:
+                failures.append(f"tailnet Ingress {name} is missing {label}")
+        if "nginx.ingress.kubernetes.io/auth-" in document or "outpost.goauthentik.io" in document:
+            failures.append(f"trusted tailnet Ingress {name} contains Authentik forward-auth")
+
+    proxy_group = next(
+        (item for item in tailnet_documents if re.search(r"(?m)^kind:\s+ProxyGroup\s*$", item)),
+        "",
+    )
+    for required, message in (
+        ("name: adaetum-ingress", "tailnet routes are missing the shared adaetum-ingress ProxyGroup"),
+        ("type: ingress", "tailnet ProxyGroup is not configured for ingress"),
+        ("replicas: 2", "tailnet ProxyGroup does not have two replicas"),
+        ("- tag:k8s", "tailnet ProxyGroup is missing tag:k8s"),
+    ):
+        if required not in proxy_group:
+            failures.append(message)
+
+    for required, message in (
+        ('source_target_revision: "1.98.9"', "Tailscale Operator chart is not pinned to 1.98.9"),
+        ("secretProviderClass: tailscale-operator-openbao", "Tailscale Operator does not mount its OpenBao CSI credential"),
+        ("mode: \"false\"", "Tailscale Operator unexpectedly exposes the Kubernetes API server"),
+    ):
+        assert_contains(operator_app_text, required, message, failures)
+    if "clientSecret:" in operator_app_text or "clientId:" in operator_app_text:
+        failures.append("Tailscale Operator application embeds OAuth values instead of using OpenBao CSI")
 
     for bad in ("example.local", "example.services", "example.ts.net"):
         if bad in rendered:
@@ -366,7 +434,7 @@ def main() -> int:
             print(failure, file=sys.stderr)
         return 1
 
-    print("Ingress contract check passed: rendered hosts, external-dns filter, nginx config, and Argo diff rules are consistent.")
+    print("Ingress contract check passed: local, public, and trusted-tailnet routes are consistent.")
     return 0
 
 

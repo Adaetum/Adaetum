@@ -303,7 +303,7 @@ first_run_move_resume_credentials() {
   new_namespace="$(adaetum_normalize_github_url "${new_url}")"
   [ "${old_namespace}" != "${new_namespace}" ] || return 0
 
-  for key in cloudflare-api-token tailscale-api-token tailscale-oauth-client-id tailscale-oauth-client-secret; do
+  for key in cloudflare-api-token tailscale-api-token tailscale-oauth-client-id tailscale-oauth-client-secret tailscale-operator-oauth-client-id tailscale-operator-oauth-client-secret; do
     value="$(bash "${store}" get "${old_namespace}" "${key}" 2>/dev/null || true)"
     [ -n "${value}" ] || continue
     printf '%s\n' "${value}" | bash "${store}" set "${new_namespace}" "${key}"
@@ -700,6 +700,35 @@ first_run_load_saved_tailscale_oauth() {
   return 1
 }
 
+first_run_load_saved_tailscale_operator_oauth() {
+  local credential_store="$1" credential_namespace="$2" credential_backend="$3"
+  local stored_id="" stored_secret=""
+  [ "${dry_run}" != 1 ] || return 1
+  [ "${clean_run}" != 1 ] || return 1
+  [ -n "${credential_backend}" ] || return 1
+  if [ -n "${first_run_tailscale_operator_oauth_client_id:-}" ] && [ -n "${first_run_tailscale_operator_oauth_client_secret:-}" ]; then
+    return 0
+  fi
+
+  stored_id="$(bash "${credential_store}" get "${credential_namespace}" tailscale-operator-oauth-client-id 2>/dev/null || true)"
+  stored_secret="$(bash "${credential_store}" get "${credential_namespace}" tailscale-operator-oauth-client-secret 2>/dev/null || true)"
+  [ -n "${stored_id}" ] && [ -n "${stored_secret}" ] || return 1
+  first_run_status info "Found a saved Tailscale Kubernetes Operator OAuth client in ${credential_backend}; validating it before reuse."
+  if printf '%s\n%s\n' "${stored_id}" "${stored_secret}" | python3 ./tasks/scripts/bootstrap-tailscale.py --oauth-credentials-stdin --validate-operator-oauth-only >/dev/null 2>&1; then
+    first_run_tailscale_operator_oauth_client_id="${stored_id}"
+    first_run_tailscale_operator_oauth_client_secret="${stored_secret}"
+    first_run_status success "Reusing the validated Tailscale Kubernetes Operator OAuth client from ${credential_backend}."
+    return 0
+  fi
+
+  first_run_status warning "The saved Tailscale Kubernetes Operator OAuth client is invalid and will be removed from ${credential_backend}."
+  bash "${credential_store}" delete "${credential_namespace}" tailscale-operator-oauth-client-id || true
+  bash "${credential_store}" delete "${credential_namespace}" tailscale-operator-oauth-client-secret || true
+  first_run_tailscale_operator_oauth_client_id=""
+  first_run_tailscale_operator_oauth_client_secret=""
+  return 1
+}
+
 first_run_select_tailscale_domain() {
   local tailnets="" credential_store="${repo_root}/tasks/scripts/setup-credential-store.sh"
   local credential_namespace="" credential_backend="" stored_token="" tailnet_input="" tailnet_candidate="" saved_tailnet_available=0
@@ -725,6 +754,7 @@ first_run_select_tailscale_domain() {
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
     first_run_load_saved_tailscale_oauth "${credential_store}" "${credential_namespace}" "${credential_backend}" || true
+    first_run_load_saved_tailscale_operator_oauth "${credential_store}" "${credential_namespace}" "${credential_backend}" || true
     if [ "${clean_run}" != 1 ] && [ -n "${credential_backend}" ]; then
       stored_token="$(bash "${credential_store}" get "${credential_namespace}" tailscale-api-token 2>/dev/null || true)"
     fi
@@ -740,7 +770,9 @@ first_run_select_tailscale_domain() {
       fi
     fi
     if [ -z "${first_run_tailscale_token:-}" ]; then
-      if [ -n "${first_run_tailscale_oauth_client_id:-}" ] && [ -n "${first_run_overlay_domain:-}" ]; then
+      if [ -n "${first_run_tailscale_oauth_client_id:-}" ] \
+        && [ -n "${first_run_tailscale_operator_oauth_client_id:-}" ] \
+        && [ -n "${first_run_overlay_domain:-}" ]; then
         tailnets="${first_run_overlay_domain}"
         first_run_status success "The durable saved OAuth client replaces the expired temporary Tailscale setup token for this rerun."
       else
@@ -840,11 +872,16 @@ first_run_capture_tailscale_oauth() {
   adaetum_ui_key_value "Scopes → Devices → Core" "Read"
   adaetum_ui_key_value "Scopes → Devices → Posture Attributes" "Read"
   adaetum_ui_key_value "Tags" "tag:rocky10, tag:server, tag:cluster"
+  first_run_heading "Kubernetes Operator OAuth client Adaetum will create"
+  adaetum_ui_key_value "Description" "Adaetum Kubernetes operator"
+  adaetum_ui_key_value "Scopes" "Auth Keys, Devices Core, and Services — Write"
+  adaetum_ui_key_value "Tag" "tag:k8s-operator"
   first_run_message "${ADAETUM_UI_MUTED}" "These labels mirror Tailscale's Trust credentials topics. Adaetum creates the client through Tailscale's supported keys API, captures its one-time secret from that response, validates it, and later saves the client and generated auth key in the gitignored local .env and the private recovery repository's Prod GitHub environment."
   if [ "${dry_run}" != 1 ]; then
     credential_namespace="$(first_run_credential_namespace)"
     credential_backend="$(bash "${credential_store}" available 2>/dev/null || true)"
     first_run_load_saved_tailscale_oauth "${credential_store}" "${credential_namespace}" "${credential_backend}" || true
+    first_run_load_saved_tailscale_operator_oauth "${credential_store}" "${credential_namespace}" "${credential_backend}" || true
     if [ -z "${first_run_tailscale_oauth_client_id:-}" ] || [ -z "${first_run_tailscale_oauth_client_secret:-}" ]; then
       [ "${silent_run}" != 1 ] || die "Silent replay could not load a valid saved Tailscale OAuth client. Run task init interactively once."
       first_run_status info "Creating the scoped Tailscale OAuth client automatically..."
@@ -867,13 +904,38 @@ first_run_capture_tailscale_oauth() {
         first_run_status success "Tailscale OAuth client saved in ${credential_backend}; any previous values were replaced and no plaintext cache was created."
       fi
     fi
+    if [ -z "${first_run_tailscale_operator_oauth_client_id:-}" ] || [ -z "${first_run_tailscale_operator_oauth_client_secret:-}" ]; then
+      [ "${silent_run}" != 1 ] || die "Silent replay could not load a valid saved Tailscale Kubernetes Operator OAuth client. Run task init interactively once."
+      first_run_status info "Creating the scoped Tailscale Kubernetes Operator OAuth client automatically..."
+      oauth_output="$(printf '%s' "${first_run_tailscale_token}" | python3 ./tasks/scripts/bootstrap-tailscale.py \
+        --user-token-stdin \
+        --tailnet "${first_run_overlay_domain}" \
+        --create-operator-oauth-client)" || die "Unable to create the Tailscale Kubernetes Operator OAuth client. Ensure the API access token has OAuth Keys: Write."
+      while IFS='=' read -r key value; do
+        case "${key}" in
+          TAILSCALE_OPERATOR_OAUTH_CLIENT_ID) first_run_tailscale_operator_oauth_client_id="${value}" ;;
+          TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET) first_run_tailscale_operator_oauth_client_secret="${value}" ;;
+        esac
+      done <<< "${oauth_output}"
+      [ -n "${first_run_tailscale_operator_oauth_client_id:-}" ] && [ -n "${first_run_tailscale_operator_oauth_client_secret:-}" ] || die "Tailscale created the operator OAuth client without returning both credentials."
+      first_run_status success "Tailscale Kubernetes Operator OAuth client created."
+      if [ -n "${credential_backend}" ] && { [ "${clean_run}" = 1 ] || adaetum_ui_confirm "Save this operator OAuth client in ${credential_backend} so a cancelled setup can resume?" y; }; then
+        printf '%s\n' "${first_run_tailscale_operator_oauth_client_id}" | bash "${credential_store}" set "${credential_namespace}" tailscale-operator-oauth-client-id
+        printf '%s\n' "${first_run_tailscale_operator_oauth_client_secret}" | bash "${credential_store}" set "${credential_namespace}" tailscale-operator-oauth-client-secret
+        first_run_status success "Tailscale Kubernetes Operator OAuth client saved in ${credential_backend}; no plaintext cache was created."
+      fi
+    fi
   else
-    first_run_status info "Dry run would create the scoped Tailscale OAuth client automatically."
+    first_run_status info "Dry run would create the scoped node and Kubernetes Operator OAuth clients automatically."
     first_run_tailscale_oauth_client_id="dry-run-client-id"
     first_run_tailscale_oauth_client_secret="dry-run-client-secret"
+    first_run_tailscale_operator_oauth_client_id="dry-run-operator-client-id"
+    first_run_tailscale_operator_oauth_client_secret="dry-run-operator-client-secret"
   fi
   export SETUP_TAILSCALE_OAUTH_CLIENT_ID="${first_run_tailscale_oauth_client_id}"
   export SETUP_TAILSCALE_OAUTH_CLIENT_SECRET="${first_run_tailscale_oauth_client_secret}"
+  export SETUP_TAILSCALE_OPERATOR_OAUTH_CLIENT_ID="${first_run_tailscale_operator_oauth_client_id}"
+  export SETUP_TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET="${first_run_tailscale_operator_oauth_client_secret}"
 }
 
 first_run_profile() {

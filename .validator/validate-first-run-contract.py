@@ -273,10 +273,17 @@ git merge-base --is-ancestor "${public_head}" HEAD
         fail("Tailscale setup does not state its write permissions explicitly")
     if "OAuth Keys" not in first_run or "--create-oauth-client" not in first_run:
         fail("Tailscale enrollment does not create the OAuth client automatically")
+    if "--create-operator-oauth-client" not in first_run or "Adaetum Kubernetes operator" not in first_run:
+        fail("Tailscale enrollment does not create the separate Kubernetes Operator OAuth client")
     if "I created the OAuth client" in first_run or "Tailscale OAuth client ID" in first_run:
         fail("Tailscale enrollment still asks the operator to create or transcribe OAuth credentials")
     if "tailscale-oauth-client-secret" not in first_run or "--validate-oauth-only" not in first_run:
         fail("automatically created Tailscale OAuth credentials cannot be securely resumed")
+    if "tailscale-operator-oauth-client-secret" not in first_run or "--validate-operator-oauth-only" not in first_run:
+        fail("automatically created Tailscale Operator credentials cannot be securely resumed")
+    operator_persist = setup.split("ensure_tailscale_operator_oauth_ready() {", 1)[1].split("\n}", 1)[0]
+    if 'if [ "${dry_run}" != "1" ]; then' not in operator_persist or "upsert_env_value .env TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET" not in operator_persist:
+        fail("Tailscale Operator credential persistence is not guarded from dry-run")
     if "never writes it to platform.yaml, the local .env, or GitHub secrets" not in first_run:
         fail("Tailscale setup does not identify its excluded persistence destinations")
     if "TAILSCALE_USER_API_TOKEN=\"\"" not in (ROOT / "tasks" / "scripts" / "generate-env-files.sh").read_text(encoding="utf-8"):

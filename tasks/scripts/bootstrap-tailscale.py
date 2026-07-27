@@ -25,6 +25,16 @@ REQUIRED_TAG_OWNERS = {
   "tag:agent": ["autogroup:admin", "tag:provisioner"],
   "tag:subnet-router": ["autogroup:admin", "tag:provisioner"],
   "tag:rancher": ["autogroup:admin", "tag:provisioner"],
+  # The Kubernetes operator has a distinct identity from node enrollment. It
+  # owns only the proxy tag used for private service routes.
+  "tag:k8s-operator": ["autogroup:admin"],
+  "tag:k8s": ["tag:k8s-operator"],
+}
+REQUIRED_SERVICE_APPROVERS = {"tag:k8s": ["tag:k8s"]}
+REQUIRED_OPERATOR_GRANT = {
+  "src": ["*"],
+  "dst": ["tag:k8s"],
+  "ip": ["tcp:443", "icmp:*"],
 }
 
 
@@ -143,6 +153,41 @@ def _merge_tag_owners(policy_obj: dict):
   return changed
 
 
+def _merge_operator_access(policy_obj: dict):
+  """Merge only the policy entries required by shared ingress ProxyGroups."""
+  changed = False
+  auto_approvers = policy_obj.get("autoApprovers")
+  if not isinstance(auto_approvers, dict):
+    auto_approvers = {}
+    policy_obj["autoApprovers"] = auto_approvers
+    changed = True
+  services = auto_approvers.get("services")
+  if not isinstance(services, dict):
+    services = {}
+    auto_approvers["services"] = services
+    changed = True
+  for tag, required_approvers in REQUIRED_SERVICE_APPROVERS.items():
+    existing = services.get(tag)
+    if not isinstance(existing, list):
+      services[tag] = list(required_approvers)
+      changed = True
+      continue
+    for approver in required_approvers:
+      if approver not in existing:
+        existing.append(approver)
+        changed = True
+
+  grants = policy_obj.get("grants")
+  if not isinstance(grants, list):
+    grants = []
+    policy_obj["grants"] = grants
+    changed = True
+  if REQUIRED_OPERATOR_GRANT not in grants:
+    grants.append(dict(REQUIRED_OPERATOR_GRANT))
+    changed = True
+  return changed
+
+
 def ensure_required_tag_owners(
   tailnet: str,
   oauth_client_id: str = "",
@@ -174,7 +219,9 @@ def ensure_required_tag_owners(
   if not isinstance(policy_obj, dict):
     raise RuntimeError("Tailscale ACL policy did not parse as a JSON object.")
 
-  if not _merge_tag_owners(policy_obj):
+  changed = _merge_tag_owners(policy_obj)
+  changed = _merge_operator_access(policy_obj) or changed
+  if not changed:
     return
 
   _request("POST", acl_url, bearer_token=policy_access, payload=policy_obj)
@@ -256,6 +303,27 @@ def create_oauth_client_with_bearer(bearer_token: str, tailnet: str, tags):
   return client_id, client_secret
 
 
+def create_operator_oauth_client_with_bearer(bearer_token: str, tailnet: str):
+  """Create the least-privilege identity consumed only by the K8s operator."""
+  payload = {
+    "keyType": "client",
+    "description": "Adaetum Kubernetes operator",
+    "scopes": ["auth_keys", "devices:core", "services"],
+    "tags": ["tag:k8s-operator"],
+  }
+  code, parsed, body = _request(
+    "POST",
+    f"{TS_API_BASE}/api/v2/tailnet/{tailnet}/keys",
+    bearer_token=bearer_token,
+    payload=payload,
+  )
+  client_id = parsed.get("id", "")
+  client_secret = parsed.get("key", "")
+  if code not in (200, 201) or not client_id or not client_secret:
+    raise RuntimeError(f"Kubernetes operator OAuth client creation failed (HTTP {code}): {body[:600]}")
+  return client_id, client_secret
+
+
 def create_auth_key_with_bearer(bearer_token: str, tags):
   key_payload = {
     "capabilities": {
@@ -296,7 +364,9 @@ def main():
   p.add_argument("--cluster-tag", default="")
   p.add_argument("--prepare-policy-only", action="store_true")
   p.add_argument("--create-oauth-client", action="store_true")
+  p.add_argument("--create-operator-oauth-client", action="store_true")
   p.add_argument("--validate-oauth-only", action="store_true")
+  p.add_argument("--validate-operator-oauth-only", action="store_true")
   args = p.parse_args()
 
   tags = build_default_tags(args.cluster_tag)
@@ -318,6 +388,14 @@ def main():
     print(f"TAILSCALE_OAUTH_CLIENT_ID={client_id}")
     return
 
+
+  if args.validate_operator_oauth_only:
+    if not client_id or not client_secret:
+      raise RuntimeError("Operator OAuth client ID and secret are required for validation.")
+    oauth_access_token(client_id, client_secret, ["auth_keys", "devices:core", "services"])
+    print(f"TAILSCALE_OPERATOR_OAUTH_CLIENT_ID={client_id}")
+    return
+
   ensure_required_tag_owners(
     args.tailnet,
     oauth_client_id=client_id,
@@ -336,6 +414,17 @@ def main():
     client_id, client_secret = create_oauth_client_with_bearer(user_token, args.tailnet, tags)
     print(f"TAILSCALE_OAUTH_CLIENT_ID={client_id}")
     print(f"TAILSCALE_OAUTH_CLIENT_SECRET={client_secret}")
+    return
+
+
+  if args.create_operator_oauth_client:
+    if not user_token:
+      raise RuntimeError("The temporary Tailscale API access token is required to create the operator OAuth client.")
+    operator_id, operator_secret = create_operator_oauth_client_with_bearer(
+      user_token, args.tailnet
+    )
+    print(f"TAILSCALE_OPERATOR_OAUTH_CLIENT_ID={operator_id}")
+    print(f"TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET={operator_secret}")
     return
 
   output_authkey = ""

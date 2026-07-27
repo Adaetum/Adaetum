@@ -1,0 +1,8 @@
+name: tailnet-routes
+project: default
+annotations:
+  argocd.argoproj.io/sync-wave: "11"
+source_type: git
+source_target_revision: HEAD
+source_path: pods/tailscale/routes
+destination_namespace: tailscale
