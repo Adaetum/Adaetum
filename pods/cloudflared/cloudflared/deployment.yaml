@@ -37,9 +37,9 @@ spec:
             requests:
               cpu: 50m
               memory: 64Mi
-          limits:
-            cpu: 200m
-            memory: 256Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
           ports:
             - name: metrics
               containerPort: 2000

@@ -1347,6 +1347,51 @@ fi
     return [f"Gitea seed branch-tip verification failed: {detail}"]
 
 
+def validate_gitea_default_branch_reconciliation() -> list[str]:
+    """Require Gitea repository metadata to follow the configured branch."""
+    implementation = functions(SHARED_HELPERS).get("reconcile_gitea_repo_default_branch")
+    if not implementation:
+        return ["control-pair-common.sh is missing reconcile_gitea_repo_default_branch"]
+    fixture = r'''
+set -euo pipefail
+curl() {
+  [[ " $* " == *" -X PATCH "* ]]
+  [[ " $* " == *" /api/v1/repos/gitea-admin/cluster "* ]]
+  [[ " $* " == *' "default_branch": "main" '* ]]
+  printf '%s\n' '{"default_branch":"main"}'
+}
+reconcile_gitea_repo_default_branch http://gitea.test secret gitea-admin cluster main
+if reconcile_gitea_repo_default_branch http://gitea.test secret gitea-admin cluster HEAD >/dev/null 2>&1; then
+  echo 'unresolved Gitea default branch was accepted' >&2
+  exit 1
+fi
+curl() { printf '%s\n' '{"default_branch":"streamlining"}'; }
+if reconcile_gitea_repo_default_branch http://gitea.test secret gitea-admin cluster main >/dev/null 2>&1; then
+  echo 'mismatched Gitea default branch response was accepted' >&2
+  exit 1
+fi
+'''
+    result = subprocess.run(
+        ["bash", "-c", implementation + fixture],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    failures: list[str] = []
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
+        failures.append(f"Gitea default-branch reconciliation failed: {detail}")
+    call = (
+        'reconcile_gitea_repo_default_branch \\\n'
+        '    "${base_url}" "${admin_token}" "${target_owner}" "${target_repo}" "${source_repo_branch}" || return 1'
+    )
+    for phase_name, path in (("Phase 50", PHASE_50), ("Phase 60", PHASE_60)):
+        if call not in path.read_text(encoding="utf-8"):
+            failures.append(f"{phase_name} does not reconcile Gitea's default branch")
+    return failures
+
+
 def main() -> int:
     phase_50_functions = functions(PHASE_50)
     phase_60_functions = functions(PHASE_60)
@@ -1374,6 +1419,7 @@ def main() -> int:
     failures.extend(validate_rancher_origin_settle())
     failures.extend(validate_secret_foundation_handoff())
     failures.extend(validate_gitea_seed_branch_tip())
+    failures.extend(validate_gitea_default_branch_reconciliation())
     if duplicates:
         print("Move exact shared helpers into control-pair-common.sh:", file=sys.stderr)
         print("\n".join(f"- {name}" for name in duplicates), file=sys.stderr)

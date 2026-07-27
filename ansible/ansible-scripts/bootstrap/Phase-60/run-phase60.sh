@@ -1946,6 +1946,9 @@ SH
       "${source_repo_branch}" "${expected_branch_tip}" "${pushed_refs}" || return 1
   fi
 
+  reconcile_gitea_repo_default_branch \
+    "${base_url}" "${admin_token}" "${target_owner}" "${target_repo}" "${source_repo_branch}" || return 1
+
   echo "[phase60] bootstrap repo auto-render disabled; using seeded repo state as-is"
 
   write_secret_file argocd_repo_url "${argocd_git_url}"

@@ -207,6 +207,42 @@ def main() -> int:
             if marker not in text:
                 failures.append(f"{path} is missing its native metrics contract: {marker}")
 
+    cloudflared_docs = list(
+        yaml.safe_load_all(
+            (ROOT / "pods/cloudflared/cloudflared/deployment.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+    )
+    cloudflared_deployment = next(
+        (doc for doc in cloudflared_docs if doc.get("kind") == "Deployment"), {}
+    )
+    cloudflared_containers = nested(
+        cloudflared_deployment, "spec", "template", "spec", "containers"
+    )
+    cloudflared_container = (
+        next(
+            (
+                container
+                for container in cloudflared_containers
+                if container.get("name") == "cloudflared"
+            ),
+            {},
+        )
+        if isinstance(cloudflared_containers, list)
+        else {}
+    )
+    expected_cloudflared_resources = {
+        "requests": {"cpu": "50m", "memory": "64Mi"},
+        "limits": {"cpu": "200m", "memory": "256Mi"},
+    }
+    if cloudflared_container.get("resources") != expected_cloudflared_resources:
+        failures.append(
+            "cloudflared requests and limits must remain nested under the container resources field"
+        )
+    if "limits" in cloudflared_container:
+        failures.append("cloudflared must not declare limits as an invalid container-level field")
+
     kubewarden = helm_values("pods/compliance/kubewarden-controller.app.yaml")
     if nested(kubewarden, "telemetry", "metrics") is not False:
         failures.append(

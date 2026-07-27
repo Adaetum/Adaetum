@@ -1087,6 +1087,48 @@ detect_fallback_node_ip() {
 }
 # GitOps repository and Application helpers
 
+reconcile_gitea_repo_default_branch() {
+  local base_url="${1:-}"
+  local admin_token="${2:-}"
+  local owner="${3:-}"
+  local repo="${4:-}"
+  local desired_branch="${5:-}"
+  local payload=""
+  local response=""
+  local actual_branch=""
+
+  if [[ -z "${base_url}" || -z "${admin_token}" || -z "${owner}" || -z "${repo}" || \
+        -z "${desired_branch}" || "${desired_branch}" == "HEAD" ]]; then
+    echo "[gitea-repository] cannot reconcile an unresolved default branch" >&2
+    return 1
+  fi
+
+  # A mirror push transfers refs but not Gitea's repository metadata. Reassert
+  # the configured recovery branch so a previously selected development branch
+  # cannot remain the web UI, clone, and Actions default after reinstall.
+  payload="$(python3 -c 'import json,sys; print(json.dumps({"default_branch": sys.argv[1]}))' "${desired_branch}")"
+  response="$(
+    curl -fsS \
+      -H "Authorization: token ${admin_token}" \
+      -H "Content-Type: application/json" \
+      -X PATCH \
+      "${base_url}/api/v1/repos/${owner}/${repo}" \
+      -d "${payload}"
+  )" || {
+    echo "[gitea-repository] failed to select ${owner}/${repo} default branch ${desired_branch}" >&2
+    return 1
+  }
+  actual_branch="$(
+    python3 -c 'import json,sys; print((json.load(sys.stdin).get("default_branch") or "").strip())' \
+      <<<"${response}" 2>/dev/null || true
+  )"
+  if [[ "${actual_branch}" != "${desired_branch}" ]]; then
+    echo "[gitea-repository] default branch verification failed for ${owner}/${repo}: expected=${desired_branch} actual=${actual_branch:-missing}" >&2
+    return 1
+  fi
+  echo "[gitea-repository] verified ${owner}/${repo} default branch ${actual_branch}"
+}
+
 gitea_repo_has_readable_refs() {
   local repo_url="${1:-}"
   local repo_username="${2:-}"
