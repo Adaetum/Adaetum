@@ -116,7 +116,7 @@ gitea:
       TYPE: level
     server:
       DOMAIN: gitea.adaetum.local
-      ROOT_URL: http://gitea.adaetum.local/
+      ROOT_URL: https://gitea.adaetum.local/
     oauth2:
       # A symmetric key makes OAuth signing state recoverable from OpenBao
       # instead of leaving an auto-generated private key only on the PVC.

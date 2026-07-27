@@ -36,6 +36,7 @@ TEMPLATE_TARGETS = [
     ("pods/ingress/nginx-routing/authentik-outpost-hosts-ingress.yaml.tmpl", "pods/ingress/nginx-routing/authentik-outpost-hosts-ingress.yaml"),
     ("pods/ingress/nginx-routing/authentik-ingress.yaml.tmpl", "pods/ingress/nginx-routing/authentik-ingress.yaml"),
     ("pods/ingress/nginx-routing/gitea-ingress.yaml.tmpl", "pods/ingress/nginx-routing/gitea-ingress.yaml"),
+    ("pods/ingress/nginx-routing/gitea-tls.yaml.tmpl", "pods/ingress/nginx-routing/gitea-tls.yaml"),
     ("pods/ingress/nginx-routing/gitea-public-ingress.yaml.tmpl", "pods/ingress/nginx-routing/gitea-public-ingress.yaml"),
     ("pods/ingress/nginx-routing/headlamp-ingress.yaml.tmpl", "pods/ingress/nginx-routing/headlamp-ingress.yaml"),
     ("pods/ingress/nginx-routing/headlamp-public-ingress.yaml.tmpl", "pods/ingress/nginx-routing/headlamp-public-ingress.yaml"),
@@ -236,7 +237,10 @@ def render_templates(config: dict[str, str], check: bool) -> list[str]:
         f"http://gitea-http.gitea.svc.cluster.local:3000/"
         f"{config['GITEA_REPO_OWNER']}/{config['GITEA_REPO_NAME']}.git"
     )
-    derived["GITEA_ROOT_URL"] = f"http://{config['GITEA_CANONICAL_HOST']}/"
+    # TLS terminates at ingress-nginx while Gitea continues serving HTTP on its
+    # cluster-local Service. Advertise HTTPS so clone and OAuth URLs use the
+    # client-facing scheme without routing internal GitOps traffic externally.
+    derived["GITEA_ROOT_URL"] = f"https://{config['GITEA_CANONICAL_HOST']}/"
     # Older templates use readable example hostnames instead of opaque tokens.
     # Replace longest strings first so a service hostname is not partially
     # replaced by the later bare-domain replacement.

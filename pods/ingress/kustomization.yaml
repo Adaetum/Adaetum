@@ -4,6 +4,7 @@ resources:
   - external-dns/csi.yaml
   - external-dns/deployment.yaml
   - external-dns/rbac.yaml
+  - nginx-routing/gitea-tls.yaml
   - nginx-routing/gitea-ingress.yaml
   - nginx-routing/gitea-public-ingress.yaml
   - nginx-routing/argocd-ingress.yaml
@@ -42,6 +43,12 @@ replacements:
           name: gitea-ui-internal
         fieldPaths:
           - spec.rules.0.host
+          - spec.tls.0.hosts.0
+      - select:
+          kind: Certificate
+          name: gitea-local-tls
+        fieldPaths:
+          - spec.dnsNames.0
   - source:
       kind: ConfigMap
       name: ingress-cluster-config

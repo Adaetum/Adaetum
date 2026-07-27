@@ -4,10 +4,26 @@ metadata:
   name: gitea-ui-internal
   namespace: gitea
   annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Git Smart HTTP can stream large request and response bodies for longer
+    # than normal UI traffic. Keep buffering off and bound the connection with
+    # explicit upload and timeout limits instead of controller-wide changes.
+    nginx.ingress.kubernetes.io/proxy-body-size: "2g"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - gitea.adaetum.local
+      secretName: gitea-local-tls
   rules:
     - host: gitea.adaetum.local
       http:

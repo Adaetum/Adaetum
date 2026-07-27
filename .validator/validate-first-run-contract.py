@@ -98,6 +98,16 @@ def main() -> int:
         fail("reused recovery repositories do not publish authoritative main")
     if 'git push "--force-with-lease=refs/heads/main:${remote_head}" origin HEAD:refs/heads/main' not in first_run:
         fail("authoritative recovery publication lacks concurrent-update protection")
+    if 'git fetch "${public_origin}" "+refs/heads/main:${public_ref}"' not in first_run:
+        fail("task init does not fetch canonical public main before publishing recovery main")
+    if 'git read-tree --reset -u "${public_ref}"' not in first_run:
+        fail("task init does not replace the private tracked tree from canonical public main")
+    if 'git show origin/main:platform.yaml >"${saved_profile}"' not in first_run:
+        fail("task init does not preserve the private recovery profile across public refresh")
+    if 'task platform:render' not in first_run or 'git add -u' not in first_run:
+        fail("task init does not regenerate profile-derived tracked outputs after public refresh")
+    if 'git switch --force-create main origin/main' not in first_run:
+        fail("task init can leave the recovery checkout on a retired development branch")
     if 'git merge --no-edit "origin/${current_branch}"' in first_run:
         fail("task init can merge stale private branch history back into recovery main")
     if 'git ls-remote --heads origin main' not in first_run or "origin/main does not match local HEAD" not in first_run:
@@ -112,6 +122,14 @@ def main() -> int:
         fail("first-run does not preserve canonical Adaetum as the upstream remote")
     if 'git remote set-url --push origin "${recovery_url}"' not in first_run:
         fail("first-run does not replace a stale public push URL on origin")
+    setup_recovery_contract = (
+        "replaces every tracked path from the public tree",
+        "restores the private\n`platform.yaml`",
+        "Untracked and ignored recovery material is not changed",
+    )
+    for expected in setup_recovery_contract:
+        if expected not in (ROOT / "setup.md").read_text(encoding="utf-8"):
+            fail(f"setup guide is missing recovery refresh contract: {expected}")
     reuse_private_origin = first_run.split(
         'if [ "${visibility}" = private ] && [ "${can_admin}" = true ] && [ "${is_fork}" = false ]; then',
         1,
@@ -148,6 +166,90 @@ first_run_set_recovery_origin https://github.com/Binglesworth/Adaetum-cluster.gi
         )
         if remote_fixture.returncode:
             fail(f"recovery origin normalization failed: {remote_fixture.stderr.strip()}")
+    with tempfile.TemporaryDirectory() as directory:
+        reconciliation_fixture = subprocess.run(
+            [
+                "bash",
+                "-c",
+                r'''
+set -euo pipefail
+fixture_root="${fixture_root}"
+public_work="${fixture_root}/public-work"
+public_bare="${fixture_root}/public.git"
+private_work="${fixture_root}/private-work"
+private_bare="${fixture_root}/private.git"
+checkout="${fixture_root}/checkout"
+
+git init -q -b main "${public_work}"
+git -C "${public_work}" config user.name fixture
+git -C "${public_work}" config user.email fixture@example.invalid
+printf '%s\n' public >"${public_work}/public.txt"
+printf '%s\n' public-default >"${public_work}/platform.yaml"
+printf '%s\n' rendered-public-default >"${public_work}/generated.txt"
+git -C "${public_work}" add .
+git -C "${public_work}" commit -q -m public-main
+public_head="$(git -C "${public_work}" rev-parse HEAD)"
+git clone -q --bare "${public_work}" "${public_bare}"
+
+git init -q -b main "${private_work}"
+git -C "${private_work}" config user.name fixture
+git -C "${private_work}" config user.email fixture@example.invalid
+printf '%s\n' stale >"${private_work}/stale.txt"
+printf '%s\n' private-profile >"${private_work}/platform.yaml"
+printf '%s\n' rendered-stale >"${private_work}/generated.txt"
+git -C "${private_work}" add .
+git -C "${private_work}" commit -q -m private-main
+git -C "${private_work}" branch Streamlining
+git clone -q --bare "${private_work}" "${private_bare}"
+
+git clone -q "${private_bare}" "${checkout}"
+git -C "${checkout}" config user.name fixture
+git -C "${checkout}" config user.email fixture@example.invalid
+git -C "${checkout}" remote add upstream "${public_bare}"
+git -C "${checkout}" switch -q Streamlining
+printf '%s\n' development >"${checkout}/development.txt"
+git -C "${checkout}" add development.txt
+git -C "${checkout}" commit -q -m retired-development-branch
+printf '%s\n' recovery-material >"${checkout}/untracked-recovery.txt"
+
+cd "${checkout}"
+repo_root="${source_root}"
+. "${source_root}/tasks/scripts/first-run-preflight.sh"
+first_run_with_progress() { shift; "$@"; }
+first_run_status() { :; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+task() {
+  [ "$1" = platform:render ]
+  profile="$(tr -d '\r\n' <platform.yaml)"
+  printf 'rendered-%s\n' "${profile}" >generated.txt
+}
+
+first_run_track_recovery_branch
+
+[ "$(git branch --show-current)" = main ]
+[ -f public.txt ]
+[ ! -e stale.txt ]
+[ ! -e development.txt ]
+[ "$(cat platform.yaml)" = private-profile ]
+[ "$(cat generated.txt)" = rendered-private-profile ]
+[ "$(cat untracked-recovery.txt)" = recovery-material ]
+git show-ref --verify --quiet refs/heads/Streamlining
+git merge-base --is-ancestor "${public_head}" HEAD
+[ "$(git rev-parse HEAD)" = "$(git ls-remote --heads origin main | awk 'NR == 1 {print $1}')" ]
+''',
+            ],
+            env={
+                **os.environ,
+                "fixture_root": directory,
+                "source_root": str(ROOT),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if reconciliation_fixture.returncode:
+            detail = reconciliation_fixture.stderr.strip() or reconciliation_fixture.stdout.strip()
+            fail(f"public-main recovery reconciliation failed: {detail}")
     if "first_run_select_tailscale_domain" not in first_run:
         fail("first-run does not discover the Tailscale tailnet")
     load_profile_body = first_run.split("first_run_load_profile() {", 1)[1].split("\n}", 1)[0]

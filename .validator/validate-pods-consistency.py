@@ -81,7 +81,7 @@ def main() -> int:
     failures: list[str] = []
 
     repo_url = f"http://gitea-http.gitea.svc.cluster.local:3000/{config['GITEA_REPO_OWNER']}/{config['GITEA_REPO_NAME']}.git"
-    gitea_root = f"http://{config['GITEA_CANONICAL_HOST']}/"
+    gitea_root = f"https://{config['GITEA_CANONICAL_HOST']}/"
 
     argocd_paths = [
         REPO_ROOT / "pods" / "argocd" / "bootstrap" / "app-of-apps.yaml",

@@ -1,0 +1,72 @@
+# Gitea's .local hostname cannot use a public CA. cert-manager owns this
+# namespace-scoped trust root and the renewable leaf key so neither private key
+# is committed to Git. Keep the CA key stable: trusted clients anchor on it
+# while cert-manager renews the short-lived serving certificate automatically.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: gitea-selfsigned
+  namespace: gitea
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gitea-local-ca
+  namespace: gitea
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  isCA: true
+  commonName: Gitea Local CA
+  secretName: gitea-local-ca
+  duration: 87600h
+  renewBefore: 8760h
+  privateKey:
+    algorithm: RSA
+    size: 3072
+    rotationPolicy: Never
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: gitea-selfsigned
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: gitea-local-ca
+  namespace: gitea
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  ca:
+    secretName: gitea-local-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gitea-local-tls
+  namespace: gitea
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  secretName: gitea-local-tls
+  duration: 2160h
+  renewBefore: 720h
+  dnsNames:
+    - gitea.example.local
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    rotationPolicy: Always
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: gitea-local-ca

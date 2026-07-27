@@ -78,6 +78,33 @@ policy or credentials. If a node must be rebuilt, use the recovery-repository-ow
 break-glass path rather than manually editing cluster identity on an existing
 node.
 
+## Internal Gitea TLS trust
+
+cert-manager creates a cluster-local CA for the profile-derived Gitea `.local`
+hostname and renews its 90-day serving certificate 30 days before expiration.
+ingress-nginx observes the renewed Secret automatically. A clean cluster install
+creates a new trust root, so each external Git or OAuth client must trust that
+root once after installation; never export the `tls.key` field.
+
+On macOS, retrieve only the public CA certificate through the break-glass SSH
+path, inspect it, and then add it to the system trust store:
+
+```bash
+ssh ansible@<node> \
+  'kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml -n gitea get secret gitea-local-ca -o jsonpath="{.data.tls\\.crt}"' \
+  | base64 -D > gitea-local-ca.crt
+
+openssl x509 -in gitea-local-ca.crt \
+  -noout -subject -issuer -dates -fingerprint -sha256
+
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain gitea-local-ca.crt
+```
+
+Install the same public root in any non-macOS OAuth client that calls Gitea by
+its `.local` hostname. In-cluster consumers should continue using the internal
+HTTP Service URL instead of routing back through the public hostname.
+
 ## Safe validation order
 
 1. Update the recovery repository's `platform.yaml` and run `task setup:preflight`.

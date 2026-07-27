@@ -78,12 +78,16 @@ Canonical Adaetum is retained as the public `upstream` remote and the selected
 private repository becomes `origin`. GitHub requires forks of public
 repositories to remain public, so setup never uses a public fork as the cluster
 recovery store.
-Setup publishes `main` as the default workflow branch because Adaetum's Actions
-triggers target `main`. If setup is launched from another branch, that development
-branch is also published and remains checked out locally.
-When an existing recovery repository is selected, setup restores its matching
-branch and merges that cluster history with newer local Adaetum changes before
-continuing. It refuses to perform that merge over uncommitted work.
+Setup always finishes on `main` and publishes only that branch as the recovery
+and workflow authority. When an existing recovery repository is selected,
+setup merges canonical public `upstream/main` into the private `origin/main`
+history, replaces every tracked path from the public tree, restores the private
+`platform.yaml`, and re-renders its tracked outputs. This prevents a retired
+development branch or stale private file from surviving under the name `main`.
+Untracked and ignored recovery material is not changed, and old local branch
+refs remain available until the operator deliberately removes them. Setup
+refuses the refresh over tracked worktree changes or unpublished local-main
+commits.
 If an older Adaetum setup already synchronized environment secrets to a public
 fork, remove those secrets and rotate the provider credentials after the private
 repository is ready; GitHub does not permit reading the old secret values back.

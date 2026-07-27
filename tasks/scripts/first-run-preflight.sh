@@ -214,17 +214,74 @@ first_run_set_recovery_origin() {
 }
 
 first_run_track_recovery_branch() {
-  local current_branch="" local_head="" remote_head=""
+  local current_branch="" local_head="" remote_head="" public_origin="" public_ref=""
+  local saved_profile="" merge_pending=0
   current_branch="$(git branch --show-current)"
   [ -n "${current_branch}" ] || die "Setup requires a named Git branch before it can publish recovery state."
 
-  local_head="$(git rev-parse HEAD)"
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    die "Task init will not replace tracked files in a dirty worktree. Commit or stash them, then rerun."
+  fi
+
+  public_origin="$(git remote get-url upstream 2>/dev/null || true)"
+  [ -n "${public_origin}" ] || public_origin="https://github.com/Adaetum/Adaetum.git"
+  public_ref="refs/remotes/adaetum-init/main"
+  first_run_with_progress "Fetching canonical public main..." \
+    git fetch "${public_origin}" "+refs/heads/main:${public_ref}"
+
   remote_head="$(git ls-remote --heads origin main | awk 'NR == 1 {print $1}')"
   if [ -n "${remote_head}" ]; then
-    # The reviewed local checkout is authoritative during task init. A precise
-    # lease prevents overwriting a concurrent remote update while still
-    # replacing stale recovery history instead of merging it back into a new
-    # installation.
+    git fetch origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null
+  fi
+
+  saved_profile="$(mktemp)"
+  if [ -n "${remote_head}" ] && git show origin/main:platform.yaml >"${saved_profile}" 2>/dev/null; then
+    :
+  elif [ -f platform.yaml ]; then
+    cp platform.yaml "${saved_profile}"
+  else
+    rm -f "${saved_profile}"
+    die "Task init cannot preserve the recovery profile because platform.yaml is missing."
+  fi
+
+  # Do not discard unpublished local-main commits. A stale development branch
+  # is safe because switching to main leaves that branch ref intact.
+  if git show-ref --verify --quiet refs/heads/main && \
+     ! git merge-base --is-ancestor main "${public_ref}" && \
+     { [ -z "${remote_head}" ] || ! git merge-base --is-ancestor main origin/main; }; then
+    rm -f "${saved_profile}"
+    git update-ref -d "${public_ref}"
+    die "Local main contains commits that are not recoverable from public or private main. Publish or preserve them before rerunning task init."
+  fi
+
+  if [ -n "${remote_head}" ]; then
+    git switch --force-create main origin/main >/dev/null
+  else
+    git switch --force-create main "${public_ref}" >/dev/null
+  fi
+
+  # Keep both histories when the private repository predates current public
+  # main, but make the public tree authoritative. read-tree replaces every
+  # tracked path; restoring the single public profile contract then regenerates
+  # all profile-derived tracked outputs from current code.
+  if ! git merge-base --is-ancestor "${public_ref}" HEAD; then
+    git merge --no-ff --no-commit --strategy=ours --allow-unrelated-histories "${public_ref}" >/dev/null
+    merge_pending=1
+  fi
+  git read-tree --reset -u "${public_ref}"
+  cp "${saved_profile}" platform.yaml
+  rm -f "${saved_profile}"
+  first_run_with_progress "Rendering the preserved recovery profile on public main..." task platform:render
+  git add -u
+  if [ "${merge_pending}" = 1 ] || ! git diff --cached --quiet; then
+    git commit -m "Refresh recovery main from public upstream"
+  fi
+  git update-ref -d "${public_ref}"
+
+  local_head="$(git rev-parse HEAD)"
+  if [ -n "${remote_head}" ]; then
+    # A precise lease prevents overwriting a concurrent remote update after the
+    # public-tree reconciliation began.
     first_run_with_progress "Publishing authoritative recovery main..." \
       git push "--force-with-lease=refs/heads/main:${remote_head}" origin HEAD:refs/heads/main
   else
@@ -232,10 +289,8 @@ first_run_track_recovery_branch() {
   fi
   remote_head="$(git ls-remote --heads origin main | awk 'NR == 1 {print $1}')"
   [ "${remote_head}" = "${local_head}" ] || die "Recovery publication failed: origin/main does not match local HEAD."
-  if [ "${current_branch}" = main ]; then
-    git fetch origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null
-    git branch --set-upstream-to=origin/main main >/dev/null
-  fi
+  git fetch origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null
+  git branch --set-upstream-to=origin/main main >/dev/null
   first_run_status success "Private recovery main now matches the local checkout."
 }
 

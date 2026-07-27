@@ -246,6 +246,84 @@ def main() -> int:
             failures,
         )
 
+    # Gitea is the authoritative day-two Git remote, so its internal route must
+    # never fall back to ingress-nginx's generated certificate or the
+    # controller's short upload/time-out defaults. Keep the certificate SAN,
+    # Ingress SNI host, and profile-derived hostname as one checked contract.
+    gitea_host = require(config, "GITEA_LOCAL_HOST")
+    gitea_ingress = next(
+        (
+            item
+            for item in ingress_documents
+            if re.search(r"(?m)^kind:\s+Ingress\s*$", item)
+            and re.search(r"(?m)^\s*name:\s+gitea-ui-internal\s*$", item)
+        ),
+        "",
+    )
+    if not gitea_ingress:
+        failures.append("rendered ingress output is missing internal Ingress gitea-ui-internal")
+    else:
+        for required, label in (
+            ("nginx.ingress.kubernetes.io/backend-protocol: HTTP", "HTTP backend protocol"),
+            ('nginx.ingress.kubernetes.io/ssl-redirect: "true"', "HTTPS redirect"),
+            ('nginx.ingress.kubernetes.io/force-ssl-redirect: "true"', "forced HTTPS redirect"),
+            ("nginx.ingress.kubernetes.io/proxy-body-size: 2g", "large Git upload limit"),
+            ('nginx.ingress.kubernetes.io/proxy-buffering: "off"', "response streaming"),
+            ('nginx.ingress.kubernetes.io/proxy-request-buffering: "off"', "request streaming"),
+            ('nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"', "upstream connect timeout"),
+            ('nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"', "long read timeout"),
+            ('nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"', "long send timeout"),
+            ('nginx.ingress.kubernetes.io/proxy-http-version: "1.1"', "HTTP/1.1 and WebSocket support"),
+            (f"- {gitea_host}", "hostname-scoped TLS host"),
+            ("secretName: gitea-local-tls", "hostname-scoped TLS Secret"),
+        ):
+            if required not in gitea_ingress:
+                failures.append(f"rendered Gitea Ingress is missing {label}")
+
+    gitea_certificate = next(
+        (
+            item
+            for item in ingress_documents
+            if re.search(r"(?m)^kind:\s+Certificate\s*$", item)
+            and re.search(r"(?m)^\s*name:\s+gitea-local-tls\s*$", item)
+        ),
+        "",
+    )
+    if not gitea_certificate:
+        failures.append("rendered ingress output is missing cert-manager Certificate gitea-local-tls")
+    else:
+        for required, label in (
+            (f"- {gitea_host}", "profile-derived DNS SAN"),
+            ("duration: 2160h", "90-day serving certificate lifetime"),
+            ("renewBefore: 720h", "30-day renewal window"),
+            ("rotationPolicy: Always", "serving private-key rotation"),
+            ("secretName: gitea-local-tls", "serving TLS Secret"),
+            ("name: gitea-local-ca", "Gitea local CA issuer"),
+        ):
+            if required not in gitea_certificate:
+                failures.append(f"rendered Gitea Certificate is missing {label}")
+
+    gitea_ca = next(
+        (
+            item
+            for item in ingress_documents
+            if re.search(r"(?m)^kind:\s+Certificate\s*$", item)
+            and re.search(r"(?m)^\s*name:\s+gitea-local-ca\s*$", item)
+        ),
+        "",
+    )
+    if not gitea_ca:
+        failures.append("rendered ingress output is missing cert-manager Certificate gitea-local-ca")
+    else:
+        for required, label in (
+            ("isCA: true", "CA capability"),
+            ("duration: 87600h", "long-lived trust anchor"),
+            ("rotationPolicy: Never", "stable CA private key"),
+            ("secretName: gitea-local-ca", "CA Secret"),
+        ):
+            if required not in gitea_ca:
+                failures.append(f"rendered Gitea local CA is missing {label}")
+
     for required_text, message in (
         ("RespectIgnoreDifferences=true", "ingress-routing app is missing RespectIgnoreDifferences=true"),
         ('field.cattle.io/publicEndpoints', "ingress-routing app is missing field.cattle.io/publicEndpoints ignore"),
