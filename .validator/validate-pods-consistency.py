@@ -144,6 +144,7 @@ def main() -> int:
             "GRAFANA_LOCAL_HOST",
             "PROMETHEUS_PUBLIC_HOST",
             "PROMETHEUS_LOCAL_HOST",
+            "CRAFTY_PUBLIC_HOST",
             "AUTHENTIK_PUBLIC_HOST",
         )
     }
@@ -216,6 +217,8 @@ def main() -> int:
         "NTFY_LOCAL_HOST",
         "PROMETHEUS_PUBLIC_HOST",
         "PROMETHEUS_LOCAL_HOST",
+        "CRAFTY_PUBLIC_HOST",
+        "CRAFTY_LOCAL_HOST",
         "AUTHENTIK_PUBLIC_HOST",
         "AUTHENTIK_LOCAL_HOST",
     ):

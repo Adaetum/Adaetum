@@ -107,6 +107,8 @@ def config_from_profile(profile: dict) -> dict[str, str]:
         "RANCHER_LOCAL_HOST": host("rancher", local_domain),
         "AUTHENTIK_PUBLIC_HOST": host("authentik", domain),
         "AUTHENTIK_LOCAL_HOST": host("authentik", local_domain),
+        "CRAFTY_PUBLIC_HOST": host("crafty", domain),
+        "CRAFTY_LOCAL_HOST": host("crafty", local_domain),
         "AUTHENTIK_FORWARD_AUTH_URL": "http://authentik-server.authentik.svc.cluster.local:80/outpost.goauthentik.io/auth/nginx",
         "AUTHENTIK_LOCAL_AUTH_SIGNIN": "https://$host/outpost.goauthentik.io/start?rd=$scheme://$http_host$escaped_request_uri",
         "AUTHENTIK_PUBLIC_AUTH_SIGNIN": "https://$host/outpost.goauthentik.io/start?rd=$scheme://$http_host$escaped_request_uri",

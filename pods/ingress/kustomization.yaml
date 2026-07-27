@@ -1,5 +1,6 @@
 resources:
   - ingress-cluster-config.yaml
+  - rke2-ingress-nginx-config.yaml
   - nginx-controller-config.yaml
   - external-dns/csi.yaml
   - external-dns/deployment.yaml
@@ -20,6 +21,8 @@ resources:
   - nginx-routing/registry-ingress.yaml
   - nginx-routing/registry-public-ingress.yaml
   - nginx-routing/rancher-ingress.yaml
+  - nginx-routing/crafty-ingress.yaml
+  - nginx-routing/crafty-public-ingress.yaml
   - observability-routing
 
 replacements:
@@ -311,6 +314,16 @@ replacements:
   - source:
       kind: ConfigMap
       name: ingress-cluster-config
+      fieldPath: data.CRAFTY_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: authentik-outpost-hosts
+        fieldPaths:
+          - spec.rules.18.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
       fieldPath: data.HEADLAMP_LOCAL_HOST
     targets:
       - select:
@@ -326,6 +339,27 @@ replacements:
       - select:
           kind: Ingress
           name: headlamp-ui-public
+        fieldPaths:
+          - spec.rules.0.host
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.CRAFTY_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: crafty-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.CRAFTY_PUBLIC_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: crafty-ui-public
         fieldPaths:
           - spec.rules.0.host
           - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]

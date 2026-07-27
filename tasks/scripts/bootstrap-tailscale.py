@@ -34,7 +34,9 @@ REQUIRED_SERVICE_APPROVERS = {"tag:k8s": ["tag:k8s"]}
 REQUIRED_OPERATOR_GRANT = {
   "src": ["*"],
   "dst": ["tag:k8s"],
-  "ip": ["tcp:443", "icmp:*"],
+  # HTTPS serves the private web routes; Bedrock is the intentionally narrow
+  # non-HTTP example exposed by a Tailscale L3 service.
+  "ip": ["tcp:443", "udp:19132", "icmp:*"],
 }
 
 
@@ -182,9 +184,25 @@ def _merge_operator_access(policy_obj: dict):
     grants = []
     policy_obj["grants"] = grants
     changed = True
-  if REQUIRED_OPERATOR_GRANT not in grants:
-    grants.append(dict(REQUIRED_OPERATOR_GRANT))
+  operator_grant = next(
+    (
+      grant
+      for grant in grants
+      if isinstance(grant, dict)
+      and grant.get("src") == REQUIRED_OPERATOR_GRANT["src"]
+      and grant.get("dst") == REQUIRED_OPERATOR_GRANT["dst"]
+      and isinstance(grant.get("ip"), list)
+    ),
+    None,
+  )
+  if operator_grant is None:
+    grants.append({key: list(value) for key, value in REQUIRED_OPERATOR_GRANT.items()})
     changed = True
+  else:
+    for protocol in REQUIRED_OPERATOR_GRANT["ip"]:
+      if protocol not in operator_grant["ip"]:
+        operator_grant["ip"].append(protocol)
+        changed = True
   return changed
 
 

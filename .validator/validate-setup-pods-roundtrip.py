@@ -50,6 +50,10 @@ def main() -> int:
         failures.append("profile render did not derive NTFY_PUBLIC_HOST from spec.cluster.domain")
     if values.get("NTFY_LOCAL_HOST") != f"ntfy.{cluster['localDomain']}":
         failures.append("profile render did not derive NTFY_LOCAL_HOST from spec.cluster.localDomain")
+    if values.get("CRAFTY_PUBLIC_HOST") != f"crafty.{cluster['domain']}":
+        failures.append("profile render did not derive CRAFTY_PUBLIC_HOST from spec.cluster.domain")
+    if values.get("CRAFTY_LOCAL_HOST") != f"crafty.{cluster['localDomain']}":
+        failures.append("profile render did not derive CRAFTY_LOCAL_HOST from spec.cluster.localDomain")
 
     if failures:
         for failure in failures:

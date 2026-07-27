@@ -229,6 +229,36 @@ def validate_supporting_controllers(failures: list[str]) -> None:
     require({"PodsWithPVC", "PodsWithoutPDB"}.issubset(protections), "Descheduler must protect PVC and non-PDB pods", failures)
 
 
+def validate_crafty_fixed_size(failures: list[str]) -> None:
+    """Keep the traditional stateful-service example outside autoscaling."""
+    items = documents("pods/games/crafty/crafty.yaml")
+    deployment = find_kind(items, "Deployment")
+    spec = deployment.get("spec", {})
+    pod = spec.get("template", {})
+    container = next(
+        (item for item in pod.get("spec", {}).get("containers", []) if item.get("name") == "crafty"),
+        {},
+    )
+    require(spec.get("replicas") == 1, "crafty: Git must own a single replica", failures)
+    require(spec.get("strategy", {}).get("type") == "Recreate", "crafty: RWO workload must use Recreate", failures)
+    require(
+        "autoscaling.adaetum.io/rebalance" not in pod.get("metadata", {}).get("labels", {}),
+        "crafty: singleton must not opt into descheduler rebalancing",
+        failures,
+    )
+    resources = container.get("resources", {})
+    require(
+        all(resources.get(section, {}).get(resource) for section in ("requests", "limits") for resource in ("cpu", "memory")),
+        "crafty: fixed-size container needs Git-owned CPU and memory requests and limits",
+        failures,
+    )
+    require(
+        not any(item.get("kind") in {"HorizontalPodAutoscaler", "VerticalPodAutoscaler"} for item in items),
+        "crafty: workload manifest must not contain an HPA or VPA",
+        failures,
+    )
+
+
 def main() -> int:
     failures: list[str] = []
     try:
@@ -236,6 +266,7 @@ def main() -> int:
             validate_workload(namespace, name, config, failures)
         validate_vpa(failures)
         validate_supporting_controllers(failures)
+        validate_crafty_fixed_size(failures)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         failures.append(str(exc))
 

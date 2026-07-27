@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crafty
+  namespace: games
+  labels:
+    app.kubernetes.io/name: crafty
+spec:
+  # Crafty owns mutable server processes and files on one RWO volume. Keep the
+  # replica count and resources in Git; HPA, VPA, and descheduler do not own it.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: crafty
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: crafty
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 0
+        fsGroup: 0
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: prepare-data
+          image: busybox:1.38.0@sha256:fd8d9aa63ba2f0982b5304e1ee8d3b90a210bc1ffb5314d980eb6962f1a9715d
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              mkdir -p /data/backups /data/logs /data/servers /data/config /data/import
+              chgrp -R 0 /data
+              chmod -R g+rwX /data
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: crafty
+          image: registry.gitlab.com/crafty-controller/crafty-4:4.10.7@sha256:67c2cbab1c88b75efb41b2970b1faca1a736b3532f6d1a806a7fe3f81664a199
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TZ
+              value: Etc/UTC
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          ports:
+            - name: panel-https
+              containerPort: 8443
+              protocol: TCP
+            - name: bedrock
+              containerPort: 19132
+              protocol: UDP
+          startupProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /
+              port: panel-https
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /
+              port: panel-https
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /
+              port: panel-https
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /crafty/backups
+              subPath: backups
+            - name: data
+              mountPath: /crafty/logs
+              subPath: logs
+            - name: data
+              mountPath: /crafty/servers
+              subPath: servers
+            - name: data
+              mountPath: /crafty/app/config
+              subPath: config
+            - name: data
+              mountPath: /crafty/import
+              subPath: import
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: crafty
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: crafty
+  namespace: games
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crafty
+  namespace: games
+spec:
+  selector:
+    app.kubernetes.io/name: crafty
+  ports:
+    - name: panel-https
+      port: 8443
+      targetPort: panel-https
+      protocol: TCP
+    - name: bedrock
+      port: 19132
+      targetPort: bedrock
+      protocol: UDP

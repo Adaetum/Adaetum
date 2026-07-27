@@ -107,3 +107,8 @@
         icon: github.png
         href: https://github.com/Adaetum/Adaetum
         description: Upstream project, releases, and documentation
+- Game Services:
+    - Crafty Controller:
+        icon: minecraft.png
+        href: https://__CRAFTY_PUBLIC_HOST__/
+        description: Fixed-size Minecraft Bedrock server management

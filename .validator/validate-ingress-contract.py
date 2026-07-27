@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_CONFIG = REPO_ROOT / "pods" / "cluster-config" / "cluster-config.env"
 INGRESS_APP = REPO_ROOT / "pods" / "ingress" / "ingress-routing.app.yaml"
 TAILSCALE_OPERATOR_APP = REPO_ROOT / "pods" / "tailscale" / "tailscale-operator.app.yaml"
+TAILSCALE_BOOTSTRAP = REPO_ROOT / "tasks" / "scripts" / "bootstrap-tailscale.py"
 REALIZATION_PHASES = (
     REPO_ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-50" / "run-phase50.sh",
     REPO_ROOT / "ansible" / "ansible-scripts" / "bootstrap" / "Phase-60" / "run-phase60.sh",
@@ -59,8 +60,10 @@ def main() -> int:
     config = parse_env_file(CLUSTER_CONFIG)
     rendered = run_kustomize(REPO_ROOT / "pods" / "ingress")
     tailnet_rendered = run_kustomize(REPO_ROOT / "pods" / "tailscale" / "routes")
+    crafty_rendered = run_kustomize(REPO_ROOT / "pods" / "games" / "crafty")
     ingress_app_text = INGRESS_APP.read_text(encoding="utf-8")
     operator_app_text = TAILSCALE_OPERATOR_APP.read_text(encoding="utf-8")
+    tailscale_bootstrap_text = TAILSCALE_BOOTSTRAP.read_text(encoding="utf-8")
 
     cluster_domain = require(config, "EXTERNAL_DNS_DOMAIN_FILTER")
     expected_hosts = {
@@ -76,6 +79,8 @@ def main() -> int:
         "openbao public": require(config, "OPENBAO_PUBLIC_HOST"),
         "registry internal": require(config, "REGISTRY_LOCAL_HOST"),
         "registry public": require(config, "REGISTRY_PUBLIC_HOST"),
+        "crafty internal": require(config, "CRAFTY_LOCAL_HOST"),
+        "crafty public": require(config, "CRAFTY_PUBLIC_HOST"),
         "headlamp internal": require(config, "HEADLAMP_LOCAL_HOST"),
         "headlamp public": require(config, "HEADLAMP_PUBLIC_HOST"),
         "alertmanager internal": require(config, "ALERTMANAGER_LOCAL_HOST"),
@@ -133,6 +138,57 @@ def main() -> int:
         if "nginx.ingress.kubernetes.io/auth-" in document or "outpost.goauthentik.io" in document:
             failures.append(f"trusted tailnet Ingress {name} contains Authentik forward-auth")
 
+    bedrock_service = next(
+        (
+            item
+            for item in tailnet_documents
+            if re.search(r"(?m)^kind:\s+Service\s*$", item)
+            and re.search(r"(?m)^\s*name:\s+minecraft-bedrock-tailnet\s*$", item)
+        ),
+        "",
+    )
+    for required, message in (
+        ("tailscale.com/proxy-group: adaetum-ingress", "Bedrock Service is not attached to the shared ProxyGroup"),
+        ("tailscale.com/hostname: minecraft", "Bedrock Service does not advertise the minecraft MagicDNS name"),
+        ("loadBalancerClass: tailscale", "Bedrock Service is not owned by the Tailscale Operator"),
+        ("port: 19132", "Bedrock Service does not expose port 19132"),
+        ("protocol: UDP", "Bedrock Service is not UDP"),
+    ):
+        if required not in bedrock_service:
+            failures.append(message)
+
+    ingress_chart_config = next(
+        (
+            item
+            for item in re.split(r"(?m)^---\s*$", rendered)
+            if re.search(r"(?m)^kind:\s+HelmChartConfig\s*$", item)
+            and re.search(r"(?m)^\s*name:\s+rke2-ingress-nginx\s*$", item)
+        ),
+        "",
+    )
+    for required, message in (
+        ('"19132": "games/crafty:19132"', "ingress-nginx does not map LAN Bedrock UDP/19132 to Crafty"),
+        ("namespace: kube-system", "ingress-nginx HelmChartConfig is not in the RKE2 chart namespace"),
+    ):
+        if required not in ingress_chart_config:
+            failures.append(message)
+
+    crafty_service = next(
+        (
+            item
+            for item in re.split(r"(?m)^---\s*$", crafty_rendered)
+            if re.search(r"(?m)^kind:\s+Service\s*$", item)
+            and re.search(r"(?m)^\s*name:\s+crafty\s*$", item)
+        ),
+        "",
+    )
+    for required, message in (
+        ("port: 19132", "Crafty ClusterIP Service does not expose Bedrock port 19132 to ingress-nginx"),
+        ("protocol: UDP", "Crafty ClusterIP Service does not expose Bedrock over UDP"),
+    ):
+        if required not in crafty_service:
+            failures.append(message)
+
     proxy_group = next(
         (item for item in tailnet_documents if re.search(r"(?m)^kind:\s+ProxyGroup\s*$", item)),
         "",
@@ -152,6 +208,12 @@ def main() -> int:
         ("mode: \"false\"", "Tailscale Operator unexpectedly exposes the Kubernetes API server"),
     ):
         assert_contains(operator_app_text, required, message, failures)
+    assert_contains(
+        tailscale_bootstrap_text,
+        '"udp:19132"',
+        "Tailscale bootstrap policy does not grant Bedrock UDP/19132 to operator services",
+        failures,
+    )
     if "clientSecret:" in operator_app_text or "clientId:" in operator_app_text:
         failures.append("Tailscale Operator application embeds OAuth values instead of using OpenBao CSI")
 
@@ -195,6 +257,7 @@ def main() -> int:
     protected_public_ingresses = {
         "alertmanager-ui-public",
         "argocd-ui-public",
+        "crafty-ui-public",
         "gitea-ui-public",
         "grafana-ui-public",
         "headlamp-ui-public",
@@ -434,7 +497,7 @@ def main() -> int:
             print(failure, file=sys.stderr)
         return 1
 
-    print("Ingress contract check passed: local, public, and trusted-tailnet routes are consistent.")
+    print("Ingress contract check passed: local, public, LAN UDP, and trusted-tailnet routes are consistent.")
     return 0
 
 

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: minecraft-bedrock-tailnet
+  namespace: games
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+    tailscale.com/hostname: minecraft
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tailscale
+  selector:
+    app.kubernetes.io/name: crafty
+  ports:
+    - name: bedrock
+      port: 19132
+      targetPort: bedrock
+      protocol: UDP

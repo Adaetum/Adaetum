@@ -54,7 +54,7 @@ repos:
         language: python
         additional_dependencies: [pyyaml]
         pass_filenames: false
-        files: ^(pods/(cloudflared/cloudflared|observability/apprise|portal/homepage|operations/(descheduler|goldilocks|vertical-pod-autoscaler|workload-autosizing)).*\.ya?ml|\.validator/validate-workload-autoscaling\.py)$
+        files: ^(pods/(cloudflared/cloudflared|games/crafty|observability/apprise|portal/homepage|operations/(descheduler|goldilocks|vertical-pod-autoscaler|workload-autosizing)).*\.ya?ml|\.validator/validate-workload-autoscaling\.py)$
       - id: validate-observability
         name: Validate metrics and notification routing
         entry: python3 .validator/validate-observability.py
@@ -183,7 +183,7 @@ repos:
         entry: python3 .validator/validate-ingress-contract.py
         language: python
         pass_filenames: false
-        files: ^(pods/cluster-config/cluster-config\.env|pods/(ingress|tailscale)/.*|\.validator/validate-ingress-contract\.py)$
+        files: ^(pods/cluster-config/cluster-config\.env|pods/(ingress|tailscale)/.*|pods/games/crafty/.*|\.validator/validate-ingress-contract\.py)$
       - id: validate-no-example-placeholders
         name: Validate generated config has no example placeholders
         entry: python3 .validator/validate-no-example-placeholders.py

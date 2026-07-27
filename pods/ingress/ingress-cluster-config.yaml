@@ -24,3 +24,5 @@ data:
   REGISTRY_LOCAL_HOST: 'registry.adaetum.local'
   REGISTRY_PUBLIC_HOST: 'registry.adaetum.invalid'
   RANCHER_LOCAL_HOST: 'rancher.adaetum.local'
+  CRAFTY_LOCAL_HOST: 'crafty.adaetum.local'
+  CRAFTY_PUBLIC_HOST: 'crafty.adaetum.invalid'

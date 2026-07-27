@@ -1,0 +1,14 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-ingress-nginx
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  # ingress-nginx renders its UDP ConfigMap, controller listener, and
+  # LoadBalancer Service port from this map. Bedrock therefore shares the
+  # established LAN VIP without becoming an HTTP Ingress or public route.
+  valuesContent: |-
+    udp:
+      "19132": "games/crafty:19132"

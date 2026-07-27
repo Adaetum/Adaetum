@@ -533,6 +533,34 @@ data:
           meta_description: Cluster Prometheus access
           policy_engine_mode: any
 
+      - id: crafty-public-provider
+        model: authentik_providers_proxy.proxyprovider
+        state: present
+        identifiers:
+          name: cluster-crafty-public-forward-auth
+        attrs:
+          name: cluster-crafty-public-forward-auth
+          mode: forward_domain
+          external_host: https://crafty.example.services
+          cookie_domain: .example.services
+          authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+          authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+          invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+          internal_host_ssl_validation: false
+          skip_path_regex: ^/outpost\.goauthentik\.io/.*$
+
+      - model: authentik_core.application
+        state: present
+        identifiers:
+          slug: cluster-crafty-public
+        attrs:
+          name: Cluster Crafty (Public)
+          slug: cluster-crafty-public
+          provider: !KeyOf crafty-public-provider
+          meta_launch_url: https://crafty.example.services
+          meta_description: Crafty Controller access
+          policy_engine_mode: any
+
       - model: authentik_outposts.outpost
         state: present
         identifiers:
@@ -560,3 +588,4 @@ data:
             - !KeyOf grafana-public-provider
             - !KeyOf prometheus-local-provider
             - !KeyOf prometheus-public-provider
+            - !KeyOf crafty-public-provider
