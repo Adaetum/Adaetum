@@ -96,6 +96,7 @@ write_secret "gitea_admin_password" 24
 write_secret "gitea_secret_key" 48
 write_secret "gitea_internal_token" 48
 write_secret "gitea_jwt_secret" 48
+write_secret "crafty_admin_password" 24
 write_secret "grafana_admin_password" 24
 write_secret "grafana_secret_key" 48
 write_secret "ntfy_admin_password" 24

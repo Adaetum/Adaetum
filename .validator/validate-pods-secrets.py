@@ -15,13 +15,20 @@ SCAN_PATHS = [REPO_ROOT / "pods", REPO_ROOT / "setup.md"]
 ROTATION_CONTRACTS = {
     "pods/games/crafty/crafty.yaml": (
         "serviceAccountName: crafty-credential-sync",
-        "role=crafty-credential-sync",
-        "secret/apps/games/crafty/admin",
-        "@/crafty-config/default-creds.txt",
+        "secretProviderClass: crafty-openbao",
+        "/api/v2",
+        '"${api}/users/@me"',
+        "Crafty administrator credential matches OpenBao.",
+    ),
+    "pods/games/crafty/csi.yaml": (
+        "roleName: crafty-credential-sync",
+        "secretPath: secret/data/apps/games/crafty/admin",
+        "secretKey: username",
+        "secretKey: password",
     ),
     "pods/secrets/openbao/policies/crafty-credential-sync.hcl": (
         'path "secret/data/apps/games/crafty/admin"',
-        'capabilities = ["create", "update"]',
+        'capabilities = ["read"]',
     ),
     "pods/secrets/openbao/config/job.yaml": (
         "bao policy write crafty-credential-sync /policies/crafty-credential-sync.hcl",

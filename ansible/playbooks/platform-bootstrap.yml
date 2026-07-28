@@ -270,6 +270,7 @@
         - { name: "gitea_secret_key", length: 48 }
         - { name: "gitea_internal_token", length: 48 }
         - { name: "gitea_jwt_secret", length: 48 }
+        - { name: "crafty_admin_password", length: 24 }
         - { name: "grafana_admin_password", length: 24 }
         - { name: "grafana_secret_key", length: 48 }
         - { name: "ntfy_admin_password", length: 24 }
@@ -335,6 +336,7 @@
         - gitea_secret_key
         - gitea_internal_token
         - gitea_jwt_secret
+        - crafty_admin_password
         - grafana_admin_password
         - grafana_secret_key
         - ntfy_admin_password
@@ -581,6 +583,7 @@
         gitea_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/gitea_secret_key') | trim }}"
         gitea_internal_token: "{{ lookup('file', bootstrap_secret_dir + '/gitea_internal_token') | trim }}"
         gitea_jwt_secret: "{{ lookup('file', bootstrap_secret_dir + '/gitea_jwt_secret') | trim }}"
+        crafty_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/crafty_admin_password') | trim }}"
         grafana_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/grafana_admin_password') | trim }}"
         grafana_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/grafana_secret_key') | trim }}"
         homepage_grafana_password: "{{ lookup('file', bootstrap_secret_dir + '/homepage_grafana_password') | trim }}"

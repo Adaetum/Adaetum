@@ -778,18 +778,20 @@ publisher credentials with anonymous access denied.
 
 Crafty is the fixed-size stateful workload example. It runs one `Recreate`
 replica on a Longhorn volume and is deliberately excluded from HPA, VPA, and
-descheduler ownership. Crafty's normal first start generates an `admin` username
-and random password with no MFA requirement. Its companion promotes that record
-to `secret/apps/games/crafty/admin` in OpenBao, so the next successful Phase 99
-recovery backup includes both fields. To inspect the source record directly:
+descheduler ownership. Crafty uses its native `admin` username with no MFA
+requirement, while OpenBao owns its desired password at
+`secret/apps/games/crafty/admin`. Secrets Store CSI mounts the credential and a
+scoped companion applies it through Crafty's API, so the next successful Phase 99
+recovery backup contains the credential Crafty actually accepts. The generated
+first-start record remains only as the one-time adoption credential:
 
 ```bash
 kubectl -n games exec deploy/crafty -- cat /crafty/app/config/default-creds.txt
 ```
 
-The generated file records the initial credential only. If an operator later
-changes the password through Crafty's UI, that native change does not rewrite
-the file or automatically update its OpenBao recovery record.
+Rotate the password in OpenBao rather than changing it only through Crafty's UI.
+The companion observes the mounted replacement, applies it through the native
+API, and verifies the new login before reporting ready.
 
 Create a Bedrock server in Crafty on UDP port `19132`. A Tailscale-connected
 Bedrock client can then join `minecraft.<tailnet>.ts.net` on port `19132`. LAN

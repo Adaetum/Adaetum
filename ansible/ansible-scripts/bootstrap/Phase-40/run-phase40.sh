@@ -1252,6 +1252,10 @@ gitea_jwt_secret_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_jwt_secr
 if [[ -n "${gitea_jwt_secret_val}" ]]; then
   platform_kv_args+=("gitea_jwt_secret=${gitea_jwt_secret_val}")
 fi
+crafty_admin_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/crafty_admin_password")"
+if [[ -n "${crafty_admin_password_val}" ]]; then
+  platform_kv_args+=("crafty_admin_password=${crafty_admin_password_val}")
+fi
 gitea_registry_host_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/gitea_registry_host")"
 if [[ -n "${gitea_registry_host_val}" ]]; then
   platform_kv_args+=("gitea_registry_host=${gitea_registry_host_val}")
@@ -1448,6 +1452,11 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
     seed_openbao_app_fields gitea/runtime "${root_token}" \
       "internal_token=${gitea_internal_token_val}" \
       "jwt_secret=${gitea_jwt_secret_val}"
+  fi
+  if [[ -n "${crafty_admin_password_val}" ]]; then
+    seed_openbao_app_fields games/crafty/admin "${root_token}" \
+      "username=admin" \
+      "password=${crafty_admin_password_val}"
   fi
   if [[ -n "${gitea_registry_token_val}" && -n "${gitea_registry_host_val}" ]]; then
     seed_openbao_app_fields gitea/registry "${root_token}" \

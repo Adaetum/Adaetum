@@ -25,8 +25,7 @@ spec:
       labels:
         app.kubernetes.io/name: crafty
     spec:
-      # This identity can write only Crafty's generated administrator
-      # credential to its dedicated OpenBao path.
+      # This identity can read only Crafty's desired administrator credential.
       serviceAccountName: crafty-credential-sync
       securityContext:
         runAsNonRoot: true
@@ -116,42 +115,123 @@ spec:
               mountPath: /crafty/import
               subPath: import
         - name: credential-sync
-          image: ghcr.io/openbao/openbao:2.6.1@sha256:5b2486ab0fb90bbc788cc345b0a08616dfb375873ee8be5df3a2fd4d378a67e0
-          env:
-            - name: BAO_ADDR
-              value: http://openbao.openbao.svc.cluster.local:8200
+          image: alpine/k8s:1.35.6@sha256:b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807
           command:
             - /bin/sh
             - -ec
           args:
             - |
-              # Crafty creates this JSON file on its first start. Promote the
-              # native username/password into durable recovery storage without
-              # exposing either value in process arguments or Kubernetes logs.
-              until [ -s /crafty-config/default-creds.txt ]; do
+              umask 077
+              api=https://127.0.0.1:8443/api/v2
+              login_json=/tmp/crafty-login.json
+              login_response=/tmp/crafty-login-response.json
+              cookie_jar=/tmp/crafty-cookie
+              patch_json=/tmp/crafty-patch.json
+              patch_response=/tmp/crafty-patch-response.json
+              active_username=/tmp/crafty-active-username
+              active_credential_file=/tmp/crafty-active-password
+              ready_file=/tmp/crafty-credential-ready
+
+              cleanup() {
+                rm -f "${login_json}" "${login_response}" "${cookie_jar}" \
+                  "${patch_json}" "${patch_response}" "${active_username}" \
+                  "${active_credential_file}" "${ready_file}"
+              }
+              trap cleanup EXIT
+
+              login_with_files() {
+                username_file="$1"
+                credential_file="$2"
+                rm -f "${cookie_jar}" "${login_response}"
+                jq -n \
+                  --rawfile username "${username_file}" \
+                  --rawfile password "${credential_file}" \
+                  '{username: $username, password: $password}' >"${login_json}"
+                status="$(curl -ksS -o "${login_response}" -w '%{http_code}' \
+                  -c "${cookie_jar}" -H 'Content-Type: application/json' \
+                  --data-binary "@${login_json}" "${api}/auth/login")"
+                [ "${status}" = 200 ] && jq -e '.status == "ok"' "${login_response}" >/dev/null
+              }
+
+              apply_desired_password() {
+                username_file="$1"
+                credential_file="$2"
+                login_with_files "${username_file}" "${credential_file}" || return 1
+                jq -n --rawfile password /run/openbao/password \
+                  '{password: $password}' >"${patch_json}"
+                status="$(curl -ksS -o "${patch_response}" -w '%{http_code}' \
+                  -b "${cookie_jar}" -X PATCH -H 'Content-Type: application/json' \
+                  --data-binary "@${patch_json}" "${api}/users/@me")"
+                [ "${status}" = 200 ] && jq -e '.status == "ok"' "${patch_response}" >/dev/null
+              }
+
+              until curl -ksSf "${api}/jsonschema/login" >/dev/null 2>&1; do
                 sleep 2
               done
-              BAO_TOKEN="$(bao write -field=token auth/kubernetes/login \
-                role=crafty-credential-sync \
-                jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)")"
-              export BAO_TOKEN
-              bao kv put secret/apps/games/crafty/admin \
-                @/crafty-config/default-creds.txt >/dev/null
-              unset BAO_TOKEN
 
-              # Keep this one-shot companion healthy after the promotion. A
-              # pod restart retries the write if OpenBao was temporarily down.
-              while :; do sleep 3600; done
+              # A converged pod authenticates directly with OpenBao's desired
+              # credential. On first adoption only, Crafty's generated file is
+              # used to authorize the native password update through its API.
+              if login_with_files /run/openbao/username /run/openbao/password; then
+                cp /run/openbao/username "${active_username}"
+                cp /run/openbao/password "${active_credential_file}"
+              else
+                until [ -s /crafty-config/default-creds.txt ]; do sleep 2; done
+                jq -j '.username' /crafty-config/default-creds.txt >"${active_username}"
+                jq -j '.password' /crafty-config/default-creds.txt >"${active_credential_file}"
+                if ! apply_desired_password "${active_username}" "${active_credential_file}" || \
+                   ! login_with_files /run/openbao/username /run/openbao/password; then
+                  echo "Crafty credential reconciliation failed; generated and OpenBao credentials were both rejected." >&2
+                  while :; do sleep 600; done
+                fi
+                cp /run/openbao/username "${active_username}"
+                cp /run/openbao/password "${active_credential_file}"
+              fi
+              touch "${ready_file}"
+              echo "Crafty administrator credential matches OpenBao."
+
+              # CSI rotates mounted content in place. Retain the last verified
+              # value only in this container's tmpfs so an in-place OpenBao
+              # password update can authenticate and promote the replacement.
+              while :; do
+                sleep 30
+                if ! cmp -s /run/openbao/password "${active_credential_file}"; then
+                  rm -f "${ready_file}"
+                  if apply_desired_password "${active_username}" "${active_credential_file}" && \
+                     login_with_files /run/openbao/username /run/openbao/password; then
+                    cp /run/openbao/username "${active_username}"
+                    cp /run/openbao/password "${active_credential_file}"
+                    touch "${ready_file}"
+                    echo "Crafty administrator password rotation converged."
+                  else
+                    echo "Crafty administrator password rotation failed; retrying after the login cooldown window." >&2
+                    sleep 600
+                  fi
+                fi
+              done
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "test -f /tmp/crafty-credential-ready"]
+            periodSeconds: 5
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
           volumeMounts:
+            - name: openbao
+              mountPath: /run/openbao
+              readOnly: true
             - name: data
               mountPath: /crafty-config
               subPath: config
               readOnly: true
       volumes:
+        - name: openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: crafty-openbao
         - name: data
           persistentVolumeClaim:
             claimName: crafty

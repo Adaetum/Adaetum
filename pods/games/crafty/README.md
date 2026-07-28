@@ -24,11 +24,13 @@ Dynmap port are not published by this example.
 
 ## First login and Bedrock setup
 
-Crafty uses its normal defaults: it generates an `admin` username and random
-password without requiring MFA. A narrowly scoped companion copies that initial
-credential record to `secret/apps/games/crafty/admin` in OpenBao. Phase 99
-recursively exports every `secret/apps/*` leaf, so the next successful recovery
-backup includes the Crafty username and password automatically.
+Crafty uses its normal native `admin` account without requiring MFA. OpenBao owns
+the desired username and password at `secret/apps/games/crafty/admin`, and Secrets
+Store CSI mounts those fields read-only into the pod. On first adoption, a scoped
+companion authenticates with Crafty's one-time generated credential, replaces the
+password through Crafty's supported API, and verifies the OpenBao login. Phase 99
+recursively exports every `secret/apps/*` leaf, so the recovery backup contains
+the credential Crafty actually uses.
 
 To inspect the source record after the deployment starts:
 
@@ -36,10 +38,11 @@ To inspect the source record after the deployment starts:
 kubectl -n games exec deploy/crafty -- cat /crafty/app/config/default-creds.txt
 ```
 
-Sign in through either panel route with that native account. The generated file
-is the initial credential source; changing the password later in Crafty's UI
-does not rewrite it or automatically update OpenBao. Create the Bedrock server
-with port `19132`. LAN clients use
+Sign in through either panel route with the OpenBao credential. The generated
+file is only a first-adoption fallback and is not the password authority. Rotate
+the OpenBao password rather than changing it in Crafty's UI; the companion
+observes the CSI update and applies it through Crafty's API. Create the Bedrock
+server with port `19132`. LAN clients use
 `minecraft.<local-domain>:19132`; Tailscale-connected clients use the
 `minecraft` MagicDNS name on the same port.
 
@@ -51,7 +54,7 @@ with port `19132`. LAN clients use
 - Limits: `4` CPU and `8 Gi` memory
 - Persistent storage: `50 Gi`, Longhorn `ReadWriteOnce`
 - Panel: HTTPS/8443, exposed only through public and local ingress
-- Authentication: Crafty-native generated administrator, no MFA by default
-- Recovery credential: `secret/apps/games/crafty/admin` in OpenBao
+- Authentication: Crafty-native administrator, no MFA by default
+- Credential authority: `secret/apps/games/crafty/admin` in OpenBao, mounted by CSI
 - Local Bedrock: UDP/19132 through the ingress-nginx LAN VIP
 - Tailnet Bedrock: UDP/19132 through the Tailscale Operator

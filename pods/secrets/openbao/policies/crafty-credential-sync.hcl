@@ -1,6 +1,6 @@
-# Crafty itself generates the initial native administrator credential. Its
-# companion may promote only that recovery record; it cannot read or alter any
+# Crafty's companion reads only the desired native administrator credential.
+# It applies that value through Crafty's supported API and cannot access any
 # other application secret.
 path "secret/data/apps/games/crafty/admin" {
-  capabilities = ["create", "update"]
+  capabilities = ["read"]
 }
