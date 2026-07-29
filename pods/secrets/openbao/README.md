@@ -18,7 +18,12 @@ of truth.
 ## Notes
 
 - Init output is stored locally on the first server.
-- Unseal keys are human-held offline material.
+- Installations without an external seal use human-held Shamir shares and must
+  be manually unsealed after every OpenBao restart.
+- When all `OPENBAO_TRANSIT_SEAL_*` inputs are supplied, platform bootstrap
+  creates the `openbao-transit-seal` credential consumed directly by the
+  StatefulSet. The external Transit endpoint—not this OpenBao instance—then
+  decrypts the root key after every restart.
 - The first config Job uses `openbao-bootstrap-token`; later runs authenticate
   as the scoped `openbao/openbao` Kubernetes service account.
 - The OpenBao UI is enabled and exposed through the standard routed UI model:
@@ -110,8 +115,14 @@ Not every Kubernetes Secret belongs in OpenBao:
 
 Recovery roots are intentionally outside the store they recover:
 
-- OpenBao unseal keys and the initial root token are exported only in the
-  encrypted emergency bundle and then removed from the node and Kubernetes.
+- OpenBao Shamir shares or Transit recovery keys and the initial root token are
+  exported only in the encrypted emergency bundle and then removed from the
+  node and Kubernetes.
+- A Transit seal's endpoint, scoped token, key name, and TLS material remain in
+  the bootstrap-owned `openbao-transit-seal` Secrets because OpenBao requires
+  them before it can authenticate to itself or serve CSI requests. Phase 99
+  also exports those Secrets into the encrypted emergency kit. The Transit
+  service and encryption key must have an independent backup lifecycle.
 - The emergency-bundle passphrase cannot live only inside OpenBao, because it
   is required when OpenBao itself must be restored.
 - R2 upload credentials, GitHub App private keys, and workflow dispatch

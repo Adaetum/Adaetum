@@ -289,6 +289,9 @@ ROTATION_CONTRACTS = {
         "/etc/ansible-bundle-bootstrap.env",
         "/etc/tailscale-firstboot.env",
         'Failed to remove first-boot credential file:',
+        "openbao-transit-seal",
+        "transit-seal-secret.json",
+        "Transit-sealed OpenBao is missing its Kubernetes seal credential",
     ),
     "tasks/scripts/build-bootstrap-runtime-env.sh": (
         'bootstrap_backup_url_runtime="${KS_BASE_URL%/}/backup"',
@@ -430,6 +433,32 @@ ROTATION_CONTRACTS = {
         "redisSecretInit.enabled=false",
         "global.deploymentAnnotations.secret",
         "global.statefulsetAnnotations.secret",
+        "OPENBAO_TRANSIT_SEAL_ADDRESS",
+        "OPENBAO_TRANSIT_SEAL_TOKEN",
+        "OPENBAO_TRANSIT_SEAL_KEY_NAME",
+        "create secret generic openbao-transit-seal",
+        "Install the external OpenBao Transit seal credential",
+    ),
+    "pods/secrets/openbao/manifests/statefulset.yaml": (
+        "name: openbao-transit-seal",
+        "name: openbao-transit-seal-ca",
+        "optional: true",
+    ),
+    "pods/secrets/openbao/init/migrate-to-transit-seal.sh": (
+        "OPENBAO_TRANSIT_SEAL_MIGRATE",
+        "openbao-transit-seal-preflight",
+        "encrypt/\\${VAULT_TRANSIT_SEAL_KEY_NAME}",
+        "decrypt/\\${VAULT_TRANSIT_SEAL_KEY_NAME}",
+        "bao operator raft snapshot save",
+        "bao operator unseal -migrate",
+        'status.get("type") != "transit"',
+    ),
+    "pods/secrets/openbao/init/init-openbao.sh": (
+        'seal_type}" == "transit"',
+        "-recovery-shares=5",
+        "-recovery-threshold=3",
+        "-key-shares=5",
+        "-key-threshold=3",
     ),
     "ansible/ansible-scripts/bootstrap/Phase-20/run-phase20.sh": (
         'write_secret "argocd_server_secret_key" 48',
@@ -529,6 +558,7 @@ NO_LOG_TASK_CONTRACTS = {
         "Write rke2 config (joining server)",
         "Write rke2 config (agent)",
         "Create Argo CD admin password hash",
+        "Install the external OpenBao Transit seal credential",
     ),
     "ansible/automation-roles/argocd-install/tasks/main.yml": (
         "Build Argo CD admin password bcrypt hash",
@@ -618,6 +648,8 @@ COORDINATED_SECRET_REFERENCES = {
     "gitea-postgresql": "database-first Gitea PostgreSQL rotation",
     "homepage-grafana": "Grafana Viewer identity promotion",
     "openbao-bootstrap-token": "temporary Phase 40 OpenBao configuration credential",
+    "openbao-transit-seal": "bootstrap-owned external root-of-trust credential",
+    "openbao-transit-seal-ca": "bootstrap-owned external root-of-trust CA",
 }
 
 ALLOWED_VALUES = {

@@ -451,8 +451,12 @@ Windows:
 - Or install OpenSSL for Windows (or Git for Windows, which includes OpenSSL),
   then run the same commands in Git Bash / PowerShell.
 
-To confirm OpenBao unseal keys are present:
+To confirm OpenBao Shamir unseal or Transit recovery keys are present:
 - Look for: local/openbao-init.json
+
+For a Transit-sealed installation, the external seal connection material is in:
+- openbao/transit-seal-secret.json
+- openbao/transit-seal-ca-secret.json (when a private CA is configured)
 
 To log into OpenBao quickly:
 - Use: openbao/login-token
@@ -534,7 +538,7 @@ TXT
   if [[ "${require_init_backup}" == "1" || "${require_init_backup}" == "true" ]]; then
     if [[ ! -f "${init_file}" ]]; then
       echo "OpenBao init output is missing: ${init_file}" >&2
-      echo "Cannot continue burn-the-ladder: emergency kit would not include unseal keys." >&2
+      echo "Cannot continue burn-the-ladder: emergency kit would not include OpenBao unseal or recovery keys." >&2
       echo "No local secrets were deleted. Fix: ensure Phase 40 created ${init_file} (or set BOOTSTRAP_REQUIRE_OPENBAO_INIT_BACKUP=0)." >&2
       strict="$(printf '%s' "${BOOTSTRAP_BREAKGLASS_STRICT}" | tr '[:upper:]' '[:lower:]')"
       if [[ "${strict}" == "1" || "${strict}" == "true" ]]; then
@@ -576,6 +580,25 @@ PY
     if [[ -n "${openbao_root_token}" ]]; then
       printf '%s\n' "${openbao_root_token}" >"${kit_dir}/openbao/root-login-token"
       chmod 0600 "${kit_dir}/openbao/root-login-token" 2>/dev/null || true
+    fi
+  fi
+
+  # A Transit token is an out-of-band recovery root, not an application secret:
+  # OpenBao needs it before any OpenBao-backed delivery mechanism can start.
+  openbao_seal_type="$("${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec "${OPENBAO_POD}" -- \
+    bao status -format=json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("type", "unknown"))' 2>/dev/null || true)"
+  if [[ "${openbao_seal_type}" == "transit" ]]; then
+    if ! "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-transit-seal -o json \
+      >"${kit_dir}/openbao/transit-seal-secret.json"; then
+      echo "Transit-sealed OpenBao is missing its Kubernetes seal credential; refusing to burn recovery material." >&2
+      exit 12
+    fi
+    chmod 0600 "${kit_dir}/openbao/transit-seal-secret.json"
+    if "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-transit-seal-ca -o json \
+      >"${kit_dir}/openbao/transit-seal-ca-secret.json" 2>/dev/null; then
+      chmod 0600 "${kit_dir}/openbao/transit-seal-ca-secret.json"
+    else
+      rm -f "${kit_dir}/openbao/transit-seal-ca-secret.json"
     fi
   fi
 

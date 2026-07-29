@@ -165,6 +165,25 @@
     cloudflare_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_API_TOKEN') | default('', true) }}"
     cloudflare_zone_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_ZONE_API_TOKEN') | default('', true) }}"
     external_dns_cloudflare_token: "{{ (cloudflare_zone_api_token if (cloudflare_zone_api_token | length > 0) else cloudflare_api_token) | trim }}"
+    # Transit is the only supported unattended OpenBao seal. Its backing
+    # service must be independent of this cluster so recovery cannot depend on
+    # the OpenBao instance that is itself sealed.
+    openbao_transit_seal_address: "{{ lookup('ansible.builtin.env', 'OPENBAO_TRANSIT_SEAL_ADDRESS') | default('', true) | trim }}"
+    openbao_transit_seal_token: "{{ lookup('ansible.builtin.env', 'OPENBAO_TRANSIT_SEAL_TOKEN') | default('', true) | trim }}"
+    openbao_transit_seal_key_name: "{{ lookup('ansible.builtin.env', 'OPENBAO_TRANSIT_SEAL_KEY_NAME') | default('', true) | trim }}"
+    openbao_transit_seal_mount_path: "{{ lookup('ansible.builtin.env', 'OPENBAO_TRANSIT_SEAL_MOUNT_PATH') | default('transit/', true) | trim }}"
+    openbao_transit_seal_namespace: "{{ lookup('ansible.builtin.env', 'OPENBAO_TRANSIT_SEAL_NAMESPACE') | default('', true) | trim }}"
+    openbao_transit_seal_tls_server_name: "{{ lookup('ansible.builtin.env', 'OPENBAO_TRANSIT_SEAL_TLS_SERVER_NAME') | default('', true) | trim }}"
+    openbao_transit_seal_ca_cert_b64: "{{ lookup('ansible.builtin.env', 'OPENBAO_TRANSIT_SEAL_CA_CERT_B64') | default('', true) | trim }}"
+    openbao_transit_seal_values_present: >-
+      {{
+        [
+          openbao_transit_seal_address,
+          openbao_transit_seal_token,
+          openbao_transit_seal_key_name
+        ] | reject('equalto', '') | list | length
+      }}
+    openbao_transit_seal_enabled: "{{ openbao_transit_seal_values_present | int == 3 }}"
     gitea_chart_repo: "https://dl.gitea.io/charts/"
     gitea_runner_image: >-
       {{
@@ -2868,6 +2887,79 @@
       when:
         - inventory_hostname == rke2_primary_host
         - argocd_enabled | bool
+
+    - name: Reject incomplete OpenBao Transit seal configuration
+      ansible.builtin.assert:
+        that:
+          - openbao_transit_seal_values_present | int in [0, 3]
+        fail_msg: >-
+          OPENBAO_TRANSIT_SEAL_ADDRESS, OPENBAO_TRANSIT_SEAL_TOKEN, and
+          OPENBAO_TRANSIT_SEAL_KEY_NAME must be supplied together. The Transit
+          service must be independent of this OpenBao cluster.
+      when: inventory_hostname == rke2_primary_host
+
+    - name: Ensure OpenBao namespace exists for the Transit seal credential
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl_cmd }} create namespace openbao --dry-run=client -o yaml |
+          {{ kubectl_cmd }} apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when:
+        - inventory_hostname == rke2_primary_host
+        - openbao_transit_seal_enabled | bool
+
+    - name: Install the external OpenBao Transit seal credential
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        seal_env="$(mktemp)"
+        trap 'rm -f "${seal_env}"' EXIT
+        {
+          printf '%s\n' 'VAULT_SEAL_TYPE=transit'
+          printf 'VAULT_ADDR=%s\n' "${TRANSIT_ADDRESS}"
+          printf 'VAULT_TOKEN=%s\n' "${TRANSIT_TOKEN}"
+          printf 'VAULT_TRANSIT_SEAL_KEY_NAME=%s\n' "${TRANSIT_KEY_NAME}"
+          printf 'VAULT_TRANSIT_SEAL_MOUNT_PATH=%s\n' "${TRANSIT_MOUNT_PATH}"
+          printf '%s\n' 'VAULT_TRANSIT_SEAL_DISABLE_RENEWAL=false'
+          if [[ -n "${TRANSIT_NAMESPACE}" ]]; then
+            printf 'VAULT_NAMESPACE=%s\n' "${TRANSIT_NAMESPACE}"
+          fi
+          if [[ -n "${TRANSIT_TLS_SERVER_NAME}" ]]; then
+            printf 'VAULT_TLS_SERVER_NAME=%s\n' "${TRANSIT_TLS_SERVER_NAME}"
+          fi
+          if [[ -n "${TRANSIT_CA_CERT_B64}" ]]; then
+            printf '%s\n' 'VAULT_CACERT=/openbao/transit-seal/ca.crt'
+          fi
+        } >"${seal_env}"
+        {{ kubectl_cmd }} -n openbao create secret generic openbao-transit-seal \
+          --from-env-file="${seal_env}" --dry-run=client -o yaml |
+          {{ kubectl_cmd }} apply -f -
+        if [[ -n "${TRANSIT_CA_CERT_B64}" ]]; then
+          ca_file="$(mktemp)"
+          trap 'rm -f "${seal_env}" "${ca_file}"' EXIT
+          printf '%s' "${TRANSIT_CA_CERT_B64}" | base64 -d >"${ca_file}"
+          {{ kubectl_cmd }} -n openbao create secret generic openbao-transit-seal-ca \
+            --from-file=ca.crt="${ca_file}" --dry-run=client -o yaml |
+            {{ kubectl_cmd }} apply -f -
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+        TRANSIT_ADDRESS: "{{ openbao_transit_seal_address }}"
+        TRANSIT_TOKEN: "{{ openbao_transit_seal_token }}"
+        TRANSIT_KEY_NAME: "{{ openbao_transit_seal_key_name }}"
+        TRANSIT_MOUNT_PATH: "{{ openbao_transit_seal_mount_path }}"
+        TRANSIT_NAMESPACE: "{{ openbao_transit_seal_namespace }}"
+        TRANSIT_TLS_SERVER_NAME: "{{ openbao_transit_seal_tls_server_name }}"
+        TRANSIT_CA_CERT_B64: "{{ openbao_transit_seal_ca_cert_b64 }}"
+      no_log: true
+      when:
+        - inventory_hostname == rke2_primary_host
+        - openbao_transit_seal_enabled | bool
 
     - name: Apply Argo CD app-of-apps (pre-OpenBao)
       ansible.builtin.shell: "{{ kubectl_cmd }} apply -f /tmp/argocd-apps-pre-openbao.yaml"

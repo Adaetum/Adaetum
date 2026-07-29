@@ -311,6 +311,29 @@ installer build and synchronized as `TAILSCALE_AUTHKEY` to the same GitHub
 environment. The OAuth client can mint new enrollment credentials later,
 avoiding a dependency on one person's continuing tailnet membership.
 
+### OpenBao restart-time auto-unseal
+
+Adaetum supports OpenBao's built-in Transit seal when an independently operated
+OpenBao Transit endpoint is available. This is optional because the Transit
+service, encryption key, and scoped token must exist outside the cluster being
+unsealed. Configure these runtime values in the gitignored `.env`:
+
+- `OPENBAO_TRANSIT_SEAL_ADDRESS`
+- `OPENBAO_TRANSIT_SEAL_TOKEN`
+- `OPENBAO_TRANSIT_SEAL_KEY_NAME`
+- `OPENBAO_TRANSIT_SEAL_MOUNT_PATH` (defaults to `transit/`)
+- `OPENBAO_TRANSIT_SEAL_NAMESPACE` (optional)
+- `OPENBAO_TRANSIT_SEAL_TLS_SERVER_NAME` (optional)
+- `OPENBAO_TRANSIT_SEAL_CA_CERT_B64` (optional private CA)
+
+The token should be an orphan, renewable token restricted to `update` on the
+selected Transit key's `encrypt` and `decrypt` endpoints. Platform bootstrap
+rejects a partial configuration and stores the complete connection contract in
+bootstrap-owned Kubernetes Secrets rather than OpenBao KV. Fresh installations
+initialize with recovery keys and automatically unseal after restarts. Existing
+Shamir installations require the explicit, snapshot-backed migration described
+in `pods/secrets/openbao/init/README.md`.
+
 After preparing tag ownership, `task init` creates the OAuth client through
 Tailscale's keys API with the same shape shown in Trust credentials:
 

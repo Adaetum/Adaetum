@@ -31,15 +31,33 @@ if [[ -f "${OUTFILE}" ]]; then
   exit 0
 fi
 
+seal_type="$(${KUBECTL_BIN} -n "${NAMESPACE}" exec "${POD}" -- \
+  bao status -format=json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("type", "shamir"))' 2>/dev/null || true)"
+if [[ "${seal_type}" == "transit" ]]; then
+  init_key_args=(-recovery-shares=5 -recovery-threshold=3)
+else
+  init_key_args=(-key-shares=5 -key-threshold=3)
+fi
+
 "${KUBECTL_BIN}" -n "${NAMESPACE}" exec -i "${POD}" -- \
-  bao operator init -key-shares=5 -key-threshold=3 -format=json >"${OUTFILE}"
+  bao operator init "${init_key_args[@]}" -format=json >"${OUTFILE}"
 
 chmod 0600 "${OUTFILE}"
 
-cat <<'INFO'
+key_kind="$(python3 - "${OUTFILE}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    data = json.load(stream)
+print("recovery" if data.get("recovery_keys_b64") or data.get("recovery_keys") else "unseal")
+PY
+)"
+
+cat <<INFO
 
 OpenBao initialized.
-- Store unseal keys offline.
+- Store ${key_kind} keys offline.
 - Store the root token offline.
 - Apply post-openbao config via Argo CD.
 

@@ -118,6 +118,11 @@ sudo BOOTSTRAP_OPENBAO_AUTO_UNSEAL=1 \
   ansible/ansible-scripts/bundle-bootstrap
 ```
 
+`BOOTSTRAP_OPENBAO_AUTO_UNSEAL=1` only submits locally held Shamir shares while
+Phase 40 is running. Restart-time auto-unseal requires the independent Transit
+seal inputs documented in `ansible/.env.template`; it is not provided by this
+bootstrap switch.
+
 Note: `bundle-bootstrap` now runs the full `10 -> 20 -> 30 -> 40 -> 50 -> 60 -> 70 -> 90 -> 99`
 chain. Bootstrap completion means intake validation, GitOps install, handoff, GitOps
 realization, late live-state reconciliation, and the final recovery export have run.
