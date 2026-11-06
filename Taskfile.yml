@@ -53,12 +53,13 @@ tasks:
           c_reset=""
         fi
         printf '%sSupported tasks:%s\n' "${c_title}" "${c_reset}"
-        printf '  %stask init%s          Install setup tools and launch the guided first-run walkthrough\n' "${c_task}" "${c_reset}"
-        printf '  %stask init:silent%s   Replay first-run setup from validated saved state without questions\n' "${c_task}" "${c_reset}"
-        printf '  %stask init:clean%s    Run first-run setup with new provider and runtime values\n' "${c_task}" "${c_reset}"
-        printf '  %stask init:dryrun%s   Walk through first-run setup without changing local or external state\n' "${c_task}" "${c_reset}"
+        printf '  %stask init%s          Open the guided setup window (builds it from installer/ on first use)\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:silent%s   Replay setup from saved credentials with no window and no questions\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:clean%s    Open the setup window ignoring saved credentials and values\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:dryrun%s   Show every setup step and what it would do, changing nothing\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:dryrun -- --window%s  Open that read-only plan in the guided setup window\n' "${c_task}" "${c_reset}"
         printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
-        printf '  %stask initialize%s    Run or rerun the opinionated setup workflow\n' "${c_task}" "${c_reset}"
+        printf '  %stask initialize%s    Run setup with no window (answers via -- --answer id=value)\n' "${c_task}" "${c_reset}"
         printf '  %stask clean%s         Reset tracked public-safe config and remove derived installer artifacts\n' "${c_task}" "${c_reset}"
         printf '  %stask reset%s         Clean generated state and return the checkout to public main\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-on%s Enable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
@@ -79,50 +80,69 @@ tasks:
         printf '  %stask list%s          Show this command list\n' "${c_task}" "${c_reset}"
 
   initialize:
-    desc: Run the opinionated initial setup workflow
+    desc: Run setup without the window; answer questions with -- --answer id=value
     deps: ['hooks:ensure', 'env:install:prerequisites']
+    dir: installer
     cmds:
-      - task: env:initialize
+      - go run ./cmd/adaetum-setup --apply {{.CLI_ARGS}}
 
   init:
-    desc: Install setup tools and launch the guided first-run walkthrough
+    desc: Open the guided setup window (builds it from installer/ on first use)
     cmds:
       - task: hooks:ensure
       - task: env:install:prerequisites
-      - task: env:install:gum
       - task: env:install:github-cli
-      - task: env:init
+      - cmd: bash ./installer/launch.sh
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./installer/launch.sh
+        platforms: [windows]
 
   init:dryrun:
-    desc: Rehearse first-run setup with validations and simulated provider actions only
+    desc: Show every setup step read-only; pass -- --window to use the guided setup window
+    dir: installer
+    env:
+      ADAETUM_INIT_DRYRUN_ARGS: "{{.CLI_ARGS}}"
     cmds:
-      - task: env:init:dryrun
+      - cmd: |
+          if [ "${ADAETUM_INIT_DRYRUN_ARGS:-}" = "--window" ]; then
+            ./launch.sh --dry-run
+          else
+            go run ./cmd/adaetum-setup --dry-run {{.CLI_ARGS}}
+          fi
+        platforms: [linux, darwin]
+      - cmd: |
+          if ($env:ADAETUM_INIT_DRYRUN_ARGS -eq "--window") {
+            & ../tasks/scripts/invoke-bash-script.ps1 ./launch.sh --dry-run
+          } else {
+            go run ./cmd/adaetum-setup --dry-run {{.CLI_ARGS}}
+          }
+        platforms: [windows]
 
   init:clean:
-    desc: Run first-run setup while replacing saved provider and runtime values
+    desc: Open the setup window ignoring saved credentials and values
+    env:
+      ADAETUM_CLEAN: "1"
     cmds:
       - task: hooks:ensure
       - task: env:install:prerequisites
-      - task: env:install:gum
       - task: env:install:github-cli
-      - task: env:init:clean
+      - cmd: bash ./installer/launch.sh
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./installer/launch.sh
+        platforms: [windows]
 
   init:silent:
-    desc: Replay first-run setup from validated saved state without questions
+    desc: Replay setup from saved credentials with no window and no questions
+    deps: ['hooks:ensure', 'env:install:prerequisites']
+    dir: installer
     cmds:
-      - task: hooks:ensure
-      - task: env:install:prerequisites
-      - task: env:install:gum
-      - task: env:install:github-cli
-      - task: env:init:silent
+      - go run ./cmd/adaetum-setup --apply --replay {{.CLI_ARGS}}
 
   iso:download:
     desc: Download and verify Rocky installer media (set ROCKY_ARCH, ROCKY_IMAGE_TYPE, ROCKY_RELEASE)
+    dir: installer
     cmds:
-      - cmd: bash ./tasks/scripts/manage-rocky-installer-iso.sh download '{{default "x86_64" .ROCKY_ARCH}}' '{{default "minimal" .ROCKY_IMAGE_TYPE}}' '{{default "10.2" .ROCKY_RELEASE}}'
-        platforms: [linux, darwin]
-      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./tasks/scripts/manage-rocky-installer-iso.sh download '{{default "x86_64" .ROCKY_ARCH}}' '{{default "minimal" .ROCKY_IMAGE_TYPE}}' '{{default "10.2" .ROCKY_RELEASE}}'
-        platforms: [windows]
+      - go run ./cmd/adaetum-setup --download-iso --arch '{{default "x86_64" .ROCKY_ARCH}}' --type '{{default "minimal" .ROCKY_IMAGE_TYPE}}' --release '{{default "10.2" .ROCKY_RELEASE}}'
 
   clean:
     desc: Reset tracked public-safe config and remove derived installer artifacts

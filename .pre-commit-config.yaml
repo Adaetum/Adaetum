@@ -34,7 +34,7 @@ repos:
         language: python
         additional_dependencies: [pyyaml]
         pass_filenames: false
-        files: ^(tasks/scripts/(bootstrap-tailscale\.py|clean-public-safe-config\.py|configure-platform-profile\.py|first-run-preflight\.sh|gum-ui\.sh|list-cloudflare-zones\.py|list-tailscale-tailnets\.py|manage-rocky-installer-iso\.sh|run-first-run-wizard\.sh|run-opinionated-setup\.sh|setup-credential-store\.sh)|\.github/workflows/ks-worker\.yml|\.validator/validate-first-run-contract\.py|ansible/playbooks/platform-bootstrap\.yml|ks-src/fragments/installers/kickstart/rocky10/00-header\.ksfrag)$
+        files: ^(tasks/scripts/(bootstrap-tailscale\.py|clean-public-safe-config\.py|configure-platform-profile\.py|gum-ui\.sh)|\.github/workflows/ks-worker\.yml|\.validator/validate-first-run-contract\.py|ansible/playbooks/platform-bootstrap\.yml|ks-src/fragments/installers/kickstart/rocky10/00-header\.ksfrag)$
       - id: validate-control-pair-shared-helpers
         name: Validate control-pair helper ownership
         entry: python3 .validator/validate-control-pair-shared-helpers.py
@@ -118,7 +118,7 @@ repos:
         args:
           - --check
         pass_filenames: false
-        files: ^(pods/cluster-config/cluster-config\.env|pods/.+\.tmpl|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/ingress-cluster-config\.yaml|tasks/scripts/render-pods-config\.py|tasks/scripts/run-opinionated-setup\.sh)
+        files: ^(pods/cluster-config/cluster-config\.env|pods/.+\.tmpl|pods/argocd/.+\.ya?ml|pods/gitea/gitea\.app\.yaml|pods/ingress/ingress-cluster-config\.yaml|tasks/scripts/render-pods-config\.py)
       - id: validate-pods-public-safe
         name: Validate public-safe pods templates
         entry: python3 .validator/validate-pods-public-safe.py
@@ -156,7 +156,7 @@ repos:
         language: python
         additional_dependencies: [pyyaml]
         pass_filenames: false
-        files: ^(platform\.yaml|tasks/scripts/render-platform-profile\.py|tasks/scripts/render-pods-config\.py|tasks/scripts/run-opinionated-setup\.sh|pods/cluster-config/cluster-config\.env|\.validator/validate-setup-pods-roundtrip\.py)
+        files: ^(platform\.yaml|tasks/scripts/render-platform-profile\.py|tasks/scripts/render-pods-config\.py|pods/cluster-config/cluster-config\.env|\.validator/validate-setup-pods-roundtrip\.py)
       - id: validate-applicationset-smoke
         name: Validate ApplicationSet smoke
         entry: python3 .validator/validate-applicationset-smoke.py
@@ -195,4 +195,4 @@ repos:
         entry: python3 .validator/validate-no-example-placeholders.py
         language: python
         pass_filenames: false
-        files: ^(pods/cluster-config/cluster-config\.env|pods/ingress/kustomization\.yaml|pods/ingress/observability-routing/kustomization\.yaml|pods/portal/homepage/kustomization\.yaml|pods/ansible/ansible/kustomization\.yaml|dist/bootstrap-runtime\.env|dist/ks-templates/.+\.ks|tasks/scripts/run-opinionated-setup\.sh|\.validator/validate-no-example-placeholders\.py)
+        files: ^(pods/cluster-config/cluster-config\.env|pods/ingress/kustomization\.yaml|pods/ingress/observability-routing/kustomization\.yaml|pods/portal/homepage/kustomization\.yaml|pods/ansible/ansible/kustomization\.yaml|dist/bootstrap-runtime\.env|dist/ks-templates/.+\.ks|\.validator/validate-no-example-placeholders\.py)

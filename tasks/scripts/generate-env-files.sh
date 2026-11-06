@@ -60,7 +60,7 @@ existing_value() {
   if [ -f "${existing_file}" ]; then
     value="$(awk -F= -v k="${key}" '$1==k {print substr($0, index($0, "=")+1); exit}' "${existing_file}")"
   fi
-  # run-opinionated-setup passes a temp "existing" file that may omit previously
+  # The installer's render stage passes a temp "existing" file that may omit previously
   # generated Cloudflare/R2 credentials. Fall back to current .env values so
   # reruns reuse existing R2 API credentials instead of creating new tokens.
   if [ "${ADAETUM_IGNORE_EXISTING_ENV:-0}" != 1 ] && [ -z "${value}" ] && [ "${out_file}" != "${existing_file}" ] && [ -f "${out_file}" ]; then
@@ -70,7 +70,7 @@ existing_value() {
 }
 
 # Read from the provided existing file only (no fallback to out_file).
-# Use this when run-opinionated-setup passes a curated temp existing file and we
+# Use this when the installer's render stage passes a curated temp existing file and we
 # want current run inputs (like KS_BASE_URL) to drive derived defaults.
 existing_value_primary() {
   local key="$1"

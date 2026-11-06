@@ -75,6 +75,51 @@ An item is complete only when its acceptance criteria and required checks pass.
 
 ## P1 — supported platform alpha
 
+### Installer — opening the inner sanctum
+
+Owner: installer maintainers. Keep presentation in `installer/app/frontend`;
+the Go engine remains the source of truth for setup order and completion.
+Use the README's chained operator's book and stone sanctuary as the visual
+reference. The scope is the existing setup window and its UI-only preview.
+
+- [x] Restyle the window with charcoal stone, aged brass, oxblood red, and warm
+  ivory. Use decorative serif headings with readable form labels and controls.
+  **Evidence:** shared styling applied to the live window and UI-only preview;
+  frontend and Wails builds pass, and every preview screen fits at 1100 × 760.
+- [x] Replace the static book with a dimensional grimoire whose pages visibly
+  turn. Establish a convincing cover, spine, page thickness, and turning motion
+  in the UI-only preview before connecting it to real setup events.
+  **Evidence:** the setup surface is a two-page parchment spread with a leather
+  cover, binding, page edges and ribbon; a 3D sheet turns across the spine on
+  navigation. Only public chapter headings appear on animated sheets.
+- [x] Make the eight setup stages chapters in the sidebar, with a gold marker
+  for the current chapter. Keep literal stage names and practical instructions.
+- [x] Open the book when setup begins and turn a page when the active stage
+  changes. Keep the current spread still while an answer is needed; animate
+  transitions without delaying controls or implying that unfinished work passed.
+  **Welcome:** a centered closed cover slides to the right before opening into
+  the spread, for both real setup and UI-only preview. Reduced motion skips
+  this sequence, and leaving preview returns to the closed cover.
+- [ ] Illuminate an engraved seal as stages actually complete. Show the final
+  opened seal and “Your sanctuary awaits” only on successful completion, beside
+  the ISO location and next steps. Distinguish simulated completion in preview.
+- [x] Keep the preview entirely local, with sample data, backward navigation,
+  chapter selection, and replay so the full animation can be reviewed safely.
+- [x] Retain pause and reduced-motion support; reduced motion changes spreads
+  immediately. Keep animation decorative and keyboard focus on the active form.
+- [x] Verify the welcome screen and preview chapters fit the default 1100 × 760
+  window without scrolling. At smaller sizes, preserve readable content and
+  accessible actions without horizontal overflow.
+- [x] Review page turns, rapid chapter changes, pause/resume, errors,
+  cancellation, and completion in the rendered UI. Pass the frontend and Wails
+  builds; verify that preview navigation calls no setup or provider operations.
+  **Evidence:** browser checks cover preview navigation and completion, forward
+  and reverse turns, keyboard focus, pause and reduced motion, and 720 × 520
+  layout. Mocked live events exercise stage transitions, token isolation,
+  rejected answers and cancellation; real provider execution remains untested.
+
+### Platform readiness
+
 - [ ] Finish Rocky 10 clean-install, recovery, and fork-transition evidence.
 - [ ] Document and test the Cloudflare, GitHub, and Tailscale bootstrap
   boundaries. **Current:** [integration boundaries](docs/integrations.md)

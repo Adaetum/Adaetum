@@ -1,18 +1,18 @@
 # Setup Guide
 
 Use this guide for the supported first-time setup path from a fresh checkout.
-Run `task init` from repo root and let the guided walkthrough prepare
-provider accounts, generate `.env`, validate credentials, upload required
-artifacts, and trigger the bootstrap workflows.
+Run `task init` from repo root and let the setup window prepare provider
+accounts, generate `.env`, validate credentials, upload required artifacts, and
+trigger the bootstrap workflows.
 
 > [!TIP]
 > `task init` is the supported first-time setup path. It collects and reviews
 > the public platform profile, finds or downloads verified installer media,
 > guides provider authorization, and runs readiness validation before bootstrap
 > begins. Use `task initialize` only to rerun setup after first-run.
-> After Cloudflare authorization, the walkthrough lists the zones visible to
-> that token and lets you select a zone root or a cluster subdomain; it does
-> not require you to type a Cloudflare domain blindly.
+> After Cloudflare authorization, the window lists the zones visible to that
+> token and lets you choose one; it does not require you to type a Cloudflare
+> domain blindly.
 >
 > This workflow is opinionated on purpose. Follow the defaults unless you are
 > deliberately testing or recovering a specific step.
@@ -34,20 +34,22 @@ committing.
 This setup flow is the supported first-time path for bringing up the bootstrap
 artifacts and configuration needed for a new cluster install.
 
-The console presents one five-section journey from beginning to end:
+The setup window presents one journey of eight steps, in this order:
 
-1. **Repository** creates or verifies the standalone private GitHub recovery repository.
-2. **Providers** authorizes Cloudflare and Tailscale and discovers their public
-   choices.
-3. **Profile** reviews and writes the two public cluster values.
-4. **Installer** finds or downloads verified Rocky Linux media and runs
-   readiness checks.
-5. **Bootstrap** validates captured inputs, renders configuration, publishes
-   bootstrap artifacts, and finalizes the installer.
+1. **Private recovery repository** creates or verifies the standalone private GitHub repository.
+2. **Cloudflare and Tailscale access** authorizes both providers, chooses your DNS zone and
+   tailnet, and creates the scoped OAuth clients.
+3. **Public platform profile** reviews and writes the two public cluster values.
+4. **Rocky installer media** finds or downloads verified media and runs the readiness check.
+5. **Validate captured inputs** checks that everything the rest of setup needs is present.
+6. **Render and publish configuration** writes `.env`, syncs secrets, renders the GitOps files
+   and pushes them to your private repository.
+7. **Publish bootstrap artifacts** uploads installers and the bundle to R2, triggers the
+   workflows and builds the installer ISO.
+8. **Finalize installer** confirms the ISO is fresh and offers a copy in Downloads.
 
-The four targeted `task initialize` rerun steps are shown as milestones 5.1
-through 5.4 when they run inside first-run. Embedded publishing work is nested
-beneath milestone 5.3 instead of introducing another top-level progress model.
+The same eight steps run with no window through `task initialize`; see "Terminal
+experience" below.
 
 > [!NOTE]
 > The goal of this guide is to help you move straight through the first setup
@@ -116,10 +118,9 @@ the in-cluster Gitea repository and let Argo CD reconcile them.
 
 The setup workflow also checks for or installs supporting tools such as `uv`,
 `rclone`, and a 7-Zip command (`7z`, `7za`, or macOS Homebrew's `7zz`).
-`task init` additionally installs [Gum](https://github.com/charmbracelet/gum)
-when Homebrew, DNF, Pacman, or Windows winget can provide it. On another
-platform, install Gum from its official instructions and rerun `task init`.
-Docker is optional and is only needed for the local `task build-iso` path.
+`task init` additionally installs the [GitHub CLI](https://cli.github.com/) and
+builds the setup window from `installer/`, which needs Go and Node (the Wails build tool
+is installed with `go install` if it is missing). Docker is optional and is only needed for the local `task build-iso` path.
 
 Adaetum accepts Rocky 10 Minimal and DVD media at this boundary. `task init`
 finds matching media in the checkout and common download locations. A single
@@ -157,40 +158,36 @@ provider values.
 
 ### Replay saved setup state
 
-After completing `task init` interactively once, use `task init:silent` for an
-unattended rerun on the same workstation. This is the supported path for an
-automation agent iterating on setup: normal default-Yes actions are accepted,
-while the selected recovery repository, public profile, provider credentials,
-runtime values, and installer media are recovered from their existing owners.
+After completing `task init` once, `task init:silent` reruns setup with no window and no
+questions. It reuses the credentials saved in your operating system's credential store and
+the values already in `platform.yaml` and `.env`, and it never creates anything new on its
+own: it will not create a repository or start an installer download, because those need an
+operator's decision. (`task initialize` runs the same stages without that restriction.)
 
-Adaetum deliberately does not create an answers file. Public configuration
-remains in `platform.yaml`; Git owns the recovery destination; Cloudflare and
-Tailscale credentials remain in the OS credential store; `.env` remains a
-gitignored runtime output; and the verified local ISO records installer media
-selection. If any required value is missing, expired, or no longer authorized,
-silent replay stops and asks you to run `task init` interactively rather
-than opening a browser or guessing a replacement.
+Adaetum deliberately does not create an answers file. Public configuration remains in
+`platform.yaml`; Git owns the recovery destination; Cloudflare and Tailscale credentials
+remain in the OS credential store; and `.env` remains a gitignored runtime output. If a value
+is missing, expired, or no longer authorized, or a question has several choices and no
+default (which DNS zone, which tailnet, which ISO), the run stops and tells you what it
+needs instead of guessing.
+
+Answer a question with `task initialize -- --answer id=value`, for example
+`--answer cloudflare-zone=example.com`. A secret is never accepted that way, because command
+lines are visible to other users of the machine: set the question's environment variable
+instead, `ADAETUM_SECRET_<ID>` with dashes as underscores, for example
+`ADAETUM_SECRET_CLOUDFLARE_TOKEN`. `task init:dryrun` refuses `--apply`.
 
 ### Terminal experience
 
-`task init` requires Gum because its account-readiness walkthrough is the
-supported first-run experience. Once Gum is installed, setup prompts, recovery
-menus, and password entry use it automatically when attached to a terminal.
-Gum does not hold configuration or secrets: `platform.yaml`, `.env`, and the
-existing setup scripts keep their respective ownership boundaries. To use the
-plain prompts on any supported path, set `ADAETUM_GUM_UI=0`:
+`task init` opens a window, so it needs a display. On a machine without one, run the same
+stages with `task initialize`; it asks nothing and stops at the first question that has no
+answer, naming the answer it wants. Both read and write the same state.
 
-```bash
-ADAETUM_GUM_UI=0 task initialize
-```
-
-To see the complete first-run journey before committing local or provider
-state, run `task init:dryrun`. It does not install helpers, authenticate to
-GitHub, create a repository, change `origin`, collect secrets, render files, upload
-artifacts, or trigger workflows. It remains interactive for every decision and
-uses fixture credentials behind the normal hidden prompts. It runs the same
-read-only setup preflight as `task init`, so a reported blocker stops both
-commands.
+`task init:dryrun` is the way to see the whole journey before committing local or provider
+state. It does not authenticate to GitHub, create a repository, change `origin`, read secrets,
+render files, upload artifacts, or trigger workflows. Each step reports whether it still has
+work to do and what it would do, and a blocked step (for example, no `gh` installed) is shown
+instead of stopping the list.
 
 Run the read-only preflight before adding credentials. It validates the public
 profile, local tools, and installer ISO, but intentionally does not inspect or
@@ -594,16 +591,16 @@ task init
 > `task init` is the interactive first-run entrypoint. It configures and reviews
 > `platform.yaml`, obtains supported Rocky installer media, guides provider
 > authorization inline, runs `task setup:preflight`, and carries the work
-> through the five console sections above. Rerun `task initialize` when you only
-> need to regenerate `.env`, retry uploads, or re-trigger the workflow portion.
+> through the eight steps above. Rerun `task initialize` when you only need to
+> regenerate `.env`, retry uploads, or re-trigger the workflow portion.
 
-### Bootstrap milestone 5.1: Validate captured inputs
+### Step 5: Validate captured inputs
 
 Setup collects provider credentials only for the active process, validates
 them, and syncs them to the private repository's GitHub environment. It does not create a
 persistent local prompt-answer cache.
 
-### Bootstrap milestone 5.2: Render and publish configuration
+### Step 6: Render and publish configuration
 
 Setup validates the Tailscale OAuth credentials you provided, then regenerates
 `.env` for the rest of the workflow. During this step, setup preserves existing
@@ -628,7 +625,7 @@ background so the local install ISO finishes earlier. That local build path is
 optional and uses Docker. If you do not need a locally built ISO, you can rely
 on the installer artifacts published through the bootstrap path in R2 instead.
 
-### Bootstrap milestone 5.3: Publish bootstrap artifacts
+### Step 7: Publish bootstrap artifacts
 
 The embedded bootstrap flow performs the operational setup work:
 
@@ -666,7 +663,7 @@ Repository mirroring note:
 If workflow waiting is disabled, setup still records the triggered runs and
 validates them later in the flow.
 
-### Bootstrap milestone 5.4: Finalize the installer
+### Step 8: Finalize the installer
 
 Setup waits for any background ISO build to finish, verifies the result, and
 prints the exact path to the automated installer under `dist/`. Attach that ISO
@@ -678,34 +675,17 @@ and normally takes roughly 30 minutes for the initial node.
 <details>
 <summary>Targeted reruns</summary>
 
-If you only need one bootstrap milestone, rerun its underlying
-`task initialize` step number:
+To rerun only some stages, name them. The stage ids are `repository`, `providers`, `profile`,
+`media`, `validate`, `render`, `artifacts` and `finalize`:
 
 ```bash
-SETUP_STEP=1 task initialize
-SETUP_STEP=2 task initialize
-SETUP_STEP=3 task initialize
-SETUP_STEP=4 task initialize
+task initialize -- --only render,artifacts
 ```
 
-Supported step meanings:
-
-- `1`: collect setup inputs only
-- `2`: validate Tailscale OAuth and regenerate `.env`
-- `3`: run the embedded bootstrap automation flow
-- `4`: finalize the installer and print the host handoff instructions
-
-If you only want the local ISO build substep:
-
-```bash
-SETUP_SUBSTEP=2.2 task initialize
-```
-
-That runs the local `task build-iso` path only.
-
-> [!IMPORTANT]
-> `SETUP_STEP` and `SETUP_SUBSTEP` are for targeted reruns. Do not set both at
-> the same time.
+A targeted rerun skips the stages before it, so what they would have gathered in memory (the
+Cloudflare and Tailscale credentials, the chosen domain) is not available. A stage that needs
+it says so and stops; rerun it together with the stage it depends on (`providers` before
+`validate`, `render` and `artifacts`). The local ISO build alone is `task build-iso`.
 
 </details>
 

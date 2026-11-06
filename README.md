@@ -171,13 +171,15 @@ cd Adaetum
 task init
 ```
 
-The walkthrough has five sections—Repository, Providers, Profile, Installer,
-and Bootstrap—and finishes by printing the generated ISO path. Attach that ISO
-to the first machine and boot it.
+`task init` opens a setup window. It walks through eight steps—repository,
+providers, profile, installer media, validation, rendering, publishing, and
+finalizing—and finishes with the path to the generated ISO. Attach that ISO to
+the first machine and boot it. The window is built from `installer/` the first
+time you run it, so you also need Go and Node.
 
 You will need:
 
-- Git and Python 3
+- Git, Python 3, Go and Node
 - [Task](https://taskfile.dev/docs/installation)
 - accounts with GitHub, Cloudflare, and Tailscale
 - a supported Rocky Linux 10 Minimal or DVD installer image, which setup can
@@ -188,11 +190,11 @@ Useful setup paths:
 
 | Command | Purpose |
 | --- | --- |
-| `task init` | Supported guided first run |
-| `task init:silent` | Replay previously saved choices on the same workstation |
-| `task init:dryrun` | Rehearse the journey without provider calls or mutations |
-| `task init:clean` | Replace saved provider credentials and generated runtime values |
-| `task initialize` | Rerun bootstrap preparation without the first-run account walkthrough |
+| `task init` | Supported guided first run (opens the setup window) |
+| `task init:silent` | Replay setup from saved credentials with no window and no questions |
+| `task init:dryrun` | Show every step and what it would do, changing nothing; pass `-- --window` for the same plan in the guided setup window |
+| `task init:clean` | Open the window ignoring saved credentials and values |
+| `task initialize` | Run setup with no window; answer questions with `-- --answer id=value` |
 | `task platform:validate` | Validate the public platform profile |
 | `task platform:render` | Regenerate profile-owned outputs |
 
