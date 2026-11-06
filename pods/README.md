@@ -23,3 +23,6 @@ The pre-OpenBao app is created by Ansible during Phase 30; the post-OpenBao app
 is applied manually from `pods/argocd/platform/post-openbao/application.yaml`.
 
 Secrets management workloads live under `pods/secrets/` (for example OpenBao).
+
+MCP servers for the products above (Kubernetes, Argo CD, Grafana, Gitea) live under
+`pods/mcp/`; see its README.

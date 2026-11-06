@@ -1,0 +1,18 @@
+# Managed by Ansible (image-cleanup role). Edit spec.imageCleanup in platform.yaml.
+[Unit]
+Description=Remove unused container images (Adaetum)
+Documentation=https://github.com/Adaetum/Adaetum/blob/main/agent/docs/image-cleanup.md
+# The cleanup talks to containerd, so there is nothing to do before RKE2 is up.
+ConditionPathExists=/var/lib/rancher/rke2
+
+[Service]
+Type=oneshot
+# Cleanup is housekeeping: yield to the workloads on the node.
+Nice=10
+IOSchedulingClass=idle
+ExecStart={{ image_cleanup_agent_path }} images run \
+  -level {{ image_cleanup.level }} \
+  -max {{ image_cleanup.maxImagesPerRun }} \
+  -only-if-disk-over {{ image_cleanup.onlyIfDiskOverPercent }}{% if image_cleanup.checkOnly | bool %} \
+  -check-only{% endif %}
+

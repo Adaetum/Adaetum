@@ -1,0 +1,28 @@
+---
+# Applies spec.imageCleanup from platform.yaml: the daily unused-image cleanup
+# timer on every node. It is separate from day2.yml on purpose: the role needs the
+# adaetum-agent binary, and a node without it should not turn the routine
+# maintenance run red. Run it directly (e.g. from the agent's Ansible jobs page)
+# until binary delivery is part of the runner image:
+#
+#   ansible-playbook playbooks/image-cleanup.yml \
+#     -e image_cleanup_agent_src=/path/to/adaetum-agent
+#
+# On a single machine without the runner, add -e break_glass=true to target only
+# this host over a local connection.
+- import_playbook: _break_glass.yml
+
+- name: Reconcile the image-cleanup policy
+  hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
+  become: true
+  gather_facts: false
+  serial: 1
+  pre_tasks:
+    - name: Load the public platform profile for image-cleanup policy
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../platform.yaml"
+        name: adaetum_platform_profile
+  roles:
+    - role: image-cleanup
+      vars:
+        image_cleanup: "{{ adaetum_platform_profile.spec.imageCleanup }}"

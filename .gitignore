@@ -36,3 +36,6 @@ __pycache__/
 node_modules/
 cluster-local.patch
 .maintainer-overrides/
+
+# Auth service dependencies
+auth/node_modules/

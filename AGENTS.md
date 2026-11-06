@@ -12,6 +12,7 @@ Ansible layout below.
   playbooks detect the local hostname and run only that matched host with
   `ansible_connection=local`.
 - `ansible/ansible-host-config-sync.yaml`: Kubernetes manifest for running the container.
+- `auth/`: the agent's account sign-in service (Better Auth on Bun). A separate process from the Go agent; see `agent/docs/recovery-login.md`. Tests: `cd auth && bun test`.
 - `ks-src/`: kickstart source templates, manifests, and fragments used to generate rendered kickstarts under `dist/ks-templates/`.
 - `.github/workflows/ks-worker.yml`: defines the Cloudflare KS/log Worker (worker.mjs is generated inline).
 - `tasks/scripts/run-opinionated-setup.sh`: Opinionated end-to-end setup automation

@@ -1,0 +1,118 @@
+---
+- name: Check the inputs
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Create the agent's directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ host_agent_owner }}"
+    group: "{{ host_agent_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ host_agent_state_dir }}", mode: "0700" }
+    - { path: "{{ host_agent_config_dir }}", mode: "0750" }
+
+# The binary is replaced only when its content differs (copy and get_url compare
+# checksums), and a replacement restarts the service. Both are idempotent, so
+# running the playbook again changes nothing.
+- name: Install the agent binary from the controller
+  ansible.builtin.copy:
+    src: "{{ host_agent_binary_src }}"
+    dest: "{{ host_agent_path }}"
+    owner: "{{ host_agent_owner }}"
+    group: "{{ host_agent_group }}"
+    mode: "0755"
+  when: host_agent_binary_src | length > 0
+  notify: Restart the host agent
+
+- name: Install the agent binary from a URL, verifying its checksum
+  ansible.builtin.get_url:
+    url: "{{ host_agent_binary_url }}"
+    dest: "{{ host_agent_path }}"
+    checksum: "{{ host_agent_binary_checksum }}"
+    owner: "{{ host_agent_owner }}"
+    group: "{{ host_agent_group }}"
+    mode: "0755"
+  when: host_agent_binary_url | length > 0
+  notify: Restart the host agent
+
+# Created once and never replaced: it is the key to this host's agent. `creates`
+# makes the task a no-op when the file exists, so re-runs never rotate it.
+- name: Create the host's access token if it does not exist
+  ansible.builtin.command:
+    cmd: "{{ host_agent_path }} token create -file {{ host_agent_token_file }}"
+    creates: "{{ host_agent_token_file }}"
+  notify: Restart the host agent
+
+- name: Render the agent service
+  tags: [service]
+  ansible.builtin.template:
+    src: adaetum-agent.service.j2
+    dest: "/etc/systemd/system/{{ host_agent_service_unit }}"
+    owner: "{{ host_agent_owner }}"
+    group: "{{ host_agent_group }}"
+    mode: "0644"
+  notify:
+    - Reload systemd for the host agent
+    - Restart the host agent
+
+- name: Look up whether the firewall port is already open
+  tags: [firewall]
+  ansible.builtin.command: "firewall-cmd --zone={{ host_agent_firewall_zone }} --query-port={{ host_agent_port }}/tcp"
+  register: host_agent_port_open
+  changed_when: false
+  failed_when: host_agent_port_open.rc not in [0, 1]
+  when: host_agent_firewall_zone | length > 0
+
+- name: Open the agent's port in the chosen firewall zone
+  tags: [firewall]
+  ansible.builtin.command: "firewall-cmd --permanent --zone={{ host_agent_firewall_zone }} --add-port={{ host_agent_port }}/tcp"
+  when:
+    - host_agent_firewall_zone | length > 0
+    - host_agent_port_open.rc == 1
+  notify: Reload the firewall for the host agent
+
+- name: Apply unit changes before touching the service
+  tags: [service]
+  ansible.builtin.meta: flush_handlers
+
+- name: Run the agent now and at boot
+  tags: [service]
+  ansible.builtin.systemd_service:
+    name: "{{ host_agent_service_unit }}"
+    enabled: true
+    state: started
+
+# JOINING. The join token is secret and single use. It is written to a private
+# file only for the duration of the command, never put on a command line, and its
+# value is kept out of Ansible's output. `creates` skips the task once the host has
+# joined, so a re-run does not need (or spend) another token.
+- name: Join the cluster agent
+  when:
+    - host_agent_join_token | length > 0
+  block:
+    - name: Write the join token to a private temporary file
+      ansible.builtin.copy:
+        content: "{{ host_agent_join_token }}\n"
+        dest: "{{ host_agent_config_dir }}/join-token.tmp"
+        owner: "{{ host_agent_owner }}"
+        group: "{{ host_agent_group }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Enroll this host with the cluster agent
+      ansible.builtin.command:
+        cmd: >-
+          {{ host_agent_path }} join
+          -cluster {{ host_agent_cluster_url }}
+          -fingerprint {{ host_agent_cluster_fingerprint }}
+          -token-file {{ host_agent_config_dir }}/join-token.tmp
+          -data-dir {{ host_agent_state_dir }}
+        creates: "{{ host_agent_state_dir }}/cluster.json"
+      notify: Restart the host agent
+  always:
+    - name: Remove the temporary join token file
+      ansible.builtin.file:
+        path: "{{ host_agent_config_dir }}/join-token.tmp"
+        state: absent

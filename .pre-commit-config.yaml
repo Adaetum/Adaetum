@@ -48,6 +48,12 @@ repos:
         additional_dependencies: [pyyaml]
         pass_filenames: false
         files: ^(platform\.yaml|tasks/scripts/(render-platform-profile|render-pods-config|validate-platform-profile)\.py|ansible/playbooks/day2\.yml|ansible/automation-roles/host-maintenance/.*|pods/(operations/kured\.app\.yaml(\.tmpl)?|observability/prometheus\.app\.yaml)|\.validator/validate-host-maintenance\.py)$
+      - id: validate-agent-boundary
+        name: Validate the agent security boundary
+        entry: python3 .validator/validate-agent-boundary.py --self-test
+        language: python
+        pass_filenames: false
+        files: ^(agent/.*\.go|agent/docs/security-boundary\.md|\.validator/validate-agent-boundary\.py)$
       - id: validate-workload-autoscaling
         name: Validate safe workload autoscaling
         entry: python3 .validator/validate-workload-autoscaling.py

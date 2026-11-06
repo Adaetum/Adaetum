@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: adaetum-embed
+  namespace: adaetum
+  labels:
+    app.kubernetes.io/name: adaetum-embed
+    app.kubernetes.io/part-of: adaetum
+spec:
+  selector:
+    app.kubernetes.io/name: adaetum-embed
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

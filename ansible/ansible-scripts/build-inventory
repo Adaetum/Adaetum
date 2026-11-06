@@ -33,6 +33,17 @@ write_inventory() {
     printf '%s' "${1:-}" | sed "s/'/''/g"
   }
 
+  # The runner is hostNetwork, so it shares its node's tailnet address. Tailscale
+  # SSH only intercepts connections arriving from another tailnet node; a
+  # connection to this machine's own tailnet IP falls through to OpenSSH, which
+  # has no key for the runner and rejects it. The local node is therefore
+  # managed directly instead of over SSH.
+  write_local_connection() {
+    if is_local_host "$1"; then
+      printf "          ansible_connection: 'local'\n" >>"${out_file}"
+    fi
+  }
+
   printf "all:\n" >"${out_file}"
   printf "  vars:\n" >>"${out_file}"
   printf "    ansible_user: '%s'\n" "$(yaml_squote "${ansible_user}")" >>"${out_file}"
@@ -44,6 +55,7 @@ write_inventory() {
     printf "        %s:\n" "${host}" >>"${out_file}"
     printf "          ansible_python_interpreter: '%s'\n" "$(yaml_squote "${ansible_python}")" >>"${out_file}"
     printf "          rke2_role: 'server'\n" >>"${out_file}"
+    write_local_connection "${host}"
   done
   printf "    agents:\n" >>"${out_file}"
   printf "      hosts:\n" >>"${out_file}"
@@ -51,6 +63,7 @@ write_inventory() {
     printf "        %s:\n" "${host}" >>"${out_file}"
     printf "          ansible_python_interpreter: '%s'\n" "$(yaml_squote "${ansible_python}")" >>"${out_file}"
     printf "          rke2_role: 'agent'\n" >>"${out_file}"
+    write_local_connection "${host}"
   done
 }
 

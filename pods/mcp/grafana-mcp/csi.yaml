@@ -1,0 +1,26 @@
+# The Grafana service-account token and the token callers must present are minted
+# by mcp-credentials and kept in OpenBao; this pod only reads them.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: grafana-mcp-openbao
+  namespace: mcp
+spec:
+  provider: openbao
+  secretObjects:
+    - secretName: grafana-mcp-env
+      type: Opaque
+      data:
+        - objectName: token
+          key: GRAFANA_SERVICE_ACCOUNT_TOKEN
+        - objectName: inbound_token
+          key: MCP_GRAFANA_SERVER_TOKEN
+  parameters:
+    roleName: mcp-grafana
+    objects: |
+      - objectName: token
+        secretPath: secret/data/apps/mcp/grafana
+        secretKey: token
+      - objectName: inbound_token
+        secretPath: secret/data/apps/mcp/grafana
+        secretKey: inbound_token

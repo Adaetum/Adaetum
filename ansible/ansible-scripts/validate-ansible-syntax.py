@@ -16,6 +16,8 @@ def main() -> int:
         ansible_dir / "playbooks" / "healthcheck.yml",
         ansible_dir / "playbooks" / "argocd.yml",
         ansible_dir / "playbooks" / "platform-bootstrap.yml",
+        ansible_dir / "playbooks" / "image-cleanup.yml",
+        ansible_dir / "playbooks" / "host-agent.yml",
     ]
 
     env = os.environ.copy()

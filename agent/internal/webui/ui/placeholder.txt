@@ -1,0 +1,2 @@
+The web interface is built into this directory (ui/dist) by `npm run build` in agent/web.
+This file exists so `go build` works before the interface has been built.
