@@ -33,9 +33,9 @@ type Finding struct {
 // step, so a step cannot forget to honour it.
 type Env struct {
 	DryRun bool
-	// ReportPlanProgress lets a window follow a read-only run through the same
-	// stage list without marking planned work as applied.
-	ReportPlanProgress bool
+	// UIOnly selects the guided rehearsal. It bypasses Check, Plan and Apply and
+	// asks each stage's Simulator to draw its normal questions with sample answers.
+	UIOnly bool
 	// Values carries public, non-secret choices from one stage to the next, such as
 	// the domain chosen in the providers stage. A stage that finds one missing asks
 	// for it itself, so it also works run on its own. Secrets never go here.
@@ -83,6 +83,12 @@ type Step interface {
 	Plan(ctx context.Context, env *Env) ([]string, error)
 	// Apply changes the world. The Runner never calls it during a dry run.
 	Apply(ctx context.Context, env *Env, ui UI) error
+}
+
+// Simulator draws a stage's normal screens and reports successful sample
+// progress without contacting services or changing files.
+type Simulator interface {
+	Simulate(ctx context.Context, env *Env, ui UI) error
 }
 
 // Kind is the closed set of screens a front end must be able to draw. Adding a
@@ -140,9 +146,6 @@ type Event struct {
 	StepID  string
 	Kind    string
 	Message string
-	Status  string
-	Detail  string
-	Plan    []string
 	// Link goes with a KindCode event: where to enter the code.
 	Link string
 }
@@ -151,9 +154,6 @@ const (
 	StepStarted  = "step-started"
 	StepFinished = "step-finished"
 	StepFailed   = "step-failed"
-	PlanStarted  = "plan-started"
-	PlanFinished = "plan-finished"
-	PlanFailed   = "plan-failed"
 	// Code is a one-time code the operator must enter on a web page (GitHub's device
 	// sign-in): Message is the code and Link is the page. The front end shows it
 	// prominently with a button to open the page; the step carries on by itself once
@@ -182,37 +182,55 @@ type Result struct {
 	Applied bool
 }
 
-// Run walks the steps in order. A blocked step stops a real run. In a dry run only
-// Check and Plan execute, and a blocked step is reported rather than fatal.
+// Run walks the steps in order. A blocked step stops a real run. A headless dry
+// run executes only Check and Plan; a UI-only rehearsal runs sample screens and
+// progress without calling any stage's real checks or actions.
 func Run(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
 	var results []Result
-	for _, s := range steps {
-		if env.DryRun && env.ReportPlanProgress {
-			ui.Report(Event{StepID: s.ID(), Kind: PlanStarted})
+	for i, s := range steps {
+		if env.UIOnly {
+			sim, ok := s.(Simulator)
+			if !ok {
+				return results, fmt.Errorf("%s: UI-only rehearsal is not implemented", s.ID())
+			}
+			ui.Report(Event{StepID: s.ID(), Kind: StepStarted})
+			if err := sim.Simulate(ctx, env, ui); err != nil {
+				ui.Report(Event{StepID: s.ID(), Kind: StepFailed, Message: err.Error()})
+				results = append(results, Result{StepID: s.ID(), Finding: Finding{Status: Blocked, Detail: err.Error()}})
+				return results, fmt.Errorf("%s: rehearsal: %w", s.ID(), err)
+			}
+			finding := Finding{Status: Done, Detail: "UI rehearsal complete; no setup actions were run"}
+			results = append(results, Result{StepID: s.ID(), Finding: finding})
+			ui.Report(Event{StepID: s.ID(), Kind: StepFinished})
+			if i < len(steps)-1 {
+				answer, err := ui.Ask(ctx, Screen{
+					ID: "continue-rehearsal-" + s.ID(), Kind: Confirm,
+					Prompt: "Continue to the next part of the setup?", Default: "yes",
+					YesLabel: "Continue", NoLabel: "End rehearsal",
+				})
+				if err != nil {
+					return results, err
+				}
+				if answer != "yes" && answer != "y" && answer != "true" && answer != "Y" && answer != "YES" && answer != "Yes" {
+					return results, ErrDeclined
+				}
+			}
+			continue
 		}
 		finding, err := s.Check(ctx, env)
 		if err != nil {
-			if env.DryRun && env.ReportPlanProgress {
-				ui.Report(Event{StepID: s.ID(), Kind: PlanFailed, Message: err.Error()})
-			}
 			return results, fmt.Errorf("%s: check: %w", s.ID(), err)
 		}
 		res := Result{StepID: s.ID(), Finding: finding}
 		switch finding.Status {
 		case Done:
 			results = append(results, res)
-			if env.DryRun && env.ReportPlanProgress {
-				ui.Report(Event{StepID: s.ID(), Kind: PlanFinished, Status: string(finding.Status), Detail: finding.Detail})
-			}
 			continue
 		case Blocked:
 			results = append(results, res)
 			// A dry run exists to show the whole journey, including what is in the
 			// way, so it reports a blocked step and carries on. A real run stops.
 			if env.DryRun {
-				if env.ReportPlanProgress {
-					ui.Report(Event{StepID: s.ID(), Kind: PlanFinished, Status: string(finding.Status), Detail: finding.Detail})
-				}
 				continue
 			}
 			return results, fmt.Errorf("%s: blocked: %s", s.ID(), finding.Detail)
@@ -220,16 +238,10 @@ func Run(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
 		if env.DryRun {
 			plan, err := s.Plan(ctx, env)
 			if err != nil {
-				if env.ReportPlanProgress {
-					ui.Report(Event{StepID: s.ID(), Kind: PlanFailed, Message: err.Error()})
-				}
 				return results, fmt.Errorf("%s: plan: %w", s.ID(), err)
 			}
 			res.Plan = plan
 			results = append(results, res)
-			if env.ReportPlanProgress {
-				ui.Report(Event{StepID: s.ID(), Kind: PlanFinished, Status: string(finding.Status), Detail: finding.Detail, Plan: plan})
-			}
 			continue
 		}
 		ui.Report(Event{StepID: s.ID(), Kind: StepStarted})

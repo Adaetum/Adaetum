@@ -79,13 +79,10 @@ type Screen struct {
 
 // Note is progress from a running step.
 type Note struct {
-	StepID  string   `json:"stepId"`
-	Kind    string   `json:"kind"`
-	Message string   `json:"message"`
-	Status  string   `json:"status"`
-	Detail  string   `json:"detail"`
-	Plan    []string `json:"plan"`
-	Link    string   `json:"link"`
+	StepID  string `json:"stepId"`
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+	Link    string `json:"link"`
 }
 
 // steps builds the stage list for the checkout, or for no checkout at all (the
@@ -129,12 +126,11 @@ func (a *App) DryRun() Report {
 	return report(engine.Run(a.ctx, steps, &engine.Env{DryRun: true}, windowUI{app: a}))
 }
 
-// DryRunMode reports whether this window was launched in read-only mode.
+// DryRunMode reports whether this window was launched in UI-only rehearsal mode.
 func (a *App) DryRunMode() bool { return os.Getenv("ADAETUM_SETUP_DRY_RUN") == "1" }
 
-// Start runs setup in the background. In read-only mode it checks and plans each
-// stage without calling Apply; otherwise questions, progress and completion arrive
-// as events. It returns an error string right away when it cannot start.
+// Start runs setup in the background. Window dry runs use each stage's UI-only
+// rehearsal path; ordinary runs perform the real checks and applies.
 func (a *App) Start() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -151,9 +147,9 @@ func (a *App) Start() string {
 	go func() {
 		// ADAETUM_CLEAN=1 (set by `task init:clean`) ignores saved credentials and values.
 		rep := report(engine.Run(ctx, steps, &engine.Env{
-			Clean:              os.Getenv("ADAETUM_CLEAN") == "1",
-			DryRun:             dryRun,
-			ReportPlanProgress: dryRun,
+			Clean:  os.Getenv("ADAETUM_CLEAN") == "1",
+			DryRun: dryRun,
+			UIOnly: dryRun,
 		}, windowUI{app: a}))
 		a.mu.Lock()
 		a.running, a.cancel = false, nil
@@ -212,7 +208,7 @@ func (w windowUI) Report(e engine.Event) {
 		w.app.current = e.StepID
 		w.app.mu.Unlock()
 	}
-	runtime.EventsEmit(w.app.ctx, "note", Note{StepID: e.StepID, Kind: e.Kind, Message: e.Message, Status: e.Status, Detail: e.Detail, Plan: e.Plan, Link: e.Link})
+	runtime.EventsEmit(w.app.ctx, "note", Note{StepID: e.StepID, Kind: e.Kind, Message: e.Message, Link: e.Link})
 }
 
 // CanRetry tells the engine a rejected answer can be shown on the question and

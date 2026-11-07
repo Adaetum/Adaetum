@@ -57,7 +57,7 @@ tasks:
         printf '  %stask init:silent%s   Replay setup from saved credentials with no window and no questions\n' "${c_task}" "${c_reset}"
         printf '  %stask init:clean%s    Open the setup window ignoring saved credentials and values\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun%s   Show every setup step and what it would do, changing nothing\n' "${c_task}" "${c_reset}"
-        printf '  %stask init:dryrun -- --window%s  Open that read-only plan in the guided setup window\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:dryrun -- --window%s  Rehearse the full setup flow in the guided window\n' "${c_task}" "${c_reset}"
         printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
         printf '  %stask initialize%s    Run setup with no window (answers via -- --answer id=value)\n' "${c_task}" "${c_reset}"
         printf '  %stask clean%s         Reset tracked public-safe config and remove derived installer artifacts\n' "${c_task}" "${c_reset}"
@@ -98,7 +98,7 @@ tasks:
         platforms: [windows]
 
   init:dryrun:
-    desc: Show every setup step read-only; pass -- --window to use the guided setup window
+    desc: Show read-only plans; pass -- --window to rehearse the full UI without checks or changes
     dir: installer
     env:
       ADAETUM_INIT_DRYRUN_ARGS: "{{.CLI_ARGS}}"

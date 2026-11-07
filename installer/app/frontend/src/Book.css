@@ -9,15 +9,16 @@
 .book-toolbar button:focus-visible { outline: 2px solid #d2ad70; outline-offset: 2px; }
 .setup.grimoire { --paper: #e9d9b6; --ink: #30271e; position: relative; isolation: isolate; width: 100%; height: 100%; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: none; perspective: 2200px; overflow: visible; color: var(--ink); }
 .setup.grimoire { display: block; }
+.grimoire[data-opening="true"][data-cover-centered="true"] { transform: translateX(-25%); }
+.grimoire[data-opening="true"][data-cover-centered="false"] { transform: translateX(0); transition: transform 420ms ease-in-out; }
+.grimoire[data-returning-cover="true"][data-cover-docked="true"] { transform: translateX(-25%); transition: transform 420ms ease-in-out; }
 .grimoire > .adaetum-pageflip { position: relative; z-index: 1; width: 100%; height: 100%; background: transparent; }
 .grimoire > .adaetum-pageflip.stf__parent { overflow: visible; }
+.travel-cover { position: absolute; z-index: 7; top: 0; right: 0; width: 50%; height: 100%; pointer-events: none; background: #45251f url("./art/front-cover.svg") center / 100% 100% no-repeat; }
 .grimoire-page { box-sizing: border-box; width: 100%; height: 100%; overflow: hidden; background: linear-gradient(90deg, #d6c29c, #e9d9b6 7%, #eddfbf 70%, #dfcba5); color: var(--ink); }
 .grimoire-page.left-leaf { border-radius: 8px 0 0 5px; box-shadow: inset -20px 0 28px -23px #59402599, inset 3px 0 12px #a3895d33; }
 .grimoire-page.right-leaf { border-radius: 0 8px 5px 0; box-shadow: inset 20px 0 28px -23px #59402599, inset -3px 0 12px #a3895d33; }
 .grimoire-page.cover-leaf { display: flex; align-items: center; justify-content: center; border: 5px double #a98049; background: radial-gradient(ellipse at 60% 25%, #62382b, #361e18); box-shadow: inset 0 0 0 9px #2e1b16, inset 0 0 0 10px #a9804970; }
-.grimoire-page.cover-leaf .cover-inscription { gap: 16px; }
-.grimoire-page.cover-leaf .cover-seal { width: 86px; height: 86px; font-size: 62px; }
-.grimoire-page.cover-leaf .cover-title { font-size: 40px; }
 .grimoire .chapter-page, .grimoire .action-page { box-sizing: border-box; width: 100%; height: 100%; min-width: 0; padding: 30px 38px 62px; }
 .grimoire .chapter-page { display: flex; flex-direction: column; overflow-y: auto; padding-left: 58px; background: repeating-linear-gradient(4deg, #6f542006 0 1px, transparent 1px 5px); }
 .grimoire .action-page { overflow-y: auto; padding-right: 58px; padding-left: 35px; border-left: 1px solid #876a4233; box-shadow: inset 14px 0 19px -19px #594025aa; }
@@ -28,10 +29,15 @@
 .grimoire .chapter-outcome { margin-top: auto; padding-top: 24px; color: #705632; }
 .grimoire .chapter-outcome small { text-transform: uppercase; font-size: 9px; letter-spacing: .1em; }
 .grimoire .chapter-outcome p { color: #594936; font-size: 13px; line-height: 1.55; margin: 7px 0 0; }
-.chapter-tabs { position: absolute; inset: 0; z-index: 7; pointer-events: none; }
-.grimoire[data-opening="true"] > .chapter-tabs, .grimoire[data-opening="true"] > .book-folio { opacity: 0; }
+.leaf-tabs { position: absolute; inset: 0; z-index: 7; pointer-events: none; }
+.grimoire[data-opening="true"] > .book-folio { opacity: 0; }
+/* PageFlip owns the turning cover. Hide the left half of the decorative
+   backing from the start of either cover turn so it cannot appear under a
+   half-turned leaf. */
+.grimoire:is([data-opening="true"], [data-returning-cover="true"]) > :is(.book-cover, .page-stack, .page-stack-edges) { clip-path: inset(-24px -24px -24px 50%); }
+.grimoire:is([data-opening="true"], [data-returning-cover="true"]) > :is(.book-ribbon, .book-footer) { visibility: hidden; }
 .book-footer { position: absolute; z-index: 6; left: 28px; right: 28px; bottom: 8px; pointer-events: auto; }
-.grimoire[data-closing="true"] > .chapter-tabs, .grimoire[data-closing="true"] > .book-footer, .grimoire[data-closing="true"] > .book-folio { opacity: 0; pointer-events: none; }
+.grimoire[data-closing="true"] > .book-footer, .grimoire[data-closing="true"] > .book-folio { opacity: 0; pointer-events: none; }
 .page-stack { position: absolute; z-index: 0; inset: 0; border-radius: 8px; background: repeating-linear-gradient(3deg, #6f542008 0 1px, transparent 1px 5px), linear-gradient(90deg, #d6c29c, #e9d9b6 8%, #eddfbf 48%, #d6c29c 50%, #eddfbf 52%, #e9d9b6 92%, #d6c29c); pointer-events: none; }
 .page-stack-edges { position: absolute; z-index: 5; inset: 0; overflow: visible; pointer-events: none; }
 .page-edge-bottom { position: absolute; left: 4px; right: 4px; height: 1px; border-radius: 0 0 4px 4px; background: linear-gradient(90deg, #c0a77e, #f0e2c3 8%, #ddcaa5 50%, #f0e2c3 92%, #c0a77e); box-shadow: 0 1px 0 #fff6; }
@@ -39,7 +45,7 @@
 .page-edge-left { border-radius: 3px 0 0 3px; }
 .page-edge-right { border-radius: 0 3px 3px 0; }
 .page-stack-edges > span:nth-child(even) .page-edge-bottom { filter: brightness(.94); }
-.tab-slot { position: absolute; z-index: 0; width: 42px; height: 49px; pointer-events: none; }
+.tab-slot { position: absolute; z-index: 0; width: 42px; height: clamp(36px, 6.5vh, 49px); pointer-events: none; }
 .tab-slot[data-side="right"] { right: 0; }
 .tab-slot[data-side="left"] { left: 0; }
 .tab-cutout-layer { position: absolute; z-index: 0; top: 50%; width: 11px; height: 1px; transform: translateY(-50%); background: #ab8d5f; box-shadow: 0 1px 0 #fff9; opacity: 0; transition: opacity 180ms ease; }
@@ -52,18 +58,14 @@
 .tab-cutout-layer:nth-child(5) { margin-top: 5px; }
 .tab-cutout-layer:nth-child(6) { margin-top: 8px; }
 .tab-slot[data-revealed="true"] .tab-cutout-layer { opacity: 1; }
-.book-tab { position: relative; z-index: 1; pointer-events: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; width: 42px; height: 49px; padding: 3px 4px; border: 1px solid #98784d88; background: linear-gradient(100deg, #ead9b7, #d8c198); color: #59452c; box-shadow: inset 0 0 7px #71532c18, 0 1px 2px #3b2a1840; cursor: pointer; text-align: center; }
+.book-tab { position: relative; z-index: 1; pointer-events: auto; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; width: 42px; height: 100%; padding: 3px 4px; border: 1px solid #98784d88; background: linear-gradient(100deg, #ead9b7, #d8c198); color: #59452c; box-shadow: inset 0 0 7px #71532c18, 0 1px 2px #3b2a1840; cursor: pointer; text-align: center; }
 .book-tab[data-side="right"] { border-right: 0; border-radius: 6px 0 0 6px; }
 .book-tab[data-side="left"] { border-left: 0; border-radius: 0 6px 6px 0; }
 .book-tab[data-side="right"][data-revealed="true"] { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 68%, 11px 50%, 0 32%); }
 .book-tab[data-side="left"][data-revealed="true"] { clip-path: polygon(0 0, 100% 0, 100% 32%, calc(100% - 11px) 50%, 100% 68%, 100% 100%, 0 100%); }
-.tab-slot:nth-child(1), .tab-slot:nth-child(5) { top: 74px; }
-.tab-slot:nth-child(2), .tab-slot:nth-child(6) { top: 126px; }
-.tab-slot:nth-child(3), .tab-slot:nth-child(7) { top: 178px; }
-.tab-slot:nth-child(4), .tab-slot:nth-child(8) { top: 230px; }
 .book-tab .tab-numeral { font: 13px Georgia, serif; color: #77592e; }
 .book-tab .tab-name { display: none; }
-.book-tab.current { background: linear-gradient(100deg, #77382d, #59271f); color: #f0dfbe; border-color: #a77c4d; height: 52px; width: 45px; }
+.book-tab.current { background: linear-gradient(100deg, #77382d, #59271f); color: #f0dfbe; border-color: #a77c4d; }
 .book-tab.current .tab-numeral { color: #e1bd7b; }
 .book-tab:disabled { opacity: 1; color: #735f43; cursor: default; }
 .book-tab:focus-visible { outline: 2px solid #77382d; outline-offset: 2px; z-index: 2; }
@@ -88,8 +90,6 @@
 .grimoire .outcome b { font-size: 11px; }
 .grimoire .outcome p { color: #74644e; font-size: 12px; line-height: 1.4; margin-top: 3px; }
 .grimoire .footer { background: none; padding: 10px 25px; border-color: #9a7e5333; gap: 14px; }
-.grimoire .bar { background: #9a7e5326; }
-.grimoire .bar-fill { background: #8d6532; }
 .grimoire .activity li, .grimoire .quiet { color: #594936; font-size: 13px; }
 .grimoire .chip { background: #fffaec40; border-color: #987a4933; color: #594936; font-size: 12px; }
 .grimoire .chips-title, .grimoire .details summary, .grimoire .details ul.plain { color: #68563f; }
@@ -110,6 +110,13 @@
 .closed-grimoire { position: absolute; inset: 0 25%; border-radius: 5px 10px 10px 5px; background: #361e18; box-shadow: -7px 2px 0 #24130f, 8px 8px 0 #2a1913, 0 20px 35px #0009; }
 .closed-grimoire::before { content: ""; position: absolute; inset: 7px -5px -6px 8px; background: repeating-linear-gradient(0deg, #b09a76 0 1px, #e7d4ad 1px 3px, #c6b28f 3px 4px); border-radius: 0 6px 8px 0; }
 .closed-cover-content { position: absolute; inset: 0; overflow-y: auto; padding: 36px 30px 25px; border: 5px double #a98049; border-radius: 5px 10px 10px 5px; background: radial-gradient(ellipse at 60% 25%, #62382b, #361e18); box-shadow: inset 0 0 0 9px #2e1b16, inset 0 0 0 10px #a9804970, inset 18px 0 16px -12px #100805bb; text-align: center; }
+.closed-grimoire[data-unlock-stage="shake"] { animation: closed-book-shake 520ms ease-in-out both; }
+.cover-lock { position: absolute; z-index: 4; top: 50%; right: -43px; width: 104px; height: 124px; margin-top: -62px; filter: drop-shadow(0 8px 5px #120a08aa); pointer-events: none; }
+@keyframes closed-book-shake {
+  0%, 100% { transform: translateX(0) rotate(0); }
+  14%, 46%, 76% { transform: translateX(-7px) rotate(-1deg); }
+  30%, 60%, 88% { transform: translateX(7px) rotate(1deg); }
+}
 .handoff-screen { box-sizing: border-box; height: 100vh; padding: 52px 7vw 34px; color: #30271e; background: radial-gradient(ellipse at 50% 38%, #49392b, #1c1713 68%, #100e0c); }
 .handoff-stage { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(350px, 1fr); align-items: center; gap: clamp(28px, 6vw, 82px); width: min(100%, 970px); height: 100%; margin: 0 auto; }
 .handoff-closed-book { position: relative; isolation: isolate; justify-self: center; width: min(100%, 330px); aspect-ratio: .66; border: 2px solid #8e6940; border-radius: 9px 13px 14px 9px; background: linear-gradient(90deg, #39201c, #642f27 47%, #281713 50%, #592a22 53%, #39201c); box-shadow: inset 0 0 0 4px #2b1a14, inset 0 0 0 5px #ab7b444d, 0 19px 34px #000a, 0 5px 0 #1c120e; }
@@ -134,19 +141,20 @@
 .handoff-instructions li > span { display: grid; place-items: center; width: 21px; height: 21px; border: 1px solid #a98955; border-radius: 50%; color: #6e5128; font: 12px Georgia, serif; }
 .handoff-instructions p { margin: 1px 0 0; color: #453827; font-size: 12px; line-height: 1.45; }
 .handoff-note .rt-Button { margin-top: 4px; }
-.cover-inscription { display: flex; flex-direction: column; align-items: center; gap: 20px; width: 100%; color: #d2ad70; }
+.cover-inscription { display: flex; flex-direction: column; align-items: center; gap: 20px; width: 100%; color: #d2ad70; text-align: center; }
 .cover-kicker { font-size: 10px; letter-spacing: .2em; text-align: center; }
 .cover-seal { display: grid; place-items: center; width: 104px; height: 104px; border: 1px solid #b58a50; outline: 1px solid #b58a5066; outline-offset: 6px; border-radius: 50%; margin: 12px 0 0; font: 76px Georgia, serif; text-shadow: 0 2px 0 #26130e; box-shadow: inset 0 0 18px #b58a5012; }
 .cover-title { font: 48px Georgia, serif; font-weight: 400; letter-spacing: .035em; color: #dfbe83; margin: 0; text-shadow: 0 2px 1px #26130e; }
 .cover-subtitle { font: italic 17px Georgia, serif; color: #bea27b; }
+.cover-subtitle, .grimoire .chapter-page .chapter-purpose { font-family: Luminari, Papyrus, "Apple Chancery", cursive; font-style: normal; }
 .cover-rule { width: 75%; height: 1px; background: linear-gradient(90deg, transparent, #b58a5088, transparent); }
 .closed-intro { color: #ddc9ab; font-size: 14px; line-height: 1.65; margin: 18px 0 10px; }
 .closed-welcome .welcome-actions { justify-content: center; gap: 10px; margin-top: 21px; }
-.closed-welcome .preflight-details { border-color: #b58a5033; text-align: left; margin-top: 17px; padding-top: 13px; }
-.closed-welcome .preflight-details > summary { color: #c5ab85; font-size: 11px; text-align: center; }
-.closed-welcome .preflight-details .lede { font-size: 12px; }
-.closed-welcome .review-step { grid-template-columns: 25px minmax(0, 1fr); }
-.closed-welcome .review-status { grid-column: 2; justify-self: start; }
+@media (prefers-reduced-motion: reduce) {
+  .closed-grimoire[data-unlock-stage="shake"], .cover-lock[data-unlock-stage="unlocking"] { animation-duration: 1ms; }
+  .grimoire[data-opening="true"][data-cover-centered="false"] { transition: none; }
+  .grimoire[data-returning-cover="true"][data-cover-docked="true"] { transition: none; }
+}
 @media (max-width: 850px) {
   .book-desk { padding: 44px 69px 20px; }
   .closed-welcome .book-desk { padding-left: 69px; padding-right: 69px; }
@@ -156,9 +164,8 @@
   .grimoire .chapter-page { padding-left: 43px; }
   .grimoire .action-page { padding-right: 43px; padding-left: 24px; }
   .grimoire .chapter-page .chapter-title { font-size: 30px; }
-  .tab-slot { width: 34px; height: 43px; }
-  .book-tab { width: 34px; height: 43px; padding: 2px; }
-  .book-tab.current { width: 36px; height: 46px; }
+  .tab-slot { width: 34px; height: clamp(34px, 6.5vh, 43px); }
+  .book-tab { width: 34px; padding: 2px; }
   .book-tab .tab-name { display: none; }
   .grimoire .footer { padding: 10px 16px; flex-wrap: wrap; }
   .grimoire .title, .grimoire .guide-card .title { font-size: 25px; }
@@ -188,4 +195,48 @@
   .handoff-note h1 { font-size: 21px; }
   .handoff-note-intro { font-size: 12px; }
   .handoff-note h2 { margin-top: 12px; }
+}
+
+/* The source sheet exports complete faces. Keep UI text above the art and
+   each moving lock part on its own layer so page and unlock motion still work. */
+.grimoire-page.left-leaf { background: #eddfbf url("./art/left-page.svg") center / 100% 100% no-repeat; }
+.grimoire-page.right-leaf { background: #eddfbf url("./art/right-page.svg") center / 100% 100% no-repeat; }
+.grimoire-page.cover-leaf { position: relative; border: 0; box-shadow: none; background: #45251f url("./art/front-cover.svg") center / 100% 100% no-repeat; }
+.grimoire-page.back-cover-leaf { background-image: url("./art/back-cover.svg"); }
+.page-stack { background: #e9d9b6 url("./art/left-page.svg") left / 50% 100% no-repeat; }
+.page-stack::after { content: ""; position: absolute; inset: 0 0 0 50%; background: url("./art/right-page.svg") center / 100% 100% no-repeat; }
+.book-cover { background: #49251f url("./art/back-cover.svg") center / 50% 100% repeat-x; }
+.closed-cover-content { display: block; border: 0; background: #45251f url("./art/front-cover.svg") center / 100% 100% no-repeat; box-shadow: none; overflow: hidden; }
+.handoff-book-cover { border: 0; background: #45251f url("./art/back-cover.svg") center / 100% 100% no-repeat; box-shadow: none; }
+.closed-grimoire::before, .handoff-book-pages { background: repeating-linear-gradient(0deg, #af9670 0 1px, #e8d6b1 1px 3px, #c8b18b 3px 4px); }
+.closed-cover-content .cover-inscription, .front-cover-leaf .cover-inscription, .travel-cover .cover-inscription { position: absolute; inset: 0; display: block; width: auto; pointer-events: none; }
+.closed-cover-content .cover-kicker, .front-cover-leaf .cover-kicker, .travel-cover .cover-kicker { position: absolute; top: 8%; left: 8%; right: 8%; font-size: clamp(7px, .85vw, 10px); color: #f0d4a0; }
+.closed-cover-content .cover-seal, .front-cover-leaf .cover-seal, .travel-cover .cover-seal { display: none; }
+.closed-cover-content .cover-title, .front-cover-leaf .cover-title, .travel-cover .cover-title { position: absolute; top: 20%; left: 8%; right: 8%; font-size: clamp(25px, 3vw, 39px); }
+.closed-cover-content .cover-subtitle, .front-cover-leaf .cover-subtitle, .travel-cover .cover-subtitle { position: absolute; top: 74%; left: 13%; right: 13%; color: #f0d6a7; font-size: clamp(11px, 1.05vw, 14px); line-height: 1.22; }
+.closed-cover-content .cover-rule, .front-cover-leaf .cover-rule, .travel-cover .cover-rule { display: none; }
+.closed-cover-content .closed-intro { position: absolute; top: 86%; left: 10%; right: 10%; margin: 0; color: #f0d6b3; font-size: clamp(10px, .95vw, 12px); line-height: 1.3; }
+.closed-cover-content .welcome-actions { position: absolute; bottom: 2.5%; left: 4%; right: 4%; margin: 0; }
+.closed-cover-content .welcome-actions .rt-Button { min-height: 34px; }
+.cover-lock-eye { position: absolute; z-index: 3; top: 50%; right: -27px; width: 61px; height: auto; transform: translateY(-50%); pointer-events: none; }
+.cover-lock { right: -55px; width: 108px; height: 125px; }
+.cover-lock img { position: absolute; display: block; height: auto; }
+.cover-lock .lock-strap { left: -31px; top: 53px; width: 94px; transform-origin: 13% 50%; }
+.cover-lock .lock-shackle { left: 44px; top: 12px; width: 56px; transform-origin: 70% 86%; }
+.cover-lock .lock-body { left: 42px; top: 60px; width: 61px; }
+.cover-lock[data-unlock-stage="unlocking"] { animation: lock-timeline 760ms linear forwards; }
+.cover-lock[data-unlock-stage="unlocking"] .lock-strap { animation: lock-strap-open 760ms ease-in-out forwards; }
+.cover-lock[data-unlock-stage="unlocking"] .lock-shackle { animation: lock-shackle-open 760ms ease-in-out forwards; }
+.cover-lock[data-unlock-stage="unlocking"] .lock-body { animation: lock-body-away 760ms cubic-bezier(.18,.72,.25,1) forwards; }
+.cover-lock[data-unlock-stage="relocking"] { animation: lock-timeline 760ms linear reverse both; }
+.cover-lock[data-unlock-stage="relocking"] .lock-strap { animation: lock-strap-open 760ms ease-in-out reverse both; }
+.cover-lock[data-unlock-stage="relocking"] .lock-shackle { animation: lock-shackle-open 760ms ease-in-out reverse both; }
+.cover-lock[data-unlock-stage="relocking"] .lock-body { animation: lock-body-away 760ms cubic-bezier(.18,.72,.25,1) reverse both; }
+@keyframes lock-timeline { to { transform: translateZ(0); } }
+@keyframes lock-strap-open { 0%, 24% { transform: rotate(0); } 65%, 100% { transform: rotate(-38deg); } }
+@keyframes lock-shackle-open { 0%, 20% { transform: rotate(0); } 48% { transform: rotate(-25deg) translateY(-9px); } 100% { transform: rotate(-25deg) translate(48px, -22px); opacity: 0; } }
+@keyframes lock-body-away { 0%, 42% { transform: translate(0, 0) rotate(0); opacity: 1; } 100% { transform: translate(110px, -28px) rotate(24deg) scale(.75); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .cover-lock[data-unlock-stage="unlocking"], .cover-lock[data-unlock-stage="unlocking"] img,
+  .cover-lock[data-unlock-stage="relocking"], .cover-lock[data-unlock-stage="relocking"] img { animation-duration: 1ms; }
 }

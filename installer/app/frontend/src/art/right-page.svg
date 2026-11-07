@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg" viewBox="1820 330 700 1050" width="700" height="1050"><ns0:defs>
+    <ns0:linearGradient id="cover" x1="0" y1="0" x2="1" y2="1">
+      <ns0:stop stop-color="#744333" /><ns0:stop offset=".48" stop-color="#522b23" /><ns0:stop offset="1" stop-color="#271713" />
+    </ns0:linearGradient>
+    <ns0:linearGradient id="paper" x1="0" y1="0" x2="1" y2="0">
+      <ns0:stop stop-color="#d1ba8c" /><ns0:stop offset=".1" stop-color="#eadbb8" /><ns0:stop offset=".52" stop-color="#f5e9cc" /><ns0:stop offset=".9" stop-color="#eadab6" /><ns0:stop offset="1" stop-color="#cbb181" />
+    </ns0:linearGradient>
+    <ns0:linearGradient id="paperLeft" x1="0" y1="0" x2="1" y2="0">
+      <ns0:stop stop-color="#e9d8b5" /><ns0:stop offset=".82" stop-color="#f2e4c5" /><ns0:stop offset="1" stop-color="#c9b084" />
+    </ns0:linearGradient>
+    <ns0:linearGradient id="paperRight" x1="0" y1="0" x2="1" y2="0">
+      <ns0:stop stop-color="#c9b084" /><ns0:stop offset=".18" stop-color="#f2e4c5" /><ns0:stop offset="1" stop-color="#e9d8b5" />
+    </ns0:linearGradient>
+    <ns0:linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <ns0:stop stop-color="#f6dda3" /><ns0:stop offset=".45" stop-color="#be8d44" /><ns0:stop offset=".72" stop-color="#e6bf78" /><ns0:stop offset="1" stop-color="#8e622b" />
+    </ns0:linearGradient>
+    <ns0:linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <ns0:stop stop-color="#c1aa81" /><ns0:stop offset=".5" stop-color="#ead9b6" /><ns0:stop offset="1" stop-color="#a88d63" />
+    </ns0:linearGradient>
+    <ns0:filter id="shadow" x="-20%" y="-20%" width="150%" height="160%">
+      <ns0:feGaussianBlur in="SourceAlpha" stdDeviation="16" /><ns0:feOffset dy="22" />
+      <ns0:feComponentTransfer><ns0:feFuncA type="linear" slope=".22" /></ns0:feComponentTransfer>
+      <ns0:feMerge><ns0:feMergeNode /><ns0:feMergeNode in="SourceGraphic" /></ns0:feMerge>
+    </ns0:filter>
+    <ns0:pattern id="pageLines" width="20" height="20" patternUnits="userSpaceOnUse">
+      <ns0:path d="M0 0H20" stroke="#a88b5f" stroke-width="1" opacity=".17" />
+    </ns0:pattern>
+    <ns0:style>
+      .title{font:600 54px Georgia,serif;letter-spacing:3px;fill:#38291e}
+      .subtitle{font:30px Georgia,serif;fill:#6b5945}
+      .label{font:600 35px Georgia,serif;letter-spacing:2px;fill:#54402e}
+      .small{font:27px Georgia,serif;fill:#79664e}
+      .guide{stroke:#b8a58a;stroke-width:3;stroke-dasharray:12 14;fill:none}
+    </ns0:style>
+  </ns0:defs>
+
+  <ns0:g id="open-spread" transform="translate(1120 330)" filter="url(#shadow)">
+    <ns0:rect x="-21" y="-20" width="1442" height="1094" rx="32" fill="url(#cover)" stroke="#352019" stroke-width="8" />
+    <ns0:rect x="-6" y="12" width="1412" height="1056" rx="14" fill="url(#edge)" stroke="#9e825d" stroke-width="6" />
+    <ns0:path d="M0 1043Q700 1093 1400 1043" fill="none" stroke="#9f8663" stroke-width="38" />
+    <ns0:path d="M0 1037Q700 1085 1400 1037" fill="none" stroke="#f0e2c3" stroke-width="21" stroke-dasharray="4 5" opacity=".7" />
+    <ns0:path d="M0 0H700V1050H0Q-6 521 0 0Z" fill="url(#paperLeft)" stroke="#b99e72" stroke-width="5" />
+    <ns0:path d="M700 0H1400Q1406 520 1400 1050H700Z" fill="url(#paperRight)" stroke="#b99e72" stroke-width="5" />
+    <ns0:path d="M33 26H668V1015H33ZM732 26H1367V1015H732Z" fill="none" stroke="#a98b5b" stroke-width="3" opacity=".55" />
+    <ns0:path d="M700 0V1050" stroke="#5d4229" stroke-width="34" opacity=".19" />
+    <ns0:path d="M700 0V1050" stroke="#f9edcf" stroke-width="5" opacity=".7" />
+    <ns0:path d="M55 135H625M775 135H1345M55 911H625M775 911H1345" stroke="#b09469" stroke-width="3" opacity=".4" />
+    <ns0:g fill="none" stroke="#b69a6d" stroke-width="3" opacity=".52">
+      <ns0:path d="M58 168v-89h94M642 168v-89h-94M58 878v89h94M642 878v89h-94" />
+      <ns0:path d="M758 168v-89h94M1342 168v-89h-94M758 878v89h94M1342 878v89h-94" />
+    </ns0:g>
+  </ns0:g>
+
+  
+  </ns0:svg>

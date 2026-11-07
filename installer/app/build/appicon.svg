@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="cover" cx="50%" cy="36%" r="78%">
+      <stop offset="0" stop-color="#744333"/>
+      <stop offset="0.58" stop-color="#49251f"/>
+      <stop offset="1" stop-color="#241411"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0d294"/>
+      <stop offset="0.5" stop-color="#c39a59"/>
+      <stop offset="1" stop-color="#f3dca8"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="18"/>
+      <feOffset dy="18"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.42"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#cover)"/>
+  <rect x="34" y="34" width="956" height="956" rx="176" fill="none" stroke="#160c0a" stroke-width="24" opacity="0.55"/>
+  <rect x="54" y="54" width="916" height="916" rx="158" fill="none" stroke="url(#gold)" stroke-width="7" opacity="0.88"/>
+  <rect x="76" y="76" width="872" height="872" rx="142" fill="none" stroke="#e1c080" stroke-width="2" opacity="0.45"/>
+
+  <g filter="url(#shadow)">
+    <circle cx="512" cy="514" r="332" fill="#281612" fill-opacity="0.5" stroke="url(#gold)" stroke-width="14"/>
+    <circle cx="512" cy="514" r="306" fill="none" stroke="#e4c687" stroke-width="3" opacity="0.72"/>
+
+    <!-- The doorway recalls a temple adytum; the letterform keeps the mark unmistakably Adaetum. -->
+    <path d="M310 704V492c0-112 90-202 202-202s202 90 202 202v212" fill="none" stroke="#c39a59" stroke-width="15" stroke-linecap="round" opacity="0.72"/>
+    <path d="M352 704V492c0-89 71-160 160-160s160 71 160 160v212" fill="none" stroke="#e2c27e" stroke-width="3" opacity="0.46"/>
+    <text x="512" y="699" text-anchor="middle" font-family="Georgia, Times New Roman, serif" font-size="492" font-weight="400" fill="url(#gold)" stroke="#41241a" stroke-width="3" paint-order="stroke">A</text>
+    <path d="M512 210l12 24 26 4-19 18 5 26-24-13-24 13 5-26-19-18 26-4z" fill="url(#gold)"/>
+  </g>
+</svg>

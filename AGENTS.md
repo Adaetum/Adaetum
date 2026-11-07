@@ -37,7 +37,7 @@ checks, questions and dry run; the window (`installer/app`) and the headless com
    - **validate**, **render**, **artifacts**, **finalize**: check inputs, render `.env` and the
      GitOps files and push them, publish to R2 and GitHub and trigger the workflows, hand over
      the installer ISO
-2. `task init:dryrun` shows every step and what it would do, changing nothing, with no window. Pass `-- --window` to show the same read-only engine plan in the guided setup window.
+2. `task init:dryrun` shows every step and what it would do, changing nothing, with no window. Pass `-- --window` to rehearse the full guided UI; provider responses are assumed successful and no real checks or changes run.
 3. `task init:clean` is `task init` ignoring saved credentials and values.
 4. `task initialize` and `task init:silent` run the same stages with no window. Questions are
    answered with `-- --answer id=value`, and a question with no answer stops the run instead of

@@ -192,7 +192,7 @@ Useful setup paths:
 | --- | --- |
 | `task init` | Supported guided first run (opens the setup window) |
 | `task init:silent` | Replay setup from saved credentials with no window and no questions |
-| `task init:dryrun` | Show every step and what it would do, changing nothing; pass `-- --window` for the same plan in the guided setup window |
+| `task init:dryrun` | Show the engine's read-only plans; pass `-- --window` to rehearse the full guided UI with assumed-success responses and no real checks or changes |
 | `task init:clean` | Open the window ignoring saved credentials and values |
 | `task initialize` | Run setup with no window; answer questions with `-- --answer id=value` |
 | `task platform:validate` | Validate the public platform profile |

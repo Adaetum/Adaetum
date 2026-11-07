@@ -43,20 +43,34 @@ if ! command -v wails >/dev/null 2>&1; then
 fi
 
 case "$(uname -s)" in
-  Darwin) binary="${app}/build/bin/adaetum-setup.app" ;;
-  MINGW*|MSYS*|CYGWIN*) binary="${app}/build/bin/adaetum-setup.exe" ;;
-  *) binary="${app}/build/bin/adaetum-setup" ;;
+  Darwin) binary="${app}/build/bin/adaetum-setup.app"; build_stamp="${binary}/Contents/MacOS/adaetum-setup" ;;
+  MINGW*|MSYS*|CYGWIN*) binary="${app}/build/bin/adaetum-setup.exe"; build_stamp="${binary}" ;;
+  *) binary="${app}/build/bin/adaetum-setup"; build_stamp="${binary}" ;;
 esac
 
 # Rebuild when anything the window is made from is newer than the build.
 needs_build=0
-if [ ! -e "${binary}" ]; then
+clean_generated=0
+if [ ! -e "${build_stamp}" ]; then
   needs_build=1
-elif [ -n "$(find "${here}" -path "${app}/build" -prune -o -path '*/node_modules' -prune -o -path "${app}/frontend/wailsjs" -prune -o -path "${app}/frontend/dist" -prune -o \( -name '*.go' -o -name '*.ts' -o -name '*.tsx' -o -name '*.css' -o -name 'go.mod' -o -name 'package.json' \) -newer "${binary}" -print -quit)" ]; then
+elif [ "${app}/build/appicon.png" -nt "${build_stamp}" ] || [ "${app}/build/windows/icon.ico" -nt "${build_stamp}" ]; then
+  # Icon sources live under build/, which is otherwise pruned from this scan.
+  # Recompile so Windows does not keep showing the previous executable icon.
+  needs_build=1
+  clean_generated=1
+elif [ "${app}/build/darwin/Info.plist" -nt "${build_stamp}" ] || [ "${app}/build/darwin/Info.dev.plist" -nt "${build_stamp}" ]; then
+  # A unique bundle identifier keeps macOS from reusing a cached Wails icon.
+  needs_build=1
+  clean_generated=1
+elif [ -n "$(find "${here}" -path "${app}/build" -prune -o -path '*/node_modules' -prune -o -path "${app}/frontend/wailsjs" -prune -o -path "${app}/frontend/dist" -prune -o \( -name '*.go' -o -name '*.ts' -o -name '*.tsx' -o -name '*.css' -o -name '*.svg' -o -name 'go.mod' -o -name 'package.json' \) -newer "${build_stamp}" -print -quit)" ]; then
   needs_build=1
 fi
 if [ "${needs_build}" = 1 ]; then
   echo "Building the setup window..."
+  if [ "${clean_generated}" = 1 ]; then
+    # Wails v2 can leave a stale packaged icon in bin/ or frontend/dist.
+    rm -rf "${binary}" "${app}/frontend/dist"
+  fi
   if ! build_log="$(cd "${app}" && wails build 2>&1)"; then
     echo "${build_log}" >&2
     echo "The setup window failed to build." >&2

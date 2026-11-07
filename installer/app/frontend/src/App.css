@@ -72,22 +72,6 @@ body { overflow: hidden; }
 .need p { margin: calc(2 * var(--u)) 0 0; font-size: calc(13 * var(--u)); color: var(--gray-11); line-height: 1.45; }
 .actions { display: flex; gap: calc(12 * var(--u)); margin-top: calc(32 * var(--u)); flex-wrap: wrap; }
 
-/* The preflight review makes the first action honest: it exposes the sequence
-   and each stage's read-only finding before setup can start changing anything. */
-.review-head { display: flex; align-items: flex-end; justify-content: space-between; gap: calc(20 * var(--u)); margin-top: calc(32 * var(--u)); }
-.review-head h2 { margin: 0; font-size: calc(20 * var(--u)); }
-.review-head p { max-width: 72ch; margin: calc(6 * var(--u)) 0 0; color: var(--gray-11); font-size: calc(14 * var(--u)); line-height: 1.5; }
-.review-state { display: flex; align-items: center; gap: calc(7 * var(--u)); flex: none; color: var(--gray-11); font-size: calc(13 * var(--u)); }
-.review-list { list-style: none; margin: calc(16 * var(--u)) 0 0; padding: 0; border: 1px solid var(--gray-5); border-radius: calc(12 * var(--u)); overflow: hidden; }
-.review-step { display: grid; grid-template-columns: calc(28 * var(--u)) minmax(0, 1fr) auto; gap: calc(12 * var(--u)); align-items: start; padding: calc(14 * var(--u)) calc(16 * var(--u)); background: var(--gray-2); }
-.review-step + .review-step { border-top: 1px solid var(--gray-5); }
-.review-number { display: grid; place-items: center; width: calc(25 * var(--u)); height: calc(25 * var(--u)); border-radius: 50%; background: var(--gray-4); color: var(--gray-11); font-size: calc(12 * var(--u)); font-weight: 600; }
-.review-step b { font-size: calc(15 * var(--u)); }
-.review-step p { margin: calc(3 * var(--u)) 0 0; color: var(--gray-11); font-size: calc(13 * var(--u)); line-height: 1.4; }
-.review-plan { display: block; margin-top: calc(6 * var(--u)); color: var(--gray-10); font-size: calc(12 * var(--u)); line-height: 1.4; }
-.review-status { padding: calc(4 * var(--u)) calc(8 * var(--u)); border-radius: 999px; background: var(--accent-4); color: var(--accent-11); font-size: calc(11 * var(--u)); font-weight: 600; white-space: nowrap; }
-.review-step[data-status="done"] .review-status { background: var(--green-4); color: var(--green-11); }
-.review-step[data-status="blocked"] .review-status { background: var(--red-4); color: var(--red-11); }
 .start-confirm { display: flex; align-items: center; gap: calc(14 * var(--u)); width: 100%; padding: calc(16 * var(--u)); border: 1px solid var(--accent-7); border-radius: calc(12 * var(--u)); background: var(--accent-3); }
 .start-confirm > div { flex: 1; }
 .start-confirm b { font-size: calc(15 * var(--u)); }
@@ -139,8 +123,6 @@ body { overflow: hidden; }
 .qactions { display: flex; gap: calc(12 * var(--u)); margin-top: calc(24 * var(--u)); flex-wrap: wrap; }
 
 .footer { gap: calc(24 * var(--u)); }
-.bar { flex: 1; height: calc(6 * var(--u)); border-radius: 999px; background: var(--gray-4); overflow: hidden; }
-.bar-fill { height: 100%; background: var(--accent-9); border-radius: 999px; transition: width .4s ease; }
 
 /* Keep a guided question on one screen at the design size. */
 .qcard .title { font-size: calc(30 * var(--u)); }
@@ -152,9 +134,7 @@ body { overflow: hidden; }
 .main-body { padding-top: calc(36 * var(--u)); }
 
 @media (max-width: 820px) {
-  .review-head, .start-confirm { align-items: flex-start; flex-direction: column; }
-  .review-step { grid-template-columns: calc(28 * var(--u)) minmax(0, 1fr); }
-  .review-status { grid-column: 2; justify-self: start; }
+  .start-confirm { align-items: flex-start; flex-direction: column; }
 }
 
 /* Guided layout: stable, readable type with the action isolated from context. */
@@ -185,9 +165,6 @@ body { overflow: hidden; }
 .needs { gap: 10px; margin-top: 20px; }
 .need { background: linear-gradient(135deg, #33261b40, #ffffff02); border-color: #d2ad7026; padding: 14px; border-radius: 6px; }
 .need svg { color: #d2ad70; }
-.review-head { margin-top: 20px; }
-.review-head h2 { font-size: 16px; }
-.preflight-details { padding-top: 14px; border-top: 1px solid #ffffff10; margin-top: 18px; }
 .stage-purpose { color: var(--gray-11); font-size: 14px; line-height: 1.5; margin: 8px 0 14px; max-width: 70ch; }
 .guide-card { position: relative; background: linear-gradient(110deg, #2c241b, #211d18 12%, #221e19 85%, #2b231b); border: 1px solid #d2ad7040; border-radius: 5px; padding: 20px 24px; box-shadow: inset 0 0 0 4px #17130f, inset 0 0 0 5px #d2ad7018, 0 12px 30px #00000030, 3px 3px 0 #211b14, 4px 4px 0 #d2ad7026; animation: arrive .2s ease-out; }
 .guide-card::before, .guide-card::after { content: ""; position: absolute; width: 12px; height: 12px; pointer-events: none; border-color: #d2ad7060; border-style: solid; }
@@ -206,7 +183,6 @@ body { overflow: hidden; }
 .outcome p { color: var(--gray-10); font-size: 13px; line-height: 1.5; margin: 5px 0 0; }
 .footer { padding: 12px 32px; background: #151310; border-color: #ffffff0c; }
 .footer-caption { color: var(--gray-10); font-size: 12px; white-space: nowrap; }
-.bar-fill { background: linear-gradient(90deg, #926c3e, #d2ad70); }
 .rail-note { font-size: 12px; line-height: 1.6; color: var(--gray-10); margin: 0; }
 @keyframes arrive { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 820px) {
@@ -220,7 +196,6 @@ body { overflow: hidden; }
 }
 @media (prefers-reduced-motion: reduce) {
   .guide-card, .spin { animation: none; }
-  .bar-fill { transition: none; }
 }
 
 /* Use the README's sanctuary artwork as the brand source. Animate atmosphere,
