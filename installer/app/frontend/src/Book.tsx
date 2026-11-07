@@ -30,7 +30,7 @@ export function BookHandoff({ isoPath, copyPath, instructions, simulation = fals
           <div className="handoff-book-cover" />
         </div>
         <aside className="handoff-note" aria-labelledby="handoff-title">
-          <div className="handoff-note-heading"><span>FIELD NOTE · FINAL LEAF</span><span>VIII</span></div>
+          <div className="handoff-note-heading"><span>FINISHED · SETUP COMPLETE</span><span>VIII</span></div>
           <h1 id="handoff-title">Your installer is ready</h1>
           <p className="handoff-note-intro">{simulation ? "This is an example handoff from the UI rehearsal. No installer was built or copied." : "The setup is complete. Keep this note with your installer ISO."}</p>
           <div className="handoff-path"><span>{simulation ? "EXAMPLE ISO PATH" : copyPath ? "ISO · DOWNLOADS COPY" : "INSTALLER ISO"}</span><code>{copyPath || isoPath}</code></div>

@@ -27,7 +27,7 @@ PARTS = {
 
 
 def main() -> None:
-    tree = ET.parse(SOURCE)
+    tree = ET.parse(SOURCE, parser=ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)))
     source = tree.getroot()
     definitions = source.find(f"{{{SVG}}}defs")
     if definitions is None:

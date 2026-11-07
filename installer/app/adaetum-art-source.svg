@@ -50,11 +50,14 @@
     <path d="M67 28V1022" stroke="url(#gold)" stroke-width="7" opacity=".8"/>
     <rect x="84" y="43" width="571" height="963" rx="12" fill="none" stroke="url(#gold)" stroke-width="11"/>
     <rect x="106" y="65" width="527" height="919" rx="8" fill="none" stroke="#e9c785" stroke-width="3" opacity=".75"/>
-    <path d="M95 182H641M95 866H641" stroke="url(#gold)" stroke-width="9"/>
+    <path d="M95 160H641" stroke="url(#gold)" stroke-width="6"/>
+    <!-- A smaller seal leaves a continuous inscription area below it. -->
+    <g transform="translate(370 445) scale(.72) translate(-370 -515)">
     <circle cx="370" cy="515" r="222" fill="#301a16" fill-opacity=".42" stroke="url(#gold)" stroke-width="14"/>
     <circle cx="370" cy="515" r="196" fill="none" stroke="#e9c785" stroke-width="4"/>
     <path d="M249 657V498a121 121 0 0 1 242 0v159" fill="none" stroke="#c59b57" stroke-width="12" opacity=".82"/>
     <text x="370" y="660" text-anchor="middle" font-family="Georgia,serif" font-size="330" fill="url(#gold)" stroke="#3d211a" stroke-width="3" paint-order="stroke">A</text>
+    </g>
     <circle cx="670" cy="525" r="26" fill="url(#gold)" stroke="#6f4c29" stroke-width="6"/>
     <circle cx="670" cy="525" r="9" fill="#35231b"/>
   </g>
@@ -71,10 +74,10 @@
     <path d="M33 26H668V1015H33ZM732 26H1367V1015H732Z" fill="none" stroke="#a98b5b" stroke-width="3" opacity=".55"/>
     <path d="M700 0V1050" stroke="#5d4229" stroke-width="34" opacity=".19"/>
     <path d="M700 0V1050" stroke="#f9edcf" stroke-width="5" opacity=".7"/>
-    <path d="M55 135H625M775 135H1345M55 911H625M775 911H1345" stroke="#b09469" stroke-width="3" opacity=".4"/>
+    <!-- Keep ornaments outside the live text area, which varies by question. -->
     <g fill="none" stroke="#b69a6d" stroke-width="3" opacity=".52">
-      <path d="M58 168v-89h94M642 168v-89h-94M58 878v89h94M642 878v89h-94"/>
-      <path d="M758 168v-89h94M1342 168v-89h-94M758 878v89h94M1342 878v89h-94"/>
+      <path d="M48 88V42h46M652 88V42h-46M48 953v46h46M652 953v46h-46"/>
+      <path d="M748 88V42h46M1352 88V42h-46M748 953v46h46M1352 953v46h-46"/>
     </g>
   </g>
 

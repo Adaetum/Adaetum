@@ -42,14 +42,16 @@
     <ns0:path d="M67 28V1022" stroke="url(#gold)" stroke-width="7" opacity=".8" />
     <ns0:rect x="84" y="43" width="571" height="963" rx="12" fill="none" stroke="url(#gold)" stroke-width="11" />
     <ns0:rect x="106" y="65" width="527" height="919" rx="8" fill="none" stroke="#e9c785" stroke-width="3" opacity=".75" />
-    <ns0:path d="M95 182H641M95 866H641" stroke="url(#gold)" stroke-width="9" />
+    <ns0:path d="M95 160H641" stroke="url(#gold)" stroke-width="6" />
+    <!-- A smaller seal leaves a continuous inscription area below it. -->
+    <ns0:g transform="translate(370 445) scale(.72) translate(-370 -515)">
     <ns0:circle cx="370" cy="515" r="222" fill="#301a16" fill-opacity=".42" stroke="url(#gold)" stroke-width="14" />
     <ns0:circle cx="370" cy="515" r="196" fill="none" stroke="#e9c785" stroke-width="4" />
     <ns0:path d="M249 657V498a121 121 0 0 1 242 0v159" fill="none" stroke="#c59b57" stroke-width="12" opacity=".82" />
     <ns0:text x="370" y="660" text-anchor="middle" font-family="Georgia,serif" font-size="330" fill="url(#gold)" stroke="#3d211a" stroke-width="3" paint-order="stroke">A</ns0:text>
+    </ns0:g>
     <ns0:circle cx="670" cy="525" r="26" fill="url(#gold)" stroke="#6f4c29" stroke-width="6" />
     <ns0:circle cx="670" cy="525" r="9" fill="#35231b" />
   </ns0:g>
 
-  
   </ns0:svg>

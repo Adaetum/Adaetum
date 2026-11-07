@@ -18,7 +18,7 @@ export interface Screen {
   title?: string; intro?: string; steps?: Instruction[]; listTitle?: string; list?: string[]; yesLabel?: string; noLabel?: string;
 }
 interface Note { stepId: string; kind: string; message: string; link?: string }
-interface Code { code: string; link: string }
+interface Code { code: string; link: string; stepId: string }
 interface Line { text: string; progress: boolean }
 
 type Status = "pending" | "needed" | "done" | "blocked" | "running" | "failed";
@@ -84,7 +84,7 @@ export default function App() {
       }),
       EventsOn("note", (n: Note) => {
         if (n.kind === "code") {
-          setCode(n.message ? { code: n.message, link: n.link ?? "" } : null);
+          setCode(n.message ? { code: n.message, link: n.link ?? "", stepId: n.stepId } : null);
           return;
         }
         // Any report after a typed answer means the engine accepted it.
@@ -92,6 +92,7 @@ export default function App() {
           if (was) setScreen(null);
           return false;
         });
+        if (n.kind === "step-started" || n.kind === "step-finished" || n.kind === "step-failed") setCode(null);
         if (n.kind === "step-started") {
           setLooking(null);
           setCurrent(n.stepId);
@@ -207,7 +208,7 @@ export default function App() {
       </article>,
       <article className="action-page" aria-label={`Setup step ${pageIndex + 1}`} key={`${item.id}-action`}>
         <div className="eyebrow">Quest {pageIndex + 1} of {stages.length}</div>
-        {code && item.id === shownId && <CodeCard code={code} simulation={dryRunMode} />}
+        {code && item.id === code.stepId && item.id === shownId && <CodeCard code={code} simulation={dryRunMode} />}
         {stopped && item.id === shownId && <Callout.Root color="red" role="alert" mb="4"><Callout.Icon><TriangleAlert size={16} /></Callout.Icon><Callout.Text>Setup stopped: {stopped}</Callout.Text></Callout.Root>}
         {complete && !dryRunMode && item.id === shownId && <Callout.Root color="green" mb="4"><Callout.Icon><Check size={16} /></Callout.Icon><Callout.Text>All quests complete. Your server kit is ready.</Callout.Text></Callout.Root>}
         {dryRunComplete && item.id === shownId && <Callout.Root color="blue" mb="4"><Callout.Icon><Check size={16} /></Callout.Icon><Callout.Text>The UI rehearsal is complete. No services or files were changed.</Callout.Text></Callout.Root>}
@@ -233,7 +234,7 @@ export default function App() {
     chapters={stages.map(s => ({ id: s.id, title: journey[s.id]?.title ?? s.title, status: statusOf(s.id), enabled: dryRunMode || statusOf(s.id) === "done" || s.id === shownId }))}
     onChapter={id => setLooking(id)}
     onPageChange={page => { const selected = stages[page]; if (selected) setLooking(selected.id); }}
-    footer={<footer className="footer"><Button variant="soft" color="gray" onClick={back}><ArrowLeft size={15} /> Back</Button>{running && <Button variant="soft" color="gray" onClick={() => Cancel()}>{dryRunMode ? "Cancel rehearsal" : "Cancel setup"}</Button>}</footer>}
+    footer={<footer className="footer"><Button variant="soft" color="gray" onClick={back}><ArrowLeft size={15} /> Back</Button>{running && <Button variant="soft" color="gray" onClick={() => Cancel()}>Cancel</Button>}</footer>}
     closing={returningToCover || (complete && !!handoffScreen)}
     returnToCover={returningToCover}
     onClosed={() => {
@@ -312,7 +313,7 @@ function CodeCard({ code, simulation = false }: { code: Code; simulation?: boole
         <Button size="2" disabled={simulation} onClick={() => BrowserOpenURL(code.link)}><ExternalLink size={14} /> Open GitHub</Button>
         <Button size="2" variant="soft" disabled={simulation} onClick={() => BrowserOpenURL("https://github.com/signup")}><ExternalLink size={14} /> Create account</Button>
       </div>
-      <p className="code-text muted">{simulation ? "Sign-in is assumed so you can preview the next screen." : "Waiting for you to approve it. This continues by itself."}</p>
+      {!simulation && <p className="code-text muted">Waiting for you to approve it. This continues by itself.</p>}
     </div>
   );
 }
