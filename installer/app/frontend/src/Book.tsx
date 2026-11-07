@@ -1,7 +1,7 @@
 import { createContext, forwardRef, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import HTMLFlipBook from "react-pageflip";
 import { Button, Theme } from "@radix-ui/themes";
-import { Check, Copy, Volume2, VolumeX } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { chapterNumerals } from "./journey";
 import "./Book.css";
 import BookCover from "./BookCover";
@@ -44,7 +44,7 @@ export function BookHandoff({ isoPath, copyPath, instructions, simulation = fals
   </Theme>;
 }
 
-type FlipApi = { getCurrentPageIndex: () => number; getState: () => string; getSettings: () => { flippingTime: number }; flip: (page: number) => void; flipNext: () => void; flipPrev: () => void; turnToPage: (page: number) => void };
+type FlipApi = { getCurrentPageIndex: () => number; getState: () => string; getSettings: () => { flippingTime: number; width: number; height: number }; update: () => void; flip: (page: number) => void; flipNext: () => void; flipPrev: () => void; turnToPage: (page: number) => void };
 type FlipHandle = { pageFlip: () => FlipApi };
 type LeafContent = { pages: ReactNode[]; chapters: ChapterTab[]; activeChapter: number; onChapter?: (id: string) => void };
 const PageContent = createContext<LeafContent>({ pages: [], chapters: [], activeChapter: 0 });
@@ -72,38 +72,6 @@ const BookLeaf = forwardRef<HTMLDivElement, BookLeafProps>(function BookLeaf({ c
   </div>;
 });
 
-let pageAudio: AudioContext | null = null;
-
-// Keep the sound local and optional so the installer has no remote media dependency.
-function playPageTurn() {
-  try {
-    pageAudio ??= new AudioContext();
-    const context = pageAudio;
-    if (context.state === "suspended") void context.resume();
-    const length = Math.floor(context.sampleRate * 0.42);
-    const buffer = context.createBuffer(1, length, context.sampleRate);
-    const samples = buffer.getChannelData(0);
-    for (let i = 0; i < length; i++) samples[i] = (Math.random() * 2 - 1) * (1 - i / length);
-    const source = context.createBufferSource();
-    const filter = context.createBiquadFilter();
-    const gain = context.createGain();
-    source.buffer = buffer;
-    filter.type = "bandpass";
-    filter.frequency.setValueAtTime(850, context.currentTime);
-    filter.frequency.exponentialRampToValueAtTime(2600, context.currentTime + 0.16);
-    filter.frequency.exponentialRampToValueAtTime(700, context.currentTime + 0.4);
-    filter.Q.value = 0.55;
-    gain.gain.setValueAtTime(0.0001, context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.045, context.currentTime + 0.035);
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.42);
-    source.connect(filter).connect(gain).connect(context.destination);
-    source.start();
-    source.stop(context.currentTime + 0.42);
-  } catch {
-    // Sound is decorative; unavailable audio must not interrupt setup.
-  }
-}
-
 // PageFlip owns only physical page movement. Adaetum's engine and React pages
 // continue to own all setup state, questions and provider interactions.
 export default function Book({ pageIndex, chapter, title, className = "", chapters = [], onChapter, onPageChange, footer, closing = false, returnToCover = false, onClosed, pages }: {
@@ -121,12 +89,34 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
   pages: ReactNode[];
 }) {
   const flipRef = useRef<FlipHandle | null>(null);
-  const [sound, setSound] = useState(true);
+  const spreadRef = useRef<HTMLDivElement | null>(null);
+  const fittedSize = useRef("");
+
+  // The flexible frame owns both dimensions. Give PageFlip the same ratio so
+  // its physical leaves stay aligned with the backing when the window resizes.
+  function fitLeaves() {
+    const spread = spreadRef.current;
+    const flip = flipRef.current?.pageFlip();
+    if (!spread || !flip || !spread.clientWidth || !spread.clientHeight) return;
+    if (flip.getState() !== "read") return;
+    const size = `${spread.clientWidth}:${spread.clientHeight}`;
+    if (fittedSize.current === size) return;
+    fittedSize.current = size;
+    Object.assign(flip.getSettings(), { width: spread.clientWidth / 2, height: spread.clientHeight });
+    flip.update();
+  }
+
+  useEffect(() => {
+    const spread = spreadRef.current;
+    if (!spread) return;
+    const observer = new ResizeObserver(fitLeaves);
+    observer.observe(spread);
+    return () => observer.disconnect();
+  }, []);
   const [motion, setMotion] = useState(true);
   const [reduced, setReduced] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [opening, setOpening] = useState(true);
   const [coverCentered, setCoverCentered] = useState(true);
-  const [coverSliding, setCoverSliding] = useState(true);
   const [coverDocked, setCoverDocked] = useState(false);
   const [relocking, setRelocking] = useState(false);
   const ready = useRef(false);
@@ -148,8 +138,8 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
   ], [pages.length]);
   // PageFlip registers callbacks when leaves mount. Read current controls and
   // navigation from a ref without re-registering during a turn.
-  const liveEvents = useRef({ sound, closing, returnToCover, onClosed, onPageChange, pageCount: pages.length });
-  liveEvents.current = { sound, closing, returnToCover, onClosed, onPageChange, pageCount: pages.length };
+  const liveEvents = useRef({ closing, returnToCover, onClosed, onPageChange, pageCount: pages.length });
+  liveEvents.current = { closing, returnToCover, onClosed, onPageChange, pageCount: pages.length };
 
   function finishReturnToCover() {
     if (returnedToCover.current) return;
@@ -241,11 +231,11 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
 
   function handleInit() {
     ready.current = true;
+    fitLeaves();
     const flip = flipRef.current?.pageFlip();
     if (!flip) return;
     if (!motion || reduced) {
       setCoverCentered(false);
-      setCoverSliding(false);
       flip.turnToPage(1);
       setOpening(false);
     } else {
@@ -257,7 +247,6 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
           setCoverCentered(false);
           slideTimer.current = window.setTimeout(() => {
             openingTurnStarted.current = true;
-            setCoverSliding(false);
             flip.flipNext();
             // If the first turn is rejected while the window is settling,
             // retry once and then show the first spread.
@@ -278,7 +267,6 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
   }
 
   function handleFlip(event: { data: number }) {
-    if (liveEvents.current.sound) playPageTurn();
     if (targetLeaf.current !== null) {
       // A newer tab choice made during this turn waits for read state. Do not
       // let the older landing page replace that choice in the parent.
@@ -303,6 +291,8 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
     // backing clipped until read state; the moving leaf reveals its contents
     // progressively while the cover turns.
     if (event.data !== "read") return;
+    // A resize received during a turn is applied after PageFlip finishes it.
+    requestAnimationFrame(fitLeaves);
     const flip = flipRef.current?.pageFlip();
     if (!flip) return;
     if (liveEvents.current.closing && coverTurnLanded.current && flip.getCurrentPageIndex() === 0 && !closed.current) {
@@ -334,35 +324,35 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
 
   return <Theme appearance="light" accentColor="gold" grayColor="sand" radius="small" className="grimoire-theme">
     <div className="book-desk">
-      <div className="book-toolbar"><span>ADAETUM <i> / </i> THE SANCTUARY ARCHITECT’S GRIMOIRE</span><div className="book-controls"><button type="button" aria-pressed={sound} aria-label={`Page turn sound ${sound ? "on" : "off"}`} title={`Page turn sound ${sound ? "on" : "off"}`} onClick={() => setSound(v => !v)}>{sound ? <Volume2 size={13} /> : <VolumeX size={13} />}</button><button type="button" disabled={reduced} aria-pressed={!motion || reduced} onClick={() => setMotion(v => !v)}>{reduced ? "Reduced motion" : motion ? "Pause page turns" : "Enable page turns"}</button></div></div>
-      <div className={`setup grimoire ${className}`} role="region" aria-roledescription="book" aria-label={`Adaetum grimoire: ${title}`} data-opening={opening} data-cover-centered={coverCentered} data-closing={closing} data-returning-cover={returnToCover} data-cover-docked={coverDocked} onTransitionEnd={(event) => {
+      <div className="book-toolbar"><span>ADAETUM <i> / </i> THE SANCTUARY ARCHITECT’S GRIMOIRE</span><div className="book-controls"><button type="button" disabled={reduced} aria-pressed={!motion || reduced} onClick={() => setMotion(v => !v)}>{reduced ? "Reduced motion" : motion ? "Pause page turns" : "Enable page turns"}</button></div></div>
+      <div ref={spreadRef} className={`setup grimoire ${className}`} role="region" aria-roledescription="book" aria-label={`Adaetum grimoire: ${title}`} data-opening={opening} data-cover-centered={coverCentered} data-closing={closing} data-returning-cover={returnToCover} data-cover-docked={coverDocked} onTransitionEnd={(event) => {
         if (coverDocked && event.target === event.currentTarget && event.propertyName === "transform") finishCoverSlide();
       }}>
         <div className="book-cover" aria-hidden="true" />
         <div className="page-stack" aria-hidden="true" />
         <div className="book-binding" aria-hidden="true" />
         <div className="book-ribbon" aria-hidden="true" />
-        {(coverSliding || coverDocked) && <div className="travel-cover" aria-hidden="true"><BookCover />{relocking && <CoverLock phase="relocking" onAnimationEnd={finishReturnToCover} />}</div>}
+        {coverDocked && <div className="travel-cover" aria-hidden="true"><BookCover />{relocking && <CoverLock phase="relocking" onAnimationEnd={finishReturnToCover} />}</div>}
         <PageContent.Provider value={{ pages, chapters, activeChapter: chapter, onChapter }}>
           <HTMLFlipBook
           ref={flipRef as React.RefObject<never>}
           className="adaetum-pageflip"
           style={{ margin: "0 auto" }}
           width={460}
-          height={688}
+          height={690}
           startPage={0}
           size="stretch"
           minWidth={160}
           maxWidth={520}
-          minHeight={300}
-          maxHeight={850}
+          minHeight={240}
+          maxHeight={780}
           showCover
           drawShadow
           startZIndex={0}
           flippingTime={950}
           clickEventForward
           usePortrait={false}
-          autoSize
+          autoSize={false}
           maxShadowOpacity={0.42}
           mobileScrollSupport={false}
           swipeDistance={30}

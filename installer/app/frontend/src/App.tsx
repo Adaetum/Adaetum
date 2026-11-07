@@ -54,6 +54,7 @@ export default function App() {
   const [returningToCover, setReturningToCover] = useState(false);
   const [running, setRunning] = useState(false);
   const [stopped, setStopped] = useState("");
+  const [toast, setToast] = useState<{ message: string } | null>(null);
   const [complete, setComplete] = useState(false);
   const [preflightStopped, setPreflightStopped] = useState("");
   const [live, setLive] = useState<Record<string, Status>>({});
@@ -67,7 +68,15 @@ export default function App() {
   const [handoffScreen, setHandoffScreen] = useState<Screen | null>(null);
   const [handoffAnswer, setHandoffAnswer] = useState<string | null>(null);
   const [handoffClosed, setHandoffClosed] = useState(false);
+  const [cancelPending, setCancelPending] = useState(false);
+  const cancelReset = useRef(false);
   const checking = useRef(false);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 7000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     // Stage metadata is local. Checks are explicitly requested: merely opening
@@ -77,12 +86,28 @@ export default function App() {
     Stages().then(setStages).catch(e => setPreflightStopped(String(e)));
     const off = [
       EventsOn("screen", (s: Screen) => {
+        if (cancelReset.current) return;
+        if (s.error) setToast({ message: s.error });
         setSubmitting(false);
         setLooking(null);
         setCurrent(s.stepId || null);
-        setScreen(s);
+        setScreen({ ...s, error: undefined });
       }),
       EventsOn("note", (n: Note) => {
+        if (cancelReset.current) return;
+        if (n.kind === "step-reset" || n.kind === "step-retry") {
+          setLooking(null);
+          setCurrent(n.stepId);
+          setSubmitting(false);
+          setScreen(null);
+          setCode(null);
+          setHandoffScreen(null);
+          setHandoffAnswer(null);
+          setLive(l => ({ ...l, [n.stepId]: n.kind === "step-reset" ? "running" : "needed" }));
+          setNotes(all => ({ ...all, [n.stepId]: [] }));
+          if (n.kind === "step-retry" && n.message) setToast({ message: n.message });
+          return;
+        }
         if (n.kind === "code") {
           setCode(n.message ? { code: n.message, link: n.link ?? "", stepId: n.stepId } : null);
           return;
@@ -109,6 +134,10 @@ export default function App() {
           });
       }),
       EventsOn("finished", (r: main.Report) => {
+        if (cancelReset.current) {
+          setRunning(false);
+          return;
+        }
         setRunning(false);
         setScreen(null);
         setCode(null);
@@ -140,11 +169,14 @@ export default function App() {
   }
 
   async function start(): Promise<boolean> {
+    cancelReset.current = false;
+    setToast(null);
     setNotes({});
     setLive({});
     setStopped("");
     setComplete(false);
     setDryRunComplete(false);
+    setCancelPending(false);
     setHandoffScreen(null);
     setHandoffAnswer(null);
     setHandoffClosed(false);
@@ -170,11 +202,49 @@ export default function App() {
   }
 
   function back() {
+    setCancelPending(false);
     if (index <= 0) {
       setReturningToCover(true);
       return;
     }
     setLooking(stages[index - 1].id);
+  }
+
+  function requestCancel() {
+    setCancelPending(true);
+  }
+
+  function cancelSetup() {
+    if (!cancelPending) {
+      setCancelPending(true);
+      return;
+    }
+    cancelReset.current = true;
+    Cancel();
+    setReturningToCover(true);
+    setCancelPending(false);
+  }
+
+  // Keep the visible sheet intact through the same close animation as Back.
+  // Late engine events are ignored until a fresh run starts.
+  function clearCancelledRun() {
+    setToast(null);
+    setStopped("");
+    setPreflightStopped("");
+    setScreen(null);
+    setSubmitting(false);
+    setCode(null);
+    setLooking(null);
+    setCurrent(null);
+    setLive({});
+    setResults({});
+    setNotes({});
+    setComplete(false);
+    setDryRunComplete(false);
+    setHandoffScreen(null);
+    setHandoffAnswer(null);
+    setHandoffClosed(false);
+    setHasStarted(false);
   }
 
   function answer(value: string) {
@@ -213,20 +283,22 @@ export default function App() {
         {complete && !dryRunMode && item.id === shownId && <Callout.Root color="green" mb="4"><Callout.Icon><Check size={16} /></Callout.Icon><Callout.Text>All quests complete. Your server kit is ready.</Callout.Text></Callout.Root>}
         {dryRunComplete && item.id === shownId && <Callout.Root color="blue" mb="4"><Callout.Icon><Check size={16} /></Callout.Icon><Callout.Text>The UI rehearsal is complete. No services or files were changed.</Callout.Text></Callout.Root>}
         <div className="guide-card">
-          {screen && screen.stepId === item.id ? <QuestionCard screen={screen} busy={submitting} simulation={dryRunMode} onAnswer={answer} onCancel={() => { setScreen(null); setSubmitting(false); Cancel(); }} /> : <StepView stage={{ ...item, title: journey[item.id]?.title ?? item.title }} status={statusOf(item.id)} result={results[item.id]} lines={notes[item.id] ?? []} />}
+          {screen && screen.stepId === item.id ? <QuestionCard screen={screen} busy={submitting} simulation={dryRunMode} onAnswer={answer} /> : <StepView stage={{ ...item, title: journey[item.id]?.title ?? item.title }} status={statusOf(item.id)} result={results[item.id]} lines={notes[item.id] ?? []} />}
         </div>
       </article>,
     ];
   });
 
-  if (!started) return <Welcome stages={stages} stopped={preflightStopped || stopped} resume={hasStarted} onStart={openFromCover} />;
+  if (!started) return <Welcome stages={cancelReset.current && running ? [] : stages} stopped={preflightStopped || stopped} resume={hasStarted} onStart={openFromCover} />;
 
   if (handoffClosed && handoffScreen) {
     const copyPath = !dryRunMode && handoffAnswer === "yes" ? handoffScreen.prompt.replace(/^Save a copy to\s*/, "").replace(/\?\s*$/, "") : undefined;
     return <BookHandoff isoPath={handoffScreen.intro ?? ""} copyPath={copyPath} instructions={(handoffScreen.steps ?? []).map(step => step.text)} simulation={dryRunMode} />;
   }
 
-  return <Book
+  return <>
+    {toast && <div className="setup-toast" role="status" aria-live="polite"><span>{toast.message}</span><button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}>×</button></div>}
+    <Book
     pageIndex={Math.max(0, index)}
     chapter={Math.max(0, index)}
     title={stage ? journey[stage.id]?.title ?? stage.title : "Adaetum"}
@@ -234,16 +306,17 @@ export default function App() {
     chapters={stages.map(s => ({ id: s.id, title: journey[s.id]?.title ?? s.title, status: statusOf(s.id), enabled: dryRunMode || statusOf(s.id) === "done" || s.id === shownId }))}
     onChapter={id => setLooking(id)}
     onPageChange={page => { const selected = stages[page]; if (selected) setLooking(selected.id); }}
-    footer={<footer className="footer"><Button variant="soft" color="gray" onClick={back}><ArrowLeft size={15} /> Back</Button>{running && <Button variant="soft" color="gray" onClick={() => Cancel()}>Cancel</Button>}</footer>}
+    footer={<footer className="footer"><Button variant="soft" color="gray" onClick={back}><ArrowLeft size={15} /> Back</Button>{running && <Button variant={cancelPending ? "solid" : "soft"} color={cancelPending ? "red" : "gray"} onClick={cancelPending ? cancelSetup : requestCancel}>{cancelPending ? "Confirm cancel" : "Cancel"}</Button>}</footer>}
     closing={returningToCover || (complete && !!handoffScreen)}
     returnToCover={returningToCover}
     onClosed={() => {
       if (returningToCover) {
         setStarted(false);
+        if (cancelReset.current) clearCancelledRun();
         setReturningToCover(false);
       } else setHandoffClosed(true);
     }}
-  />;
+  /></>;
 }
 
 // The first screen introduces the setup journey before opening the book.
@@ -364,7 +437,7 @@ function StepView({ stage, status, result, lines }: { stage: main.Stage; status:
 // One question, in the step it belongs to. A question that needs the operator to do
 // something first shows numbered actions and a short list; a plain question is just
 // the question and its control.
-function QuestionCard({ screen, busy, simulation = false, onAnswer, onCancel }: { screen: Screen; busy: boolean; simulation?: boolean; onAnswer: (v: string) => void; onCancel: () => void }) {
+function QuestionCard({ screen, busy, simulation = false, onAnswer }: { screen: Screen; busy: boolean; simulation?: boolean; onAnswer: (v: string) => void }) {
   const [text, setText] = useState("");
   useEffect(() => setText(screen.default ?? ""), [screen]);
   const confirm = screen.kind === "confirm";
@@ -433,7 +506,7 @@ function QuestionCard({ screen, busy, simulation = false, onAnswer, onCancel }: 
         </Callout.Root>
       )}
 
-      {screen.kind === "choice" && (
+      {screen.kind === "choice" && screen.options.length > 1 && (
         <RadioCards.Root value={text} onValueChange={setText} columns="1" mt="4">
           {screen.options.map((o) => (
             <RadioCards.Item key={o} value={o}>{o}</RadioCards.Item>
@@ -459,7 +532,7 @@ function QuestionCard({ screen, busy, simulation = false, onAnswer, onCancel }: 
 
       <div className="qactions">
         <Button size="3" loading={busy} onClick={() => onAnswer(confirm ? "yes" : text)}>{busy ? "Checking…" : yes}</Button>
-        <Button size="3" variant="soft" color="gray" disabled={busy} onClick={confirm ? () => onAnswer("no") : onCancel}>{no}</Button>
+        {confirm && no.toLowerCase() !== "cancel" && <Button size="3" variant="soft" color="gray" disabled={busy} onClick={() => onAnswer("no")}>{no}</Button>}
       </div>
     </div>
   );

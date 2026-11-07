@@ -10,9 +10,14 @@ SOURCE = HERE / "adaetum-art-source.svg"
 OUTPUT = HERE / "frontend" / "src" / "art"
 SVG = "http://www.w3.org/2000/svg"
 
-# Each rectangle is in source-sheet coordinates. Keep the full book faces at
-# the same 2:3 proportion so PageFlip can use the art without stretching it.
+# Rectangles use source-sheet coordinates. Full faces retain the reference
+# proportions; runtime frames use nine-slice borders and a separate emblem.
 PARTS = {
+    "cover-emblem": ("cover-emblem", (200, 275, 340, 340)),
+    "front-frame": ("front-cover", (180, 330, 700, 1050)),
+    "back-frame": ("back-cover", (3100, 330, 700, 1050)),
+    "left-frame": ("open-spread", (1120, 330, 700, 1050)),
+    "right-frame": ("open-spread", (1820, 330, 700, 1050)),
     "front-cover": ("front-cover", (180, 330, 700, 1050)),
     "back-cover": ("back-cover", (3100, 330, 700, 1050)),
     "inside-cover": ("inside-cover", (220, 1830, 490, 735)),
@@ -43,7 +48,15 @@ def main() -> None:
             "height": str(height),
         })
         root.append(deepcopy(definitions))
-        root.append(deepcopy(part))
+        artwork = deepcopy(part)
+        if name.endswith("-frame"):
+            # Material is painted continuously by CSS behind the slices. Export
+            # only strokes so stretched edge gradients cannot create seams.
+            artwork.attrib.pop("filter", None)
+            for element in artwork.iter():
+                if "fill" in element.attrib:
+                    element.set("fill", "none")
+        root.append(artwork)
         ET.ElementTree(root).write(OUTPUT / f"{name}.svg", encoding="unicode", xml_declaration=True)
 
 

@@ -15,6 +15,100 @@ type fake struct {
 	applyEr error
 }
 
+type recoveryUI struct {
+	ask    func(context.Context, Screen) (string, error)
+	events []Event
+}
+
+func (u *recoveryUI) CanRetrySteps() bool                               { return true }
+func (u *recoveryUI) Ask(ctx context.Context, s Screen) (string, error) { return u.ask(ctx, s) }
+func (u *recoveryUI) Report(e Event)                                    { u.events = append(u.events, e) }
+
+func TestWindowRetriesOnlyTheFailedStage(t *testing.T) {
+	for _, failure := range []error{ErrDeclined, errors.New("provider unavailable")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			a := &fake{id: "first", finding: Finding{Status: Needed}}
+			b := &fake{id: "second", finding: Finding{Status: Needed}, applyEr: failure}
+			c := &fake{id: "third", finding: Finding{Status: Needed}}
+			asked := 0
+			ui := &recoveryUI{ask: func(_ context.Context, s Screen) (string, error) {
+				asked++
+				if s.ID != "retry-second" || c.applied != 0 {
+					t.Fatalf("unexpected retry: %+v", s)
+				}
+				b.applyEr = nil
+				return "Retry this step", nil
+			}}
+			res, err := Run(context.Background(), []Step{a, b, c}, &Env{}, ui)
+			if err != nil || asked != 1 || len(res) != 3 || a.applied != 1 || b.applied != 2 || c.applied != 1 {
+				t.Fatalf("err=%v asks=%d results=%d applications=%d/%d/%d", err, asked, len(res), a.applied, b.applied, c.applied)
+			}
+		})
+	}
+}
+
+func TestWindowRetryRechecksPartiallyCompletedWork(t *testing.T) {
+	s := &fake{id: "publish", finding: Finding{Status: Needed}, applyEr: errors.New("connection lost")}
+	ui := &recoveryUI{ask: func(_ context.Context, _ Screen) (string, error) {
+		// The remote operation succeeded despite losing its response. Recheck
+		// must recognize that result rather than publish the same work again.
+		s.finding = Finding{Status: Done}
+		return "Retry this step", nil
+	}}
+	res, err := Run(context.Background(), []Step{s}, &Env{}, ui)
+	if err != nil || len(res) != 1 || s.applied != 1 || res[0].Finding.Status != Done {
+		t.Fatalf("err=%v results=%+v applications=%d", err, res, s.applied)
+	}
+}
+
+func TestWindowCanRecoverBlockedCheck(t *testing.T) {
+	s := &fake{id: "check", finding: Finding{Status: Blocked, Detail: "missing access"}}
+	ui := &recoveryUI{ask: func(_ context.Context, _ Screen) (string, error) {
+		s.finding = Finding{Status: Needed}
+		return "Retry this step", nil
+	}}
+	res, err := Run(context.Background(), []Step{s}, &Env{}, ui)
+	if err != nil || len(res) != 1 || s.applied != 1 {
+		t.Fatalf("err=%v results=%+v", err, res)
+	}
+}
+
+func TestCancelDuringRecoveryEndsRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &fake{id: "a", finding: Finding{Status: Needed}, applyEr: errors.New("offline")}
+	ui := &recoveryUI{ask: func(ctx context.Context, _ Screen) (string, error) {
+		cancel()
+		return "", ctx.Err()
+	}}
+	_, err := Run(ctx, []Step{s}, &Env{}, ui)
+	if !errors.Is(err, context.Canceled) || s.applied != 1 {
+		t.Fatalf("err=%v applications=%d", err, s.applied)
+	}
+}
+
+type simulatedRetry struct {
+	fake
+	attempts int
+}
+
+func (s *simulatedRetry) Simulate(context.Context, *Env, UI) error {
+	s.attempts++
+	if s.attempts == 1 {
+		return ErrDeclined
+	}
+	return nil
+}
+
+func TestWindowSimulationCanRetryWithoutRealActions(t *testing.T) {
+	s := &simulatedRetry{fake: fake{id: "simulation"}}
+	ui := &recoveryUI{ask: func(context.Context, Screen) (string, error) { return "Retry this step", nil }}
+	res, err := Run(context.Background(), []Step{s}, &Env{DryRun: true, UIOnly: true}, ui)
+	if err != nil || len(res) != 1 || s.attempts != 2 || s.applied != 0 {
+		t.Fatalf("err=%v attempts=%d applied=%d", err, s.attempts, s.applied)
+	}
+}
+
 func (f *fake) ID() string    { return f.id }
 func (f *fake) Title() string { return f.id }
 func (f *fake) Check(context.Context, *Env) (Finding, error) {

@@ -44,7 +44,7 @@
     <ns0:rect x="106" y="65" width="527" height="919" rx="8" fill="none" stroke="#e9c785" stroke-width="3" opacity=".75" />
     <ns0:path d="M95 160H641" stroke="url(#gold)" stroke-width="6" />
     <!-- A smaller seal leaves a continuous inscription area below it. -->
-    <ns0:g transform="translate(370 445) scale(.72) translate(-370 -515)">
+    <ns0:g id="cover-emblem" transform="translate(370 445) scale(.72) translate(-370 -515)">
     <ns0:circle cx="370" cy="515" r="222" fill="#301a16" fill-opacity=".42" stroke="url(#gold)" stroke-width="14" />
     <ns0:circle cx="370" cy="515" r="196" fill="none" stroke="#e9c785" stroke-width="4" />
     <ns0:path d="M249 657V498a121 121 0 0 1 242 0v159" fill="none" stroke="#c59b57" stroke-width="12" opacity=".82" />

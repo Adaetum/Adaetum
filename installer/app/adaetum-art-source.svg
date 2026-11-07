@@ -52,7 +52,7 @@
     <rect x="106" y="65" width="527" height="919" rx="8" fill="none" stroke="#e9c785" stroke-width="3" opacity=".75"/>
     <path d="M95 160H641" stroke="url(#gold)" stroke-width="6"/>
     <!-- A smaller seal leaves a continuous inscription area below it. -->
-    <g transform="translate(370 445) scale(.72) translate(-370 -515)">
+    <g id="cover-emblem" transform="translate(370 445) scale(.72) translate(-370 -515)">
     <circle cx="370" cy="515" r="222" fill="#301a16" fill-opacity=".42" stroke="url(#gold)" stroke-width="14"/>
     <circle cx="370" cy="515" r="196" fill="none" stroke="#e9c785" stroke-width="4"/>
     <path d="M249 657V498a121 121 0 0 1 242 0v159" fill="none" stroke="#c59b57" stroke-width="12" opacity=".82"/>
@@ -166,7 +166,11 @@
   <g id="lock-body" transform="translate(3200 2360)">
     <rect x="0" y="0" width="310" height="360" rx="58" fill="url(#gold)" stroke="#684522" stroke-width="13"/>
     <rect x="26" y="29" width="258" height="299" rx="39" fill="none" stroke="#fff0c2" stroke-width="7" opacity=".7"/>
-    <path d="M154 130a47 47 0 1 1 0 94l-14 62h29l-14-62" fill="#5a3820" stroke="#3f2719" stroke-width="8"/>
+    <!-- Keyhole: a clean circular bow with a tapered ward below it. Keep it
+         centered as a single silhouette so the lock-body can animate intact. -->
+    <circle cx="155" cy="153" r="38" fill="#4b2d1d" stroke="#3b2418" stroke-width="7"/>
+    <path d="M132 171h46l-10 70h-26z" fill="#4b2d1d" stroke="#3b2418" stroke-width="7" stroke-linejoin="round"/>
+    <circle cx="143" cy="140" r="8" fill="#f8d995" opacity=".42"/>
     <path d="M70 78H240M70 285H240" stroke="#9d6c32" stroke-width="5" opacity=".7"/>
   </g>
 

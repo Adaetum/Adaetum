@@ -203,7 +203,7 @@ func (w windowUI) Ask(ctx context.Context, s engine.Screen) (string, error) {
 }
 
 func (w windowUI) Report(e engine.Event) {
-	if e.Kind == engine.StepStarted {
+	if e.Kind == engine.StepStarted || e.Kind == engine.StepReset {
 		w.app.mu.Lock()
 		w.app.current = e.StepID
 		w.app.mu.Unlock()
@@ -214,3 +214,6 @@ func (w windowUI) Report(e engine.Event) {
 // CanRetry tells the engine a rejected answer can be shown on the question and
 // asked again, which is what the window does.
 func (windowUI) CanRetry() bool { return true }
+
+// A window keeps a failed stage available until the operator retries or cancels.
+func (windowUI) CanRetrySteps() bool { return true }

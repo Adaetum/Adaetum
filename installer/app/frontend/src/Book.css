@@ -1,13 +1,17 @@
 /* One spread, two equal leaves. The cover and page block stay outside the
    content box; the spine is the transform origin for both turn directions. */
 .grimoire-theme { height: 100vh; background: #171310; }
-.book-desk { height: 100%; box-sizing: border-box; padding: 47px 90px 25px; background: radial-gradient(ellipse at 50% 35%, #49392b, #1c1713 65%, #100e0c); }
+.setup-toast { position: fixed; z-index: 100; top: 48px; left: 50%; transform: translateX(-50%); display: flex; align-items: start; gap: 18px; width: max-content; max-width: min(520px, calc(100vw - 48px)); box-sizing: border-box; padding: 14px 18px; border: 1px solid #bc9764; border-radius: 8px; background: #38251e; color: #f3dfbc; box-shadow: 0 8px 24px #0006; font: 14px/1.5 system-ui, sans-serif; overflow-wrap: anywhere; }
+.setup-toast button { flex: none; border: 0; background: none; color: inherit; font: 22px/1 system-ui, sans-serif; cursor: pointer; padding: 0 2px; }
+.book-desk { --desk-top: 47px; --desk-bottom: 25px; height: 100%; box-sizing: border-box; padding: var(--desk-top) 90px var(--desk-bottom); background: radial-gradient(ellipse at 50% 35%, #49392b, #1c1713 65%, #100e0c); }
 .book-toolbar { position: absolute; z-index: 10; top: 16px; left: 85px; right: 30px; display: flex; justify-content: space-between; align-items: center; color: #b9a58b; font-size: 9px; letter-spacing: .13em; pointer-events: none; }
 .book-toolbar i { color: #775f44; font-style: normal; margin: 0 8px; }
 .book-controls { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
 .book-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; font: inherit; letter-spacing: .02em; color: #e1c18d; background: none; border: 0; cursor: pointer; padding: 5px; pointer-events: auto; --wails-draggable: no-drag; }
 .book-toolbar button:focus-visible { outline: 2px solid #d2ad70; outline-offset: 2px; }
-.setup.grimoire { --paper: #e9d9b6; --ink: #30271e; position: relative; isolation: isolate; width: 100%; height: 100%; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: none; perspective: 2200px; overflow: visible; color: var(--ink); }
+.setup.grimoire { --paper: #e9d9b6; --ink: #30271e; position: relative; isolation: isolate; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: none; perspective: 2200px; overflow: visible; color: var(--ink); }
+/* Frames stretch into the available desk; their nine-slice corners do not. */
+.setup.grimoire, .closed-stage { width: min(100%, 1040px); height: 100%; margin: 0 auto; container-type: inline-size; }
 .setup.grimoire { display: block; }
 .grimoire[data-opening="true"][data-cover-centered="true"] { transform: translateX(-25%); }
 .grimoire[data-opening="true"][data-cover-centered="false"] { transform: translateX(0); transition: transform 420ms ease-in-out; }
@@ -38,6 +42,7 @@
    backing from the start of either cover turn so it cannot appear under a
    half-turned leaf. */
 .grimoire:is([data-opening="true"], [data-returning-cover="true"]) > :is(.book-cover, .page-stack, .page-stack-edges) { clip-path: inset(-24px -24px -24px 50%); }
+.grimoire[data-opening="true"] > :is(.book-cover, .page-stack, .page-stack-edges) { visibility: hidden; clip-path: none; }
 .grimoire:is([data-opening="true"], [data-returning-cover="true"]) > :is(.book-ribbon, .book-footer) { visibility: hidden; }
 .book-footer { position: absolute; z-index: 6; left: 28px; right: 28px; bottom: 38px; pointer-events: auto; }
 .grimoire[data-closing="true"] > .book-footer, .grimoire[data-closing="true"] > .book-folio { opacity: 0; pointer-events: none; }
@@ -97,7 +102,7 @@
 .grimoire .outcome { color: #755b38; padding-top: 12px; gap: 8px; }
 .grimoire .outcome b { font-size: 11px; }
 .grimoire .outcome p { color: #74644e; font-size: 12px; line-height: 1.4; margin-top: 3px; }
-.grimoire .footer { background: none; border: 0; padding: 0 30px; border-color: #9a7e5333; gap: 14px; }
+.grimoire .footer { justify-content: flex-start; background: none; border: 0; padding: 0 30px; border-color: #9a7e5333; gap: 14px; }
 .grimoire .activity li, .grimoire .quiet { color: #594936; font-size: 13px; }
 .grimoire .chip { background: #fffaec40; border-color: #987a4933; color: #594936; font-size: 12px; }
 .grimoire .chips-title, .grimoire .details summary, .grimoire .details ul.plain { color: #68563f; }
@@ -113,7 +118,7 @@
 /* The resting cover occupies exactly one leaf, centered on the same desk as
    the spread. These dimensions also set the opening sheet's starting position. */
 .closed-welcome { height: 100vh; color: #e6d3ae; }
-.closed-stage { position: relative; height: 100%; }
+.closed-stage { position: relative; }
 .closed-welcome .book-desk { padding-left: 90px; padding-right: 90px; }
 .closed-grimoire { position: absolute; inset: 0 25%; border-radius: 5px 10px 10px 5px; background: #361e18; box-shadow: -7px 2px 0 #24130f, 8px 8px 0 #2a1913, 0 20px 35px #0009; }
 .closed-grimoire::before { content: ""; position: absolute; inset: 7px -5px -6px 8px; background: repeating-linear-gradient(0deg, #b09a76 0 1px, #e7d4ad 1px 3px, #c6b28f 3px 4px); border-radius: 0 6px 8px 0; }
@@ -164,7 +169,7 @@
   .grimoire[data-returning-cover="true"][data-cover-docked="true"] { transition: none; }
 }
 @media (max-width: 850px) {
-  .book-desk { padding: 44px 69px 20px; }
+  .book-desk { --desk-top: 44px; --desk-bottom: 20px; padding: var(--desk-top) 69px var(--desk-bottom); }
   .closed-welcome .book-desk { padding-left: 69px; padding-right: 69px; }
   .book-toolbar { left: 69px; right: 18px; }
   .book-toolbar > span { font-size: 8px; letter-spacing: .05em; }
@@ -207,15 +212,20 @@
 
 /* The source sheet exports complete faces. Keep UI text above the art and
    each moving lock part on its own layer so page and unlock motion still work. */
-.grimoire-page.left-leaf { background: #eddfbf url("./art/left-page.svg") center / 100% 100% no-repeat; }
-.grimoire-page.right-leaf { background: #eddfbf url("./art/right-page.svg") center / 100% 100% no-repeat; }
-.grimoire-page.cover-leaf { position: relative; border: 0; box-shadow: none; background: #45251f url("./art/front-cover.svg") center / 100% 100% no-repeat; }
-.grimoire-page.back-cover-leaf { background-image: url("./art/back-cover.svg"); }
-.page-stack { background: #e9d9b6 url("./art/left-page.svg") left / 50% 100% no-repeat; }
-.page-stack::after { content: ""; position: absolute; inset: 0 0 0 50%; background: url("./art/right-page.svg") center / 100% 100% no-repeat; }
-.book-cover { background: #49251f url("./art/back-cover.svg") center / 50% 100% repeat-x; }
-.closed-cover-content { display: block; border: 0; background: #45251f url("./art/front-cover.svg") center / 100% 100% no-repeat; box-shadow: none; overflow: hidden; }
-.handoff-book-cover { border: 0; background: #45251f url("./art/back-cover.svg") center / 100% 100% no-repeat; box-shadow: none; }
+.grimoire-page.left-leaf, .grimoire-page.right-leaf { background: linear-gradient(90deg, #dfcba5, #eddfbf 12%, #eddfbf 88%, #dfcba5); }
+.grimoire-page.cover-leaf { position: absolute; border: 0; box-shadow: none; }
+.page-stack { background: repeating-linear-gradient(3deg, #6f542008 0 1px, transparent 1px 5px), linear-gradient(90deg, #d6c29c, #e9d9b6 8%, #eddfbf 48%, #d6c29c 50%, #eddfbf 52%, #e9d9b6 92%, #d6c29c); }
+.book-cover { background: #49251f; }
+.closed-cover-content { display: block; padding: 0; border: 0; box-shadow: none; overflow: hidden; }
+.handoff-book-cover { border: 0; box-shadow: none; }
+/* Decoration is a pointer-free overlay, so border thickness cannot alter the
+   content box or PageFlip's leaf measurements. The center is live material. */
+:is(.closed-cover-content, .travel-cover, .grimoire-page.cover-leaf, .handoff-book-cover) { background: radial-gradient(ellipse at 60% 25%, #62382b, #361e18); }
+:is(.closed-cover-content, .travel-cover, .grimoire-page, .handoff-book-cover)::before { content: ""; position: absolute; inset: 0; pointer-events: none; border: 60px solid transparent; border-image: url("./art/front-frame.svg") 120 / 60px stretch; }
+.grimoire-page.left-leaf::before { border-image: url("./art/left-frame.svg") 100 / 50px stretch; }
+.grimoire-page.right-leaf::before { border-image: url("./art/right-frame.svg") 100 / 50px stretch; }
+:is(.back-cover-leaf, .handoff-book-cover)::before { border-image-source: url("./art/back-frame.svg"); }
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover)::after { content: ""; position: absolute; left: 53%; top: 42.4%; transform: translate(-50%, -50%); width: 49%; max-height: 31%; aspect-ratio: 1; background: url("./art/cover-emblem.svg") center / contain no-repeat; pointer-events: none; }
 .closed-grimoire::before, .handoff-book-pages { background: repeating-linear-gradient(0deg, #af9670 0 1px, #e8d6b1 1px 3px, #c8b18b 3px 4px); }
 .closed-cover-content .cover-inscription, .front-cover-leaf .cover-inscription, .travel-cover .cover-inscription { position: absolute; inset: 0; display: block; width: auto; pointer-events: none; }
 .closed-cover-content .cover-kicker, .front-cover-leaf .cover-kicker, .travel-cover .cover-kicker { position: absolute; top: 8%; left: 19%; right: 13%; font-size: 9px; line-height: 1.4; color: #f0d4a0; }
@@ -226,6 +236,14 @@
 .closed-cover-content .closed-intro { position: absolute; top: 77%; left: 19%; right: 13%; margin: 0; color: #f0d6b3; font-size: 12px; line-height: 1.5; }
 .closed-cover-content .welcome-actions { position: absolute; bottom: 8%; left: 19%; right: 13%; margin: 0; }
 .closed-cover-content .welcome-actions .rt-Button { min-height: 34px; }
+/* Resting, turning and docking covers all measure type against the stable
+   spread, never a leaf whose layout PageFlip rewrites during the animation. */
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover) .cover-kicker { font-size: .98cqw; }
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover) .cover-title { font-size: 3.915cqw; }
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover) .cover-subtitle { font-size: 1.52cqw; }
+.closed-cover-content .closed-intro { font-size: 1.305cqw; }
+.closed-cover-content .welcome-actions .rt-Button { font-size: 1.52cqw; height: 4cqw; min-height: 3.7cqw; padding-inline: 1.5cqw; gap: .75cqw; }
+.closed-cover-content .welcome-actions .rt-Button svg { width: 1.75cqw; height: 1.75cqw; }
 .cover-lock-eye { position: absolute; z-index: 3; top: 50%; right: -27px; width: 61px; height: auto; transform: translateY(-50%); pointer-events: none; }
 .cover-lock { right: -55px; width: 108px; height: 125px; }
 .cover-lock img { position: absolute; display: block; height: auto; }

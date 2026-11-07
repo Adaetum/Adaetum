@@ -38,7 +38,11 @@
   <ns0:g id="lock-body" transform="translate(3200 2360)">
     <ns0:rect x="0" y="0" width="310" height="360" rx="58" fill="url(#gold)" stroke="#684522" stroke-width="13" />
     <ns0:rect x="26" y="29" width="258" height="299" rx="39" fill="none" stroke="#fff0c2" stroke-width="7" opacity=".7" />
-    <ns0:path d="M154 130a47 47 0 1 1 0 94l-14 62h29l-14-62" fill="#5a3820" stroke="#3f2719" stroke-width="8" />
+    <!-- Keyhole: a clean circular bow with a tapered ward below it. Keep it
+         centered as a single silhouette so the lock-body can animate intact. -->
+    <ns0:circle cx="155" cy="153" r="38" fill="#4b2d1d" stroke="#3b2418" stroke-width="7" />
+    <ns0:path d="M132 171h46l-10 70h-26z" fill="#4b2d1d" stroke="#3b2418" stroke-width="7" stroke-linejoin="round" />
+    <ns0:circle cx="143" cy="140" r="8" fill="#f8d995" opacity=".42" />
     <ns0:path d="M70 78H240M70 285H240" stroke="#9d6c32" stroke-width="5" opacity=".7" />
   </ns0:g>
 

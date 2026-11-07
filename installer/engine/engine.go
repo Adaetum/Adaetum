@@ -154,6 +154,8 @@ const (
 	StepStarted  = "step-started"
 	StepFinished = "step-finished"
 	StepFailed   = "step-failed"
+	StepReset    = "step-reset"
+	StepRetry    = "step-retry"
 	// Code is a one-time code the operator must enter on a web page (GitHub's device
 	// sign-in): Message is the code and Link is the page. The front end shows it
 	// prominently with a button to open the page; the step carries on by itself once
@@ -182,10 +184,61 @@ type Result struct {
 	Applied bool
 }
 
-// Run walks the steps in order. A blocked step stops a real run. A headless dry
-// run executes only Check and Plan; a UI-only rehearsal runs sample screens and
-// progress without calling any stage's real checks or actions.
+// StageRetrier opts an interactive front end into recovery of the current
+// stage. This is distinct from field validation and never applies to CI plans.
+type StageRetrier interface{ CanRetrySteps() bool }
+
+// Run preserves completed stages while an interactive window retries the current
+// stage. Headless runs stop on failure; read-only plans still inspect every stage.
 func Run(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
+	r, interactive := ui.(StageRetrier)
+	if !interactive || !r.CanRetrySteps() || (env.DryRun && !env.UIOnly) {
+		return runSteps(ctx, steps, env, ui)
+	}
+	var results []Result
+	for i, s := range steps {
+		for {
+			if err := ctx.Err(); err != nil {
+				return results, err
+			}
+			// Announce checks too: a preflight error belongs to this stage, and
+			// a retry must clear its previous presentation before asking again.
+			ui.Report(Event{StepID: s.ID(), Kind: StepReset})
+			attempt, err := runSteps(ctx, []Step{s}, env, ui)
+			if err == nil && env.UIOnly && i < len(steps)-1 {
+				err = ApproveScreen(ctx, ui, Screen{
+					ID: "continue-rehearsal-" + s.ID(), Prompt: "Continue to the next part of the setup?",
+					YesLabel: "Continue", NoLabel: "Review this step",
+				})
+			}
+			if err == nil {
+				results = append(results, attempt...)
+				ui.Report(Event{StepID: s.ID(), Kind: StepFinished})
+				break
+			}
+			if ctx.Err() != nil {
+				return results, ctx.Err()
+			}
+			// Never automatically repeat external writes. The operator retries
+			// explicitly, then Check runs again against any partially applied work.
+			message := err.Error()
+			if errors.Is(err, ErrDeclined) {
+				message = "This step was not completed. You can try it again when you are ready."
+			}
+			ui.Report(Event{StepID: s.ID(), Kind: StepRetry, Message: message})
+			if _, err := ui.Ask(ctx, Screen{
+				ID: "retry-" + s.ID(), Kind: Choice, Title: "Try this step again",
+				Intro:   "Earlier completed steps are kept. Continue to recheck and retry this step.",
+				Options: []string{"Retry this step"}, Default: "Retry this step", YesLabel: "Retry this step",
+			}); err != nil {
+				return results, err
+			}
+		}
+	}
+	return results, nil
+}
+
+func runSteps(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
 	var results []Result
 	for i, s := range steps {
 		if env.UIOnly {
@@ -258,7 +311,7 @@ func Run(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
 }
 
 // ErrDeclined is returned when the operator answers no to a question the step
-// cannot continue without. It stops the run cleanly; nothing has gone wrong.
+// cannot continue without. The window offers a retry; headless runs stop cleanly.
 var ErrDeclined = errors.New("stopped at the operator's request")
 
 // Approve asks a yes/no question that defaults to yes. A headless run therefore
