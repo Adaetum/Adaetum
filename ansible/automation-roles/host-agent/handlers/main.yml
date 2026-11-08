@@ -6,6 +6,13 @@
 
 # The agent holds a database and a certificate; a restart is quick and safe, and it
 # is the only way a new binary takes effect.
+- name: Restart the host auth service
+  tags: [service]
+  ansible.builtin.systemd_service:
+    name: "{{ host_agent_auth_service_unit }}"
+    state: restarted
+  when: host_agent_auth_enabled | bool
+
 - name: Restart the host agent
   tags: [service]
   ansible.builtin.systemd_service:

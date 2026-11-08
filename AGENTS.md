@@ -12,7 +12,11 @@ Ansible layout below.
   playbooks detect the local hostname and run only that matched host with
   `ansible_connection=local`.
 - `ansible/ansible-host-config-sync.yaml`: Kubernetes manifest for running the container.
-- `auth/`: the agent's account sign-in service (Better Auth on Bun). A separate process from the Go agent; see `agent/docs/recovery-login.md`. Tests: `cd auth && bun test`.
+- `adaetum/`: the agent software: `agent/` is the Go agent, `auth/` is its
+  account sign-in service (Better Auth on Bun), and `embed/` is its text
+  embedding service. See `adaetum/agent/docs/recovery-login.md` for auth.
+  Tests: `cd adaetum/agent && go test ./...`, `cd adaetum/auth && bun test`,
+  and `cd adaetum/embed && go test ./...`.
 - `ks-src/`: kickstart source templates, manifests, and fragments used to generate rendered kickstarts under `dist/ks-templates/`.
 - `.github/workflows/ks-worker.yml`: defines the Cloudflare KS/log Worker (worker.mjs is generated inline).
 - `installer/`: the setup program (Go; a Wails window plus a headless command). It owns the whole

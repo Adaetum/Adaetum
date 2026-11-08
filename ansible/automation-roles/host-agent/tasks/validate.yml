@@ -5,6 +5,12 @@
     that:
       - (host_agent_binary_src | length > 0) != (host_agent_binary_url | length > 0)
       - host_agent_binary_url | length == 0 or host_agent_binary_checksum is match("^sha256:[0-9a-f]{64}$")
+      - >-
+        not (host_agent_auth_enabled | bool) or
+        ((host_agent_auth_binary_src | length > 0) != (host_agent_auth_binary_url | length > 0))
+      - >-
+        not (host_agent_auth_enabled | bool) or host_agent_auth_binary_url | length == 0 or
+        host_agent_auth_binary_checksum is match("^sha256:[0-9a-f]{64}$")
       - host_agent_port | int > 0
       - >-
         (host_agent_cluster_url | length == 0 and host_agent_join_token | length == 0)
@@ -12,4 +18,5 @@
     fail_msg: >-
       Set exactly one binary source (host_agent_binary_src, or host_agent_binary_url
       with a sha256 host_agent_binary_checksum). To join a cluster agent, set the
-      cluster URL, its certificate fingerprint, and a join token together.
+      cluster URL, its certificate fingerprint, and a join token together. When
+      auth is enabled, give exactly one auth binary source and a checksum for a URL.

@@ -7,7 +7,7 @@ node, configured from `spec.imageCleanup` in `platform.yaml`. The agent plans wh
 container images no container on the node uses, re-checks each one right before
 removing it, never touches images RKE2 itself needs, and records every decision in
 `/var/log/adaetum/image-cleanup.log`. Removed images are downloaded again if an app
-needs them later. See `agent/docs/image-cleanup.md` for the safety model.
+needs them later. See `adaetum/agent/docs/image-cleanup.md` for the safety model.
 
 The role owns the unit files and the timer state. It does not build the agent: give
 it a binary with `image_cleanup_agent_src`, or install the binary another way.

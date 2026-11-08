@@ -1,0 +1,39 @@
+# Creating Jobs in the runner namespace can execute code with the runner's SSH
+# identity. Grant it only to the cluster agent; the UI keeps launching switched
+# off until an operator enables it, and requires confirmation plus an audit log.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: adaetum-agent-ansible-jobs
+  namespace: ansible
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["ansible-runner"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: adaetum-agent-ansible-jobs
+  namespace: ansible
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: adaetum-agent-ansible-jobs
+subjects:
+  - kind: ServiceAccount
+    name: adaetum-cluster-agent
+    namespace: adaetum

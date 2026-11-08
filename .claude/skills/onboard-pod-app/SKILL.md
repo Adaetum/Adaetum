@@ -224,7 +224,7 @@ file: change its template or source and re-render.
 2. **Make a scratch copy.** Never edit `pods/`:
    ```bash
    SCRATCH=<scratchpad>/onboard-<a>; mkdir -p "$SCRATCH"
-   rsync -a --exclude .git --exclude node_modules --exclude agent --exclude embed \
+   rsync -a --exclude .git --exclude node_modules --exclude adaetum \
      --exclude dist --exclude images --exclude .claude ./ "$SCRATCH"/
    ```
    Copy the whole repository minus those heavy folders, not a hand-picked list: the

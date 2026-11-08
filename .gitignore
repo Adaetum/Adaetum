@@ -38,4 +38,4 @@ cluster-local.patch
 .maintainer-overrides/
 
 # Auth service dependencies
-auth/node_modules/
+adaetum/auth/node_modules/

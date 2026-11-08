@@ -221,7 +221,7 @@ operations, follow the [Bootstrap and recovery guide](setup.md).
 - [Architecture and authority audit](docs/audit.md)
 - [Automatic host maintenance](docs/host-maintenance.md)
 - [External integration boundaries](docs/integrations.md)
-- [Host agent scope](agent/README.md)
+- [Host agent scope](adaetum/agent/README.md)
 - [Release evidence](docs/release-evidence.md)
 - [Versioning policy](docs/versioning.md)
 - [Maintainer triage and release process](docs/maintainer-process.md)

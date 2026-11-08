@@ -45,6 +45,57 @@
     creates: "{{ host_agent_token_file }}"
   notify: Restart the host agent
 
+- name: Install the optional host authentication service
+  when: host_agent_auth_enabled | bool
+  block:
+    - name: Create the private auth state directory
+      ansible.builtin.file:
+        path: "{{ host_agent_auth_state_dir }}"
+        state: directory
+        owner: "{{ host_agent_owner }}"
+        group: "{{ host_agent_group }}"
+        mode: "0700"
+
+    - name: Install auth from the controller
+      ansible.builtin.copy:
+        src: "{{ host_agent_auth_binary_src }}"
+        dest: "{{ host_agent_auth_path }}"
+        owner: "{{ host_agent_owner }}"
+        group: "{{ host_agent_group }}"
+        mode: "0755"
+      when: host_agent_auth_binary_src | length > 0
+      notify: Restart the host auth service
+
+    - name: Install auth from a URL, verifying its checksum
+      ansible.builtin.get_url:
+        url: "{{ host_agent_auth_binary_url }}"
+        dest: "{{ host_agent_auth_path }}"
+        checksum: "{{ host_agent_auth_binary_checksum }}"
+        owner: "{{ host_agent_owner }}"
+        group: "{{ host_agent_group }}"
+        mode: "0755"
+      when: host_agent_auth_binary_url | length > 0
+      notify: Restart the host auth service
+
+    # The agent checks this file at startup. Create it before either service can
+    # start so their startup order cannot race or rotate the shared credential.
+    - name: Create the local auth shared secret once
+      ansible.builtin.command:
+        cmd: "{{ host_agent_path }} token create -file {{ host_agent_auth_state_dir }}/internal-secret"
+        creates: "{{ host_agent_auth_state_dir }}/internal-secret"
+      notify: Restart the host auth service
+
+    - name: Render the auth service
+      ansible.builtin.template:
+        src: adaetum-auth.service.j2
+        dest: "/etc/systemd/system/{{ host_agent_auth_service_unit }}"
+        owner: "{{ host_agent_owner }}"
+        group: "{{ host_agent_group }}"
+        mode: "0644"
+      notify:
+        - Reload systemd for the host agent
+        - Restart the host auth service
+
 - name: Render the agent service
   tags: [service]
   ansible.builtin.template:
@@ -83,6 +134,13 @@
     name: "{{ host_agent_service_unit }}"
     enabled: true
     state: started
+
+- name: Run host auth at boot
+  ansible.builtin.systemd_service:
+    name: "{{ host_agent_auth_service_unit }}"
+    enabled: true
+    state: started
+  when: host_agent_auth_enabled | bool
 
 # JOINING. The join token is secret and single use. It is written to a private
 # file only for the duration of the command, never put on a command line, and its

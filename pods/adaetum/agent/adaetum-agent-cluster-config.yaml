@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adaetum-agent-cluster-config
+data:
+  GITEA_REPO_OWNER: 'gitea-admin'
+  GITEA_REPO_NAME: 'cluster'
+  GITOPS_REPO_BRANCH: 'main'
+  GITEA_PUBLIC_HOST: 'gitea.adaetum.invalid'

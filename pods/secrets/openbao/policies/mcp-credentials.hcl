@@ -1,6 +1,6 @@
 # The MCP credential minter reads the administrator login of each product it issues
 # a credential for, and stores the result under its own application path. It can
-# write nowhere else and read nothing else.
+# also issues the separate agent update token, and reads or writes no other paths.
 path "secret/data/apps/gitea/admin" {
   capabilities = ["read"]
 }
@@ -22,5 +22,10 @@ path "secret/data/apps/mcp/argocd" {
 }
 
 path "secret/data/apps/mcp/grafana" {
+  capabilities = ["create", "read", "update"]
+}
+
+# The agent update token is separate from the full-access MCP token.
+path "secret/data/apps/adaetum/gitops-update" {
   capabilities = ["create", "read", "update"]
 }
