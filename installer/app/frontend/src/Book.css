@@ -7,8 +7,13 @@
 .book-toolbar { position: absolute; z-index: 10; top: 16px; left: 85px; right: 30px; display: flex; justify-content: space-between; align-items: center; color: #b9a58b; font-size: 9px; letter-spacing: .13em; pointer-events: none; }
 .book-toolbar i { color: #775f44; font-style: normal; margin: 0 8px; }
 .book-controls { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
+.setup-activity { display: inline-flex; align-items: center; gap: 5px; color: #e1c18d; letter-spacing: .02em; white-space: nowrap; }
 .book-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; font: inherit; letter-spacing: .02em; color: #e1c18d; background: none; border: 0; cursor: pointer; padding: 5px; pointer-events: auto; --wails-draggable: no-drag; }
 .book-toolbar button:focus-visible { outline: 2px solid #d2ad70; outline-offset: 2px; }
+.grimoire .github-account { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: #594936; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.grimoire .selection-review dl { display: grid; gap: 14px; margin: 18px 0 0; }
+.grimoire .selection-review dt { color: #80643b; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.grimoire .selection-review dd { margin: 4px 0 0; color: #37271b; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .setup.grimoire { --paper: #e9d9b6; --ink: #30271e; position: relative; isolation: isolate; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: none; perspective: 2200px; overflow: visible; color: var(--ink); }
 /* Frames stretch into the available desk; their nine-slice corners do not. */
 .setup.grimoire, .closed-stage { width: min(100%, 1040px); height: 100%; margin: 0 auto; container-type: inline-size; }
@@ -25,17 +30,19 @@
 .grimoire-page.cover-leaf { display: flex; align-items: center; justify-content: center; border: 5px double #a98049; background: radial-gradient(ellipse at 60% 25%, #62382b, #361e18); box-shadow: inset 0 0 0 9px #2e1b16, inset 0 0 0 10px #a9804970; }
 .grimoire .chapter-page, .grimoire .action-page { box-sizing: border-box; width: 100%; height: 100%; min-width: 0; padding: 40px 38px 100px; }
 .grimoire .chapter-page { display: flex; flex-direction: column; overflow-y: auto; padding-left: 58px; background: repeating-linear-gradient(4deg, #6f542006 0 1px, transparent 1px 5px); }
-.grimoire .action-page { height: calc(100% - 90px); overflow-y: auto; padding-bottom: 12px; padding-right: 58px; padding-left: 38px; border-left: 1px solid #876a4233; box-shadow: inset 14px 0 19px -19px #594025aa; }
+.grimoire .action-page { height: 100%; overflow-y: auto; padding-bottom: 36px; padding-right: 72px; padding-left: 38px; border-left: 1px solid #876a4233; box-shadow: inset 14px 0 19px -19px #594025aa; }
 .grimoire .chapter-page .chapter-title { font: 30px/1.12 Georgia, serif; color: #37271b; margin: 0; }
 /* The artwork frames the margins; content owns its spacing within the page. */
 .grimoire .chapter-page .eyebrow, .grimoire .action-page > .eyebrow { margin-bottom: 18px; }
 .grimoire .action-page > .title { margin-top: 0; }
 .grimoire .chapter-page .eyebrow { color: #785729; font-size: 9px; letter-spacing: .16em; }
 .grimoire .chapter-page .chapter-purpose { margin-top: 17px; color: #594936; font: italic 15px/1.45 Georgia, serif; }
-.grimoire .chapter-rule { width: 72%; height: 1px; background: linear-gradient(90deg, #92724777, transparent); margin: 8px 0; }
-.grimoire .chapter-outcome { margin-top: auto; padding-top: 24px; color: #705632; }
+.grimoire .chapter-rule { width: 72%; height: 1px; background: linear-gradient(90deg, #92724777, transparent); margin: 10px 0 0; }
+.grimoire .chapter-overview { display: grid; gap: 14px; margin-top: 0; padding-top: 14px; border-top: 1px solid #92724744; }
+.grimoire .chapter-overview-block small { display: block; color: #80643b; font-size: 9px; letter-spacing: .1em; }
+.grimoire .chapter-overview-block p { margin: 5px 0 0; color: #594936; font-size: 12px; line-height: 1.45; }
+.grimoire .chapter-outcome { margin-top: auto; padding-top: 18px; color: #705632; }
 .grimoire .chapter-outcome small { text-transform: uppercase; font-size: 9px; letter-spacing: .1em; }
-.grimoire .chapter-outcome p { color: #594936; font-size: 13px; line-height: 1.55; margin: 7px 0 0; }
 .leaf-tabs { position: absolute; inset: 0; z-index: 7; pointer-events: none; }
 .grimoire[data-opening="true"] > .book-folio { opacity: 0; }
 /* PageFlip owns the turning cover. Hide the left half of the decorative
@@ -44,8 +51,14 @@
 .grimoire:is([data-opening="true"], [data-returning-cover="true"]) > :is(.book-cover, .page-stack, .page-stack-edges) { clip-path: inset(-24px -24px -24px 50%); }
 .grimoire[data-opening="true"] > :is(.book-cover, .page-stack, .page-stack-edges) { visibility: hidden; clip-path: none; }
 .grimoire:is([data-opening="true"], [data-returning-cover="true"]) > :is(.book-ribbon, .book-footer) { visibility: hidden; }
-.book-footer { position: absolute; z-index: 6; left: 28px; right: 28px; bottom: 38px; pointer-events: auto; }
+.book-footer { position: absolute; z-index: 6; left: 28px; right: 50%; bottom: 38px; pointer-events: auto; }
 .grimoire[data-closing="true"] > .book-footer, .grimoire[data-closing="true"] > .book-folio { opacity: 0; pointer-events: none; }
+/* The note sits beneath the turning leaf; only the left-hand book backing
+   remains once the final turn starts. */
+.grimoire[data-closing="true"][data-returning-cover="false"] > :is(.book-cover, .page-stack, .page-stack-edges) { clip-path: inset(-24px 50% -24px -24px); }
+.grimoire[data-closing="true"][data-returning-cover="false"] > :is(.book-binding, .book-ribbon) { visibility: hidden; }
+.book-over-handoff { position: fixed; inset: 0; z-index: 1; }
+.book-over-handoff .grimoire-theme, .book-over-handoff .book-desk { background: transparent; }
 .page-stack { position: absolute; z-index: 0; inset: 0; border-radius: 8px; background: repeating-linear-gradient(3deg, #6f542008 0 1px, transparent 1px 5px), linear-gradient(90deg, #d6c29c, #e9d9b6 8%, #eddfbf 48%, #d6c29c 50%, #eddfbf 52%, #e9d9b6 92%, #d6c29c); pointer-events: none; }
 .page-stack-edges { position: absolute; z-index: 5; inset: 0; overflow: visible; pointer-events: none; }
 .page-edge-bottom { position: absolute; left: 4px; right: 4px; height: 1px; border-radius: 0 0 4px 4px; background: linear-gradient(90deg, #c0a77e, #f0e2c3 8%, #ddcaa5 50%, #f0e2c3 92%, #c0a77e); box-shadow: 0 1px 0 #fff6; }
@@ -95,9 +108,16 @@
 .grimoire .instr li { background: #fffaec30; border-color: #987a4933; padding: 7px 9px; gap: 9px; }
 .grimoire .instr .num { color: #765326; background: #8e6d2d12; width: 22px; height: 22px; }
 .grimoire .instr-text { font-size: 13px; line-height: 1.4; }
+.grimoire .qcard:is([data-screen="cloudflare-token"], [data-screen="tailscale-token"]) .instr { gap: 6px; margin-top: 10px; }
+.grimoire .qcard:is([data-screen="cloudflare-token"], [data-screen="tailscale-token"]) .instr li { background: none; border: 0; padding: 0; align-items: start; }
+.grimoire .qcard:is([data-screen="cloudflare-token"], [data-screen="tailscale-token"]) .instr .num { width: 20px; height: 20px; }
+.grimoire .qcard:is([data-screen="cloudflare-token"], [data-screen="tailscale-token"]) .field { margin-top: 10px; }
+.grimoire .qcard:is([data-screen="cloudflare-token"], [data-screen="tailscale-token"]) .qactions { margin-top: 9px; padding-top: 9px; }
 .grimoire .field { margin-top: 12px; }
 .grimoire .field label { color: #594936; font-size: 12px; margin-bottom: 6px; }
 .grimoire .qactions { margin-top: 13px; padding-top: 12px; border-color: #9a7e534d; gap: 10px; }
+.grimoire .choice-actions { margin-top: 13px; padding-top: 12px; border-top: 1px solid #9a7e534d; gap: 10px; }
+.grimoire .choice-actions .rt-Button { font-size: 13px; }
 .grimoire .qactions .rt-Button { font-size: 13px; height: 34px; }
 .grimoire .outcome { color: #755b38; padding-top: 12px; gap: 8px; }
 .grimoire .outcome b { font-size: 11px; }
@@ -133,13 +153,14 @@
 .handoff-screen { box-sizing: border-box; height: 100vh; padding: 52px 7vw 34px; color: #30271e; background: radial-gradient(ellipse at 50% 38%, #49392b, #1c1713 68%, #100e0c); }
 .handoff-stage { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(350px, 1fr); align-items: center; gap: clamp(28px, 6vw, 82px); width: min(100%, 970px); height: 100%; margin: 0 auto; }
 .handoff-closed-book { position: relative; isolation: isolate; justify-self: center; width: min(100%, 330px); aspect-ratio: .66; border: 2px solid #8e6940; border-radius: 9px 13px 14px 9px; background: linear-gradient(90deg, #39201c, #642f27 47%, #281713 50%, #592a22 53%, #39201c); box-shadow: inset 0 0 0 4px #2b1a14, inset 0 0 0 5px #ab7b444d, 0 19px 34px #000a, 0 5px 0 #1c120e; }
-.handoff-book-pages { position: absolute; z-index: 0; inset: 9px -12px -8px 11px; border-radius: 0 8px 9px 0; background: repeating-linear-gradient(0deg, #b09a76 0 1px, #e7d4ad 1px 3px, #c6b28f 3px 4px); box-shadow: 5px 5px 8px #0006; }
+.handoff-book-pages { position: absolute; z-index: 0; inset: 9px 11px -8px -12px; border-radius: 8px 0 0 9px; background: repeating-linear-gradient(0deg, #b09a76 0 1px, #e7d4ad 1px 3px, #c6b28f 3px 4px); box-shadow: -5px 5px 8px #0006; }
 .handoff-book-cover { position: absolute; z-index: 1; inset: 6px; display: grid; place-items: center; border: 5px double #a98049; border-radius: 5px 9px 10px 5px; background: radial-gradient(ellipse at 60% 25%, #62382b, #361e18); box-shadow: inset 0 0 0 9px #2e1b16, inset 0 0 0 10px #a9804970, inset 18px 0 16px -12px #100805bb; text-align: center; }
 .handoff-book-cover .cover-inscription { gap: 12px; padding: 18px; }
 .handoff-book-cover .cover-seal { width: 63px; height: 63px; font-size: 45px; }
 .handoff-book-cover .cover-title { font-size: 29px; }
 .handoff-book-cover .cover-subtitle { font-size: 12px; }
 .handoff-note { position: relative; box-sizing: border-box; padding: 30px 34px 27px; border: 1px solid #b39a71; background: linear-gradient(115deg, #f0e2c3, #e5d1a9); box-shadow: 0 15px 34px #0007, inset 0 0 0 5px #eadbb9, inset 0 0 0 6px #b99b6c66; }
+.handoff-screen[data-closing="true"] .handoff-closed-book, .handoff-screen[data-closing="true"] .book-toolbar { visibility: hidden; }
 .handoff-note::after { content: ""; position: absolute; top: 0; right: 0; width: 24px; height: 24px; background: linear-gradient(225deg, #4a3928 0 49%, #c9b287 50%); box-shadow: -2px 2px 3px #4a392822; }
 .handoff-note-heading { display: flex; justify-content: space-between; color: #80643b; font-size: 9px; letter-spacing: .14em; }
 .handoff-note h1 { margin: 15px 0 7px; color: #37271b; font: 30px/1.12 Georgia, serif; }
@@ -175,7 +196,7 @@
   .book-toolbar > span { font-size: 8px; letter-spacing: .05em; }
   .grimoire .chapter-page, .grimoire .action-page { padding: 30px 43px 90px; }
   .grimoire .chapter-page { padding-left: 43px; }
-  .grimoire .action-page { padding-right: 43px; padding-left: 43px; }
+  .grimoire .action-page { padding-right: 43px; padding-left: 43px; padding-bottom: 36px; }
   .grimoire .chapter-page .chapter-title { font-size: 30px; }
   .tab-slot { width: 34px; height: clamp(34px, 6.5vh, 43px); }
   .book-tab { width: 34px; padding: 2px; }
@@ -225,6 +246,7 @@
 .grimoire-page.left-leaf::before { border-image: url("./art/left-frame.svg") 100 / 50px stretch; }
 .grimoire-page.right-leaf::before { border-image: url("./art/right-frame.svg") 100 / 50px stretch; }
 :is(.back-cover-leaf, .handoff-book-cover)::before { border-image-source: url("./art/back-frame.svg"); }
+:is(.back-cover-leaf, .handoff-book-cover)::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 42%; max-height: 30%; aspect-ratio: 1; background: url("./art/cover-emblem.svg") center / contain no-repeat; pointer-events: none; }
 :is(.closed-cover-content, .front-cover-leaf, .travel-cover)::after { content: ""; position: absolute; left: 53%; top: 42.4%; transform: translate(-50%, -50%); width: 49%; max-height: 31%; aspect-ratio: 1; background: url("./art/cover-emblem.svg") center / contain no-repeat; pointer-events: none; }
 .closed-grimoire::before, .handoff-book-pages { background: repeating-linear-gradient(0deg, #af9670 0 1px, #e8d6b1 1px 3px, #c8b18b 3px 4px); }
 .closed-cover-content .cover-inscription, .front-cover-leaf .cover-inscription, .travel-cover .cover-inscription { position: absolute; inset: 0; display: block; width: auto; pointer-events: none; }
@@ -233,17 +255,18 @@
 .closed-cover-content .cover-title, .front-cover-leaf .cover-title, .travel-cover .cover-title { position: absolute; top: 19%; left: 19%; right: 13%; font-size: 36px; line-height: 1.05; }
 .closed-cover-content .cover-subtitle, .front-cover-leaf .cover-subtitle, .travel-cover .cover-subtitle { position: absolute; top: 62%; left: 19%; right: 13%; color: #f0d6a7; font-size: 14px; line-height: 1.4; }
 .closed-cover-content .cover-rule, .front-cover-leaf .cover-rule, .travel-cover .cover-rule { display: none; }
-.closed-cover-content .closed-intro { position: absolute; top: 77%; left: 19%; right: 13%; margin: 0; color: #f0d6b3; font-size: 12px; line-height: 1.5; }
-.closed-cover-content .welcome-actions { position: absolute; bottom: 8%; left: 19%; right: 13%; margin: 0; }
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover) .closed-intro { position: absolute; top: 77%; left: 19%; right: 13%; margin: 0; color: #f0d6b3; font-size: 12px; line-height: 1.5; text-align: center; }
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover) .welcome-actions { position: absolute; bottom: 8%; left: 19%; right: 13%; margin: 0; justify-content: center; }
 .closed-cover-content .welcome-actions .rt-Button { min-height: 34px; }
 /* Resting, turning and docking covers all measure type against the stable
    spread, never a leaf whose layout PageFlip rewrites during the animation. */
 :is(.closed-cover-content, .front-cover-leaf, .travel-cover) .cover-kicker { font-size: .98cqw; }
 :is(.closed-cover-content, .front-cover-leaf, .travel-cover) .cover-title { font-size: 3.915cqw; }
 :is(.closed-cover-content, .front-cover-leaf, .travel-cover) .cover-subtitle { font-size: 1.52cqw; }
-.closed-cover-content .closed-intro { font-size: 1.305cqw; }
-.closed-cover-content .welcome-actions .rt-Button { font-size: 1.52cqw; height: 4cqw; min-height: 3.7cqw; padding-inline: 1.5cqw; gap: .75cqw; }
-.closed-cover-content .welcome-actions .rt-Button svg { width: 1.75cqw; height: 1.75cqw; }
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover) .closed-intro { font-size: 1.305cqw; }
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover) .welcome-actions .rt-Button { font-size: 1.52cqw; height: 4cqw; min-height: 3.7cqw; padding-inline: 1.5cqw; gap: .75cqw; background: #998566; color: #fff; }
+:is(.closed-cover-content, .front-cover-leaf, .travel-cover) .welcome-actions .rt-Button svg { width: 1.75cqw; height: 1.75cqw; }
+.front-cover-leaf .welcome-actions { pointer-events: none; }
 .cover-lock-eye { position: absolute; z-index: 3; top: 50%; right: -27px; width: 61px; height: auto; transform: translateY(-50%); pointer-events: none; }
 .cover-lock { right: -55px; width: 108px; height: 125px; }
 .cover-lock img { position: absolute; display: block; height: auto; }

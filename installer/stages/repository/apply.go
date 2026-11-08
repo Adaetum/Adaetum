@@ -17,17 +17,47 @@ import (
 
 func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 	say := func(msg string) { ui.Report(engine.Event{StepID: stepID, Message: msg}) }
-
-	login, err := s.signIn(ctx, ui, say)
-	if err != nil {
-		return err
+	reconnect := false
+	for {
+		if reconnect {
+			if err := s.githubLogin(ctx, ui, say, false); err != nil {
+				return err
+			}
+			reconnect = false
+		}
+		login, err := s.signIn(ctx, ui, say)
+		if err != nil {
+			return err
+		}
+		ui.Report(engine.Event{StepID: stepID, Kind: "github-account", Message: login})
+		repo, err := s.configure(ctx, ui, say, login)
+		if errors.Is(err, errSwitchAccount) {
+			if os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != "" {
+				return errors.New("GitHub authentication comes from an environment variable; remove it before switching accounts")
+			}
+			res, logoutErr := s.gh(ctx, "auth", "logout", "--hostname", "github.com", "--user", login)
+			if logoutErr != nil {
+				return logoutErr
+			}
+			if !res.OK() {
+				return fmt.Errorf("could not log out of GitHub: %s", strings.TrimSpace(res.Stderr))
+			}
+			ui.Report(engine.Event{StepID: stepID, Kind: "github-account"})
+			reconnect = true
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return s.ensureActions(ctx, repo, say)
 	}
-	repo, err := s.configure(ctx, ui, say, login)
-	if err != nil {
-		return err
-	}
-	return s.ensureActions(ctx, repo, say)
 }
+
+var errSwitchAccount = errors.New("switch GitHub account")
+
+const switchAccountAnswer = "__switch_github_account__"
+const reuseRepository = "Reuse an existing private repository"
+const createRepository = "Create a new private repository"
 
 // ---- GitHub sign-in --------------------------------------------------------
 
@@ -156,20 +186,65 @@ func (s *Step) configure(ctx context.Context, ui engine.UI, say func(string), lo
 		}
 	}
 
-	if err := engine.Approve(ctx, ui, "create-or-reuse-repository", "Create or reuse a private recovery repository now?"); err != nil {
+	owner := login
+	_, interactive := ui.(engine.StageRetrier)
+	if interactive {
+		owners, err := s.repositoryOwners(ctx, login)
+		if err != nil {
+			return "", err
+		}
+		owner, err = chooseRepositoryOwner(ctx, ui, owners)
+		if err != nil {
+			return "", err
+		}
+	}
+	question := engine.Screen{ID: "create-or-reuse-repository", Kind: engine.Confirm, Prompt: "Create or reuse a private recovery repository now?", Default: "yes"}
+	if interactive {
+		question = engine.Screen{ID: question.ID, Kind: engine.Choice, Prompt: "How should Adaetum handle your recovery repository?", Options: []string{reuseRepository, createRepository}}
+	}
+	answer, err := ui.Ask(ctx, question)
+	if err != nil {
 		return "", err
 	}
-	suggested, err := s.findPreferred(ctx, login)
+	if answer == switchAccountAnswer {
+		return "", errSwitchAccount
+	}
+	if answer == reuseRepository {
+		return s.selectExisting(ctx, ui, say, owner)
+	}
+	if answer != createRepository && !strings.EqualFold(answer, "yes") && !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "true") {
+		return "", engine.ErrDeclined
+	}
+	creating := answer == createRepository
+	var suggested string
+	if creating {
+		suggested, err = s.findAvailable(ctx, owner)
+	} else {
+		suggested, err = s.findPreferred(ctx, login)
+	}
 	if err != nil {
 		return "", err
 	}
 
 	for {
-		repo, err := engine.AskText(ctx, ui, "repository", "Private recovery repository (owner/name)", suggested)
+		question := engine.Screen{ID: "repository", Kind: engine.Text, Prompt: "Private recovery repository (owner/name)", Default: suggested}
+		if creating {
+			_, name, _ := strings.Cut(suggested, "/")
+			question.Title = "Name your recovery repository"
+			question.Intro = "It will be created as a private repository under " + owner + "."
+			question.Prompt = "Repository name"
+			question.Default = name
+			question.YesLabel = "Create repository"
+			question.Creates = true
+		}
+		repo, err := ui.Ask(ctx, question)
 		if err != nil {
 			return "", err
 		}
 		repo = strings.TrimSpace(repo)
+		if creating {
+			repo = owner + "/" + repo
+		}
 		owner, name, ok := strings.Cut(repo, "/")
 		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
 			say("Enter owner/name, for example " + suggested + ".")
@@ -184,6 +259,13 @@ func (s *Step) configure(ctx context.Context, ui engine.UI, say func(string), lo
 			return "", err
 		}
 		if state == exists {
+			if creating {
+				say("That repository already exists. Choose another name or select reuse on retry.")
+				if suggested, err = s.findAvailable(ctx, owner); err != nil {
+					return "", err
+				}
+				continue
+			}
 			if usable, why := s.usable(ctx, repo, m); !usable {
 				say(why)
 				if suggested, err = s.findAvailable(ctx, owner); err != nil {
@@ -195,8 +277,10 @@ func (s *Step) configure(ctx context.Context, ui engine.UI, say func(string), lo
 				return "", err
 			}
 		} else {
-			if err := engine.ApproveCreate(ctx, ui, "create-repository", "Create "+repo+" as a private repository now?"); err != nil {
-				return "", err
+			if !creating {
+				if err := engine.ApproveCreate(ctx, ui, "create-repository", "Create "+repo+" as a private repository now?"); err != nil {
+					return "", err
+				}
 			}
 			say("Creating private recovery repository...")
 			if _, err := s.ghOut(ctx, "create the repository", "repo", "create", repo, "--private",
@@ -214,6 +298,41 @@ func (s *Step) configure(ctx context.Context, ui engine.UI, say func(string), lo
 		say("Private recovery repository ready: https://github.com/" + repo + ".git")
 		return repo, nil
 	}
+}
+
+func (s *Step) selectExisting(ctx context.Context, ui engine.UI, say func(string), owner string) (string, error) {
+	say("Finding private repositories you can administer...")
+	repos, err := s.reusableRepositories(ctx, owner)
+	if err != nil {
+		return "", err
+	}
+	if len(repos) == 0 {
+		return "", fmt.Errorf("no eligible private recovery repositories found under %s; retry this step and choose to create one", owner)
+	}
+	repo, err := engine.Choose(ctx, ui, "reuse-repository-select", "Which recovery repository would you like to use?", repos, "")
+	if err != nil {
+		return "", err
+	}
+	// Recheck after selection: visibility or permissions may have changed while
+	// the operator was deciding, and a missing repository must never be created.
+	m, state, err := s.lookup(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if state != exists {
+		return "", fmt.Errorf("%s no longer exists or is inaccessible", repo)
+	}
+	if ok, why := s.usable(ctx, repo, m); !ok {
+		return "", errors.New(why)
+	}
+	if err := s.setOrigin(ctx, "https://github.com/"+repo+".git"); err != nil {
+		return "", err
+	}
+	if err := s.trackBranch(ctx, say); err != nil {
+		return "", err
+	}
+	say("Private recovery repository ready: https://github.com/" + repo + ".git")
+	return repo, nil
 }
 
 // setOrigin points origin (fetch and push) at the recovery repository and keeps

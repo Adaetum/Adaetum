@@ -86,3 +86,41 @@ func TestAnEmptyTailnetIsNotAnError(t *testing.T) {
 		t.Fatalf("%v %v", got, err)
 	}
 }
+
+func TestEmptyTailnetUsesMagicDNSSearchDomain(t *testing.T) {
+	s := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/tailnet/-/devices":
+			fmt.Fprint(w, `{"devices":[]}`)
+		case "/tailnet/-/dns/preferences":
+			fmt.Fprint(w, `{"magicDNS":true}`)
+		case "/tailnet/-/dns/searchpaths":
+			fmt.Fprint(w, `{"searchPaths":["Tail1234.ts.net.","example.com"]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	got, err := Client{TailscaleBase: s.URL}.Tailnets(context.Background(), "t")
+	if err != nil || strings.Join(got, ",") != "tail1234.ts.net" {
+		t.Fatalf("%v %v", got, err)
+	}
+}
+
+func TestEmptyTailnetDoesNotTreatCustomSearchDomainAsTailnet(t *testing.T) {
+	s := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/tailnet/-/devices":
+			fmt.Fprint(w, `{"devices":[]}`)
+		case "/tailnet/-/dns/preferences":
+			fmt.Fprint(w, `{"magicDNS":false}`)
+		case "/tailnet/-/dns/searchpaths":
+			t.Error("should not use search paths with MagicDNS disabled")
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	got, err := Client{TailscaleBase: s.URL}.Tailnets(context.Background(), "t")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("%v %v", got, err)
+	}
+}

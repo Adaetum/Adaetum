@@ -109,6 +109,19 @@ func TestWindowSimulationCanRetryWithoutRealActions(t *testing.T) {
 	}
 }
 
+func TestSimulationMovesToNextStageWithoutExtraConfirmation(t *testing.T) {
+	first := &simulatedRetry{fake: fake{id: "first"}, attempts: 1}
+	second := &simulatedRetry{fake: fake{id: "second"}, attempts: 1}
+	ui := &recoveryUI{ask: func(_ context.Context, s Screen) (string, error) {
+		t.Fatalf("unexpected question between stages: %s", s.ID)
+		return "", nil
+	}}
+	results, err := Run(context.Background(), []Step{first, second}, &Env{DryRun: true, UIOnly: true}, ui)
+	if err != nil || len(results) != 2 || first.attempts != 2 || second.attempts != 2 {
+		t.Fatalf("err=%v results=%d attempts=%d/%d", err, len(results), first.attempts, second.attempts)
+	}
+}
+
 func (f *fake) ID() string    { return f.id }
 func (f *fake) Title() string { return f.id }
 func (f *fake) Check(context.Context, *Env) (Finding, error) {

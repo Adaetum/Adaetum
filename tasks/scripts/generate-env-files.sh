@@ -1276,7 +1276,7 @@ if [ -n "${CLOUDFLARE_API_TOKEN}" ] && [ -n "${RANCHER_PUBLIC_DOMAIN}" ]; then
     echo "Auto-generated/validated Rancher cloudflared tunnel settings from CLOUDFLARE_API_TOKEN."
   else
     echo "Warning: could not auto-generate Rancher cloudflared tunnel token from CLOUDFLARE_API_TOKEN."
-    echo "If this persists, verify the token includes Cloudflare Tunnel Write, Connectivity Directory Read/Bind/Admin, and Zone DNS Read/Write."
+    echo "If this persists, verify the token includes Cloudflare Tunnel Write and Zone DNS Read/Write."
   fi
 fi
 
@@ -1311,7 +1311,7 @@ RANCHER_CLOUDFLARED_TUNNEL_TOKEN="$(prompt_value RANCHER_CLOUDFLARED_TUNNEL_TOKE
 if [ -z "${RANCHER_CLOUDFLARED_TUNNEL_TOKEN}" ]; then
   echo "Missing required RANCHER_CLOUDFLARED_TUNNEL_TOKEN for break-glass bootstrap."
   echo "Setup should auto-generate this from CLOUDFLARE_API_TOKEN."
-  echo "Required Cloudflare scopes include Account Cloudflare Tunnel Write and Connectivity Directory Read/Bind/Admin, plus Zone DNS Read/Write."
+  echo "Required Cloudflare scopes include Account Cloudflare Tunnel Write and Zone DNS Read/Write."
   exit 1
 fi
 

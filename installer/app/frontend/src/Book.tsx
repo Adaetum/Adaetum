@@ -1,16 +1,30 @@
-import { createContext, forwardRef, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, forwardRef, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import HTMLFlipBook from "react-pageflip";
 import { Button, Theme } from "@radix-ui/themes";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, LoaderCircle } from "lucide-react";
 import { chapterNumerals } from "./journey";
 import "./Book.css";
 import BookCover from "./BookCover";
 import CoverLock from "./CoverLock";
 
 export type ChapterTab = { id: string; title: string; status: string; enabled?: boolean };
+export type BookPosition = { left: number; top: number; width: number; height: number };
 
-export function BookHandoff({ isoPath, copyPath, instructions, simulation = false }: { isoPath: string; copyPath?: string; instructions: string[]; simulation?: boolean }) {
+export function BookHandoff({ isoPath, copyPath, instructions, simulation = false, from, closing = false }: { isoPath: string; copyPath?: string; instructions: string[]; simulation?: boolean; from?: BookPosition; closing?: boolean }) {
   const [copied, setCopied] = useState(false);
+  const bookRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const book = bookRef.current;
+    if (closing) return;
+    if (!book || !from || !from.width || !from.height || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const target = book.getBoundingClientRect();
+    if (!target.width || !target.height) return;
+    const animation = book.animate([
+      { transformOrigin: "top left", transform: `translate(${from.left - target.left}px, ${from.top - target.top}px) scale(${from.width / target.width}, ${from.height / target.height})` },
+      { transformOrigin: "top left", transform: "translate(0, 0) scale(1, 1)" },
+    ], { duration: 520, easing: "ease-in-out", fill: "both" });
+    return () => animation.cancel();
+  }, [from, closing]);
   async function copyIsoPath() {
     try {
       await navigator.clipboard.writeText(copyPath || isoPath);
@@ -22,10 +36,10 @@ export function BookHandoff({ isoPath, copyPath, instructions, simulation = fals
   }
 
   return <Theme appearance="light" accentColor="gold" grayColor="sand" radius="small" className="grimoire-theme">
-    <main className="handoff-screen">
+    <main className="handoff-screen" data-closing={closing}>
       <div className="book-toolbar"><span>ADAETUM <i> / </i> YOUR FIRST SERVER</span></div>
       <div className="handoff-stage">
-        <div className="handoff-closed-book" aria-label="The Adaetum grimoire, closed">
+        <div ref={bookRef} className="handoff-closed-book" aria-label="The Adaetum grimoire, closed">
           <div className="handoff-book-pages" aria-hidden="true" />
           <div className="handoff-book-cover" />
         </div>
@@ -46,16 +60,16 @@ export function BookHandoff({ isoPath, copyPath, instructions, simulation = fals
 
 type FlipApi = { getCurrentPageIndex: () => number; getState: () => string; getSettings: () => { flippingTime: number; width: number; height: number }; update: () => void; flip: (page: number) => void; flipNext: () => void; flipPrev: () => void; turnToPage: (page: number) => void };
 type FlipHandle = { pageFlip: () => FlipApi };
-type LeafContent = { pages: ReactNode[]; chapters: ChapterTab[]; activeChapter: number; onChapter?: (id: string) => void };
+type LeafContent = { pages: ReactNode[]; chapters: ChapterTab[]; activeChapter: number; coverResume?: boolean; onChapter?: (id: string) => void };
 const PageContent = createContext<LeafContent>({ pages: [], chapters: [], activeChapter: 0 });
 type BookLeafProps = { children?: ReactNode; pageIndex?: number; className?: string; hard?: boolean };
 const BookLeaf = forwardRef<HTMLDivElement, BookLeafProps>(function BookLeaf({ children, pageIndex, className = "", hard = false }, ref) {
-  const { pages, chapters, activeChapter, onChapter } = useContext(PageContent);
+  const { pages, chapters, activeChapter, coverResume, onChapter } = useContext(PageContent);
   const leafChapter = pageIndex === undefined ? -1 : Math.floor(pageIndex / 2);
   const side = pageIndex === undefined ? "" : pageIndex % 2 === 0 ? "left" : "right";
   const tabs = chapters.map((item, i) => ({ item, i })).filter(({ i }) => side === "left" ? i < leafChapter : side === "right" && i >= leafChapter);
   return <div ref={ref} className={`grimoire-page ${className}`} data-density={hard ? "hard" : "soft"}>
-    {pageIndex === undefined ? children : pages[pageIndex]}
+    {pageIndex === undefined ? className.includes("front-cover-leaf") ? <BookCover resume={coverResume} /> : children : pages[pageIndex]}
     {/* Edge controls live on the sheet so PageFlip carries and clips them during a turn. */}
     {tabs.length > 0 && <nav className="leaf-tabs" aria-label={side === "left" ? "Previous quests" : "Current and upcoming quests"}>
       {tabs.map(({ item, i }) => {
@@ -74,7 +88,8 @@ const BookLeaf = forwardRef<HTMLDivElement, BookLeafProps>(function BookLeaf({ c
 
 // PageFlip owns only physical page movement. Adaetum's engine and React pages
 // continue to own all setup state, questions and provider interactions.
-export default function Book({ pageIndex, chapter, title, className = "", chapters = [], onChapter, onPageChange, footer, closing = false, returnToCover = false, onClosed, pages }: {
+export default function Book({ pageIndex, chapter, title, className = "", chapters = [], onChapter, onPageChange, footer, closing = false, returnToCover = false, coverResume = false, onClosed, pages, activity }: {
+  coverResume?: boolean;
   pageIndex: number;
   chapter: number;
   title: string;
@@ -85,8 +100,9 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
   footer?: ReactNode;
   closing?: boolean;
   returnToCover?: boolean;
-  onClosed?: () => void;
+  onClosed?: (position?: BookPosition) => void;
   pages: ReactNode[];
+  activity?: "working" | "waiting";
 }) {
   const flipRef = useRef<FlipHandle | null>(null);
   const spreadRef = useRef<HTMLDivElement | null>(null);
@@ -132,7 +148,7 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
   // react-pageflip rebuilds its DOM pages whenever its children prop changes.
   // Keep the physical leaves stable while live questions and progress update.
   const flipLeaves = useMemo(() => [
-    <BookLeaf key="front-cover" hard className="cover-leaf front-cover-leaf"><BookCover /></BookLeaf>,
+    <BookLeaf key="front-cover" hard className="cover-leaf front-cover-leaf" />,
     ...Array.from({ length: pages.length }, (_, index) => <BookLeaf key={`page-${index}`} pageIndex={index} className={index % 2 === 0 ? "left-leaf" : "right-leaf"} />),
     <BookLeaf key="back-cover" hard className="cover-leaf back-cover-leaf" />,
   ], [pages.length]);
@@ -145,6 +161,12 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
     if (returnedToCover.current) return;
     returnedToCover.current = true;
     liveEvents.current.onClosed?.();
+  }
+
+  function finishHandoff() {
+    const cover = spreadRef.current?.querySelector<HTMLElement>(".back-cover-leaf");
+    const rect = cover?.getBoundingClientRect();
+    liveEvents.current.onClosed?.(rect && rect.width && rect.height ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : undefined);
   }
 
   function finishCoverSlide() {
@@ -204,27 +226,30 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
     if (!closing || !ready.current || closed.current) return;
     const flip = flipRef.current?.pageFlip();
     if (!flip) return;
-    if (flip.getCurrentPageIndex() === 0) {
+    const destination = returnToCover ? 0 : pages.length + 1;
+    if (flip.getCurrentPageIndex() === destination) {
       closed.current = true;
       if (returnToCover) setCoverDocked(true);
-      else onClosed?.();
+      else requestAnimationFrame(finishHandoff);
     } else if (!motion || reduced) {
-      flip.turnToPage(0);
+      flip.turnToPage(destination);
       targetLeaf.current = null;
       closed.current = true;
-      onClosed?.();
+      if (returnToCover) onClosed?.();
+      else requestAnimationFrame(finishHandoff);
     } else {
-      targetLeaf.current = 0;
-      flip.getSettings().flippingTime = returnToCover ? 950 : 280;
+      targetLeaf.current = destination;
+      flip.getSettings().flippingTime = 950;
       // The first spread is adjacent to the front cover. A direct previous
       // turn leaves PageFlip's visible cover in sync with its page index.
       if (returnToCover && flip.getCurrentPageIndex() === 1) flip.flipPrev();
-      else turnToward(0);
-      if (returnToCover) closeFallback.current = window.setTimeout(() => {
+      else turnToward(destination);
+      closeFallback.current = window.setTimeout(() => {
         if (coverTurnLanded.current || closed.current) return;
-        flip.turnToPage(0);
+        flip.turnToPage(destination);
         closed.current = true;
-        setCoverDocked(true);
+        if (returnToCover) setCoverDocked(true);
+        else requestAnimationFrame(finishHandoff);
       }, 1400);
     }
   }, [closing, motion, reduced, returnToCover, onClosed]);
@@ -273,6 +298,10 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
       if (event.data !== targetLeaf.current) return;
       targetLeaf.current = null;
     }
+    if (liveEvents.current.closing && event.data === liveEvents.current.pageCount + 1 && !liveEvents.current.returnToCover) {
+      coverTurnLanded.current = true;
+      return;
+    }
     if (event.data === 0) {
       if (liveEvents.current.closing) coverTurnLanded.current = true;
       setOpening(true);
@@ -295,11 +324,12 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
     requestAnimationFrame(fitLeaves);
     const flip = flipRef.current?.pageFlip();
     if (!flip) return;
-    if (liveEvents.current.closing && coverTurnLanded.current && flip.getCurrentPageIndex() === 0 && !closed.current) {
+    const closedPage = liveEvents.current.returnToCover ? 0 : liveEvents.current.pageCount + 1;
+    if (liveEvents.current.closing && coverTurnLanded.current && flip.getCurrentPageIndex() === closedPage && !closed.current) {
       closed.current = true;
       if (closeFallback.current !== null) window.clearTimeout(closeFallback.current);
       if (liveEvents.current.returnToCover) setCoverDocked(true);
-      else window.requestAnimationFrame(() => liveEvents.current.onClosed?.());
+      else window.requestAnimationFrame(finishHandoff);
       return;
     }
     if (!openingTurnStarted.current) {
@@ -324,7 +354,7 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
 
   return <Theme appearance="light" accentColor="gold" grayColor="sand" radius="small" className="grimoire-theme">
     <div className="book-desk">
-      <div className="book-toolbar"><span>ADAETUM <i> / </i> THE SANCTUARY ARCHITECT’S GRIMOIRE</span><div className="book-controls"><button type="button" disabled={reduced} aria-pressed={!motion || reduced} onClick={() => setMotion(v => !v)}>{reduced ? "Reduced motion" : motion ? "Pause page turns" : "Enable page turns"}</button></div></div>
+      <div className="book-toolbar"><span>ADAETUM <i> / </i> THE SANCTUARY ARCHITECT’S GRIMOIRE</span><div className="book-controls"><span className="setup-activity" role="status" aria-live="polite">{activity === "working" ? <><LoaderCircle size={13} className="spin" aria-hidden="true" /> Working</> : activity === "waiting" ? "Waiting for you" : null}</span><button type="button" disabled={reduced} aria-pressed={!motion || reduced} onClick={() => setMotion(v => !v)}>{reduced ? "Reduced motion" : motion ? "Pause page turns" : "Enable page turns"}</button></div></div>
       <div ref={spreadRef} className={`setup grimoire ${className}`} role="region" aria-roledescription="book" aria-label={`Adaetum grimoire: ${title}`} data-opening={opening} data-cover-centered={coverCentered} data-closing={closing} data-returning-cover={returnToCover} data-cover-docked={coverDocked} onTransitionEnd={(event) => {
         if (coverDocked && event.target === event.currentTarget && event.propertyName === "transform") finishCoverSlide();
       }}>
@@ -332,8 +362,8 @@ export default function Book({ pageIndex, chapter, title, className = "", chapte
         <div className="page-stack" aria-hidden="true" />
         <div className="book-binding" aria-hidden="true" />
         <div className="book-ribbon" aria-hidden="true" />
-        {coverDocked && <div className="travel-cover" aria-hidden="true"><BookCover />{relocking && <CoverLock phase="relocking" onAnimationEnd={finishReturnToCover} />}</div>}
-        <PageContent.Provider value={{ pages, chapters, activeChapter: chapter, onChapter }}>
+        {coverDocked && <div className="travel-cover" aria-hidden="true"><BookCover resume={coverResume} />{relocking && <CoverLock phase="relocking" onAnimationEnd={finishReturnToCover} />}</div>}
+        <PageContent.Provider value={{ pages, chapters, activeChapter: chapter, coverResume, onChapter }}>
           <HTMLFlipBook
           ref={flipRef as React.RefObject<never>}
           className="adaetum-pageflip"

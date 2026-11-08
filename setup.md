@@ -150,8 +150,8 @@ ROCKY_IMAGE_TYPE=dvd task iso:download
 Use `task init:clean` when testing with different provider credentials or when
 the saved setup state should be replaced. It follows the normal guided flow but
 does not read Adaetum credentials from the OS credential store or runtime values
-from the existing `.env`. Newly validated values replace the protected local
-entries, generated `.env`, and GitHub environment secrets. It deliberately
+from the existing `.env`. Newly validated values replace the generated `.env`
+and GitHub environment secrets. It deliberately
 retains the GitHub CLI login, private recovery repository, and verified Rocky
 installer media because those are setup infrastructure rather than saved
 provider values.
@@ -159,14 +159,15 @@ provider values.
 ### Replay saved setup state
 
 After completing `task init` once, `task init:silent` reruns setup with no window and no
-questions. It reuses the credentials saved in your operating system's credential store and
+questions. It can reuse credentials saved by earlier versions in your operating system's credential store and
 the values already in `platform.yaml` and `.env`, and it never creates anything new on its
 own: it will not create a repository or start an installer download, because those need an
 operator's decision. (`task initialize` runs the same stages without that restriction.)
 
 Adaetum deliberately does not create an answers file. Public configuration remains in
 `platform.yaml`; Git owns the recovery destination; Cloudflare and Tailscale credentials
-remain in the OS credential store; and `.env` remains a gitignored runtime output. If a value
+may remain in an existing OS credential store; and `.env` remains a gitignored runtime output. New
+credentials are not saved to the OS credential store. If a value
 is missing, expired, or no longer authorized, or a question has several choices and no
 default (which DNS zone, which tailnet, which ISO), the run stops and tells you what it
 needs instead of guessing.
@@ -243,12 +244,10 @@ with `cfat_`. Creating one requires Super Administrator access. In the target
 account, open **Manage Account → Account API Tokens**, create `Adaetum
 bootstrap`, and add:
 
-The walkthrough opens <https://dash.cloudflare.com/profile/api-tokens>, which
-provides the account-token link without hardcoding an operator's Cloudflare
-account ID. Cloudflare then routes to an account-specific address such as
-`https://dash.cloudflare.com/<account-id>/api-tokens/create`.
+The walkthrough opens an account-token template that pre-fills the permissions
+below without hardcoding an operator's Cloudflare account ID. Review the
+permissions and resource scope before creating the token.
 
-- Account: `Connectivity Directory` → `Read`, `Bind`, and `Admin`
 - Account: `Account API Tokens` → `Read` and `Write`
 - Account: `Workers R2 Storage` → `Read` and `Write`
 - Account: `Cloudflare Tunnel` → `Write`
@@ -260,23 +259,13 @@ account ID. Cloudflare then routes to an account-specific address such as
 In Account Resources, include only the account that will own the cluster. In
 Zone Resources, include only its public domain/zone. The `Account API Tokens`
 Write permission allows Adaetum to derive the narrower bucket-scoped R2
-credential. This is the known-working permission set confirmed against the
-current Account API Token UI. It is intentionally documented as a validated
-baseline rather than audited least privilege until provider regression testing
-proves which individual Read and Connectivity Directory permissions can be
-removed. User-owned tokens remain a compatibility path, but setup warns before
+credential. This baseline has not been verified against a live account. User-owned
+tokens remain a compatibility path, but setup warns before
 accepting one. First-run inspects the token policy before creating or updating
 provider resources.
 
-After validating the token, first-run offers to save it for interrupted setup
-resumption. The default is Yes. Adaetum uses macOS Login Keychain, Linux
-Secret Service, or a Windows current-user DPAPI-protected store when available
-and never falls back to a plaintext credential file. The saved value is keyed
-to the selected private repository and is validated before every reuse; an invalid entry is
-removed automatically.
-
-The local protected copy exists only to resume an interrupted walkthrough. A
-successful real `task init` also syncs `CLOUDFLARE_API_TOKEN` and the other
+Setup holds the token in memory for the current run and does not save it to the
+OS credential store. A successful real `task init` also syncs `CLOUDFLARE_API_TOKEN` and the other
 required runtime credentials to the private repository's `Prod` GitHub environment. Setup
 stops if that required secret sync fails; dry-run never performs it.
 
@@ -289,9 +278,8 @@ stops if that required secret sync fails; dry-run never performs it.
   device DNS names, validate tag policy, and establish the durable enrollment identity. It is
   discarded after bootstrap and is not stored in `.env`, `platform.yaml`, or
   GitHub secrets. Create it with a **1-day expiration**, which covers setup and
-  a retry without leaving a durable user credential. With explicit approval,
-  Adaetum may keep it temporarily in the OS credential store so a cancelled
-  walkthrough can resume; it is removed automatically when rejected or expired.
+  a retry without leaving a durable user credential. New setup runs do not save
+  this token in the OS credential store.
 - `TAILSCALE_OAUTH_CLIENT_ID`
   Used for the long-term Tailscale OAuth credential.
 - `TAILSCALE_OAUTH_CLIENT_SECRET`
@@ -343,7 +331,7 @@ Tailscale's keys API with the same shape shown in Trust credentials:
 
 The temporary API access token therefore also needs OAuth Keys: Write. Tailscale
 returns the OAuth client secret only in the creation response; Adaetum captures
-it immediately, validates it, and offers OS-protected resume storage. No manual
+it immediately and validates it. No manual
 OAuth form or browser automation is involved.
 
 Setup also creates the Kubernetes Operator client in the same API-driven step.

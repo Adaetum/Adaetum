@@ -27,6 +27,97 @@ var (
 
 func ok(out string) sys.Result { return sys.Result{Stdout: out} }
 
+type switchSimulationUI struct {
+	screens  []string
+	accounts []string
+	choices  int
+}
+
+func (u *switchSimulationUI) Report(e engine.Event) {
+	if e.Kind == "github-account" {
+		u.accounts = append(u.accounts, e.Message)
+	}
+}
+func (u *switchSimulationUI) Ask(_ context.Context, s engine.Screen) (string, error) {
+	u.screens = append(u.screens, s.ID)
+	if s.ID == "repository-owner" {
+		return s.Options[0], nil
+	}
+	if s.ID == "create-or-reuse-repository" {
+		u.choices++
+		if u.choices == 1 {
+			return switchAccountAnswer, nil
+		}
+		return s.Options[1], nil
+	}
+	return s.Default, nil
+}
+
+func TestSimulationSwitchAccountReturnsToSignInWithoutCommands(t *testing.T) {
+	f := &sys.Fake{}
+	u := &switchSimulationUI{}
+	if err := newStep(f).Simulate(context.Background(), &engine.Env{UIOnly: true}, u); err != nil {
+		t.Fatal(err)
+	}
+	if len(u.screens) < 6 || u.screens[0] != "github-signin" || u.screens[1] != "repository-owner" || u.screens[2] != "create-or-reuse-repository" || u.screens[3] != "github-signin" || u.screens[4] != "repository-owner" || u.screens[5] != "create-or-reuse-repository" {
+		t.Fatalf("unexpected screens: %v", u.screens)
+	}
+	if len(u.accounts) != 3 || u.accounts[0] == "" || u.accounts[1] != "" || u.accounts[2] == "" {
+		t.Fatalf("unexpected accounts: %v", u.accounts)
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("simulation ran commands: %v", f.Calls)
+	}
+}
+
+func TestReusableRepositoriesFiltersUnsafeRepositories(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh api --paginate user/repos", Result: ok("alice/empty\nalice/recovery\nalice/unrelated\n")},
+		{Prefix: "gh api repos/alice/recovery/contents/platform.yaml", Result: ok("{}")},
+		{Prefix: "gh api repos/alice/unrelated/contents/platform.yaml", Result: notFound},
+		{Prefix: "gh api repos/alice/empty", Result: ok(meta("private", true, false, 0, "main"))},
+		{Prefix: "gh api repos/alice/recovery", Result: ok(meta("private", true, false, 1, "main"))},
+		{Prefix: "gh api repos/alice/unrelated", Result: ok(meta("private", true, false, 1, "main"))},
+	}}
+	repos, err := newStep(f).reusableRepositories(context.Background(), "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(repos, ",") != "alice/empty,alice/recovery" {
+		t.Fatalf("unexpected candidates: %v", repos)
+	}
+}
+
+func TestRepositoryOwnersAndSelection(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{{Prefix: "gh api --paginate user/orgs", Result: ok("Team-One\nteam-two\nTEAM-ONE\n")}}}
+	owners, err := newStep(f).repositoryOwners(context.Background(), "alice")
+	if err != nil || strings.Join(owners, ",") != "alice,Team-One,team-two" {
+		t.Fatalf("owners=%v err=%v", owners, err)
+	}
+	owner, err := chooseRepositoryOwner(context.Background(), engine.Headless{Answers: map[string]string{"repository-owner": "Team-One"}}, owners)
+	if err != nil || owner != "Team-One" {
+		t.Fatalf("owner=%q err=%v", owner, err)
+	}
+	owner, err = chooseRepositoryOwner(context.Background(), engine.Headless{}, []string{"alice"})
+	if err != nil || owner != "alice" {
+		t.Fatalf("single owner=%q err=%v", owner, err)
+	}
+}
+
+func TestReusableRepositoriesRestrictedToChosenOwner(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh api --paginate user/repos", Result: ok("alice/one\nteam/two\n")},
+		{Prefix: "gh api repos/team/two", Result: ok(meta("private", true, false, 0, "main"))},
+	}}
+	repos, err := newStep(f).reusableRepositories(context.Background(), "TEAM")
+	if err != nil || strings.Join(repos, ",") != "team/two" {
+		t.Fatalf("repos=%v err=%v", repos, err)
+	}
+	if f.Ran("gh api repos/alice/one") {
+		t.Fatal("queried a repository outside the selected owner")
+	}
+}
+
 func newStep(f *sys.Fake) *Step {
 	s := New(f, "/checkout")
 	s.Sleep = func(time.Duration) {}

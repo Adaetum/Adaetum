@@ -196,7 +196,7 @@ func Run(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
 		return runSteps(ctx, steps, env, ui)
 	}
 	var results []Result
-	for i, s := range steps {
+	for _, s := range steps {
 		for {
 			if err := ctx.Err(); err != nil {
 				return results, err
@@ -205,12 +205,6 @@ func Run(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
 			// a retry must clear its previous presentation before asking again.
 			ui.Report(Event{StepID: s.ID(), Kind: StepReset})
 			attempt, err := runSteps(ctx, []Step{s}, env, ui)
-			if err == nil && env.UIOnly && i < len(steps)-1 {
-				err = ApproveScreen(ctx, ui, Screen{
-					ID: "continue-rehearsal-" + s.ID(), Prompt: "Continue to the next part of the setup?",
-					YesLabel: "Continue", NoLabel: "Review this step",
-				})
-			}
 			if err == nil {
 				results = append(results, attempt...)
 				ui.Report(Event{StepID: s.ID(), Kind: StepFinished})
@@ -240,7 +234,7 @@ func Run(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
 
 func runSteps(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, error) {
 	var results []Result
-	for i, s := range steps {
+	for _, s := range steps {
 		if env.UIOnly {
 			sim, ok := s.(Simulator)
 			if !ok {
@@ -255,19 +249,6 @@ func runSteps(ctx context.Context, steps []Step, env *Env, ui UI) ([]Result, err
 			finding := Finding{Status: Done, Detail: "UI rehearsal complete; no setup actions were run"}
 			results = append(results, Result{StepID: s.ID(), Finding: finding})
 			ui.Report(Event{StepID: s.ID(), Kind: StepFinished})
-			if i < len(steps)-1 {
-				answer, err := ui.Ask(ctx, Screen{
-					ID: "continue-rehearsal-" + s.ID(), Kind: Confirm,
-					Prompt: "Continue to the next part of the setup?", Default: "yes",
-					YesLabel: "Continue", NoLabel: "End rehearsal",
-				})
-				if err != nil {
-					return results, err
-				}
-				if answer != "yes" && answer != "y" && answer != "true" && answer != "Y" && answer != "YES" && answer != "Yes" {
-					return results, ErrDeclined
-				}
-			}
 			continue
 		}
 		finding, err := s.Check(ctx, env)

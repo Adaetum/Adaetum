@@ -178,12 +178,6 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 		return errors.New("the rendered .env is missing; run the render stage first")
 	}
 
-	err := engine.Approve(ctx, ui, "publish-artifacts",
-		"This uploads installer images to your R2 bucket, syncs secrets to your private repository's GitHub environment, and triggers its workflows. Continue?")
-	if err != nil {
-		return err
-	}
-
 	logPath := filepath.Join(s.Root, ".adaetum", "logs", "initial-setup-details.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err

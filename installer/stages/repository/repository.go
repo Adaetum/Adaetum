@@ -31,7 +31,7 @@ const (
 	defaultName  = "Adaetum-cluster"
 	maxSuffix    = 50
 	publicRef    = "refs/remotes/adaetum-init/main"
-	loginScopes  = "repo,workflow"
+	loginScopes  = "repo,workflow,read:org"
 	signInHint   = "gh auth login --hostname github.com --web --git-protocol https --scopes " + loginScopes
 	refreshHint  = "gh auth refresh --hostname github.com --scopes " + loginScopes
 	commitReason = "Refresh recovery main from public upstream"
@@ -156,6 +156,78 @@ func (s *Step) usable(ctx context.Context, repo string, m repoMeta) (bool, strin
 		}
 	}
 	return true, ""
+}
+
+// reusableRepositories lists accessible candidates, then applies the same
+// repository safety checks used immediately before connecting an origin.
+func (s *Step) reusableRepositories(ctx context.Context, owner string) ([]string, error) {
+	res, err := s.gh(ctx, "api", "--paginate", "user/repos?visibility=private&affiliation=owner,collaborator,organization_member&per_page=100", "--jq", `.[] | select(.private == true and .fork == false and .permissions.admin == true) | .full_name`)
+	if err != nil {
+		return nil, err
+	}
+	if !res.OK() {
+		return nil, fmt.Errorf("could not list GitHub repositories: %s", strings.TrimSpace(res.Stderr))
+	}
+	var repos []string
+	for _, name := range strings.Split(res.Stdout, "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if prefix, _, ok := strings.Cut(name, "/"); !ok || !strings.EqualFold(prefix, owner) {
+			continue
+		}
+		m, state, err := s.lookup(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if state == exists {
+			if ok, _ := s.usable(ctx, name, m); ok {
+				repos = append(repos, name)
+			}
+		}
+	}
+	return repos, nil
+}
+
+// repositoryOwners includes the personal account and visible organization
+// memberships. GitHub enforces each organization's repository creation policy.
+func (s *Step) repositoryOwners(ctx context.Context, login string) ([]string, error) {
+	res, err := s.gh(ctx, "api", "--paginate", "user/orgs?per_page=100", "--jq", ".[].login")
+	if err != nil {
+		return nil, err
+	}
+	if !res.OK() {
+		return nil, fmt.Errorf("could not list GitHub organizations: %s; check your GitHub CLI read:org permission", strings.TrimSpace(res.Stderr))
+	}
+	owners := []string{login}
+	for _, org := range strings.Split(res.Stdout, "\n") {
+		org = strings.TrimSpace(org)
+		if org == "" {
+			continue
+		}
+		duplicate := false
+		for _, owner := range owners {
+			if strings.EqualFold(owner, org) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			owners = append(owners, org)
+		}
+	}
+	return owners, nil
+}
+
+func chooseRepositoryOwner(ctx context.Context, ui engine.UI, owners []string) (string, error) {
+	if len(owners) == 0 {
+		return "", errors.New("no GitHub account is available")
+	}
+	if len(owners) == 1 {
+		return owners[0], nil
+	}
+	return engine.Choose(ctx, ui, "repository-owner", "Where should your recovery repository live?", owners, "")
 }
 
 func (s *Step) findAvailable(ctx context.Context, owner string) (string, error) {

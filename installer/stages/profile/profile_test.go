@@ -10,10 +10,44 @@ import (
 
 	"github.com/Adaetum/Adaetum/installer/engine"
 	"github.com/Adaetum/Adaetum/installer/platform"
+	"github.com/Adaetum/Adaetum/installer/stages/providers"
 	"github.com/Adaetum/Adaetum/installer/sys"
 )
 
 func ok(out string) sys.Result { return sys.Result{Stdout: out} }
+
+type rehearsalUI struct{ screens []engine.Screen }
+
+func (u *rehearsalUI) Report(engine.Event) {}
+func (u *rehearsalUI) Ask(_ context.Context, screen engine.Screen) (string, error) {
+	u.screens = append(u.screens, screen)
+	if len(screen.Options) > 0 {
+		return screen.Options[0], nil
+	}
+	if screen.Default != "" {
+		return screen.Default, nil
+	}
+	return "yes", nil
+}
+
+func TestRehearsalCarriesProviderSelectionsWithoutRepeatingQuestions(t *testing.T) {
+	env := &engine.Env{UIOnly: true}
+	ui := &rehearsalUI{}
+	if err := providers.New(&sys.Fake{}, "").Simulate(context.Background(), env, ui); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Step{}).Simulate(context.Background(), env, ui); err != nil {
+		t.Fatal(err)
+	}
+	if env.Value("domain") != "example.com" || env.Value("overlay_domain") != "adaetum-demo.ts.net" {
+		t.Fatalf("provider values: %v", env.Values)
+	}
+	for _, screen := range ui.screens {
+		if screen.ID == "domain" || screen.ID == "overlay-domain" || screen.ID == "apply-profile" || screen.ID == "tailscale-tailnet" {
+			t.Fatalf("asked again for %s", screen.ID)
+		}
+	}
+}
 
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()

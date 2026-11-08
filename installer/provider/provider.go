@@ -126,8 +126,8 @@ func (c Client) Zones(ctx context.Context, token string) ([]Zone, error) {
 	return zones, nil
 }
 
-// Tailnets discovers the tailnet DNS names visible from the devices a Tailscale
-// token can read. A new or empty tailnet has none, which is not an error.
+// Tailnets discovers DNS names from devices and, for an empty tailnet, from the
+// MagicDNS search domain when the API exposes it. No result is not an error.
 func (c Client) Tailnets(ctx context.Context, token string) ([]string, error) {
 	base := c.TailscaleBase
 	if base == "" {
@@ -153,6 +153,28 @@ func (c Client) Tailnets(ctx context.Context, token string) ([]string, error) {
 		name := strings.TrimRight(strings.ToLower(strings.TrimSpace(d.DNSName)), ".")
 		if _, tailnet, ok := strings.Cut(name, "."); ok {
 			seen[tailnet] = true
+		}
+	}
+	if len(seen) == 0 {
+		// Tailscale documents the MagicDNS domain as the first search domain.
+		// Only use it when MagicDNS is enabled and it has the expected form;
+		// custom search domains must not be mistaken for the tailnet name.
+		var preferences struct {
+			MagicDNS bool `json:"magicDNS"`
+		}
+		var paths struct {
+			SearchPaths []string `json:"searchPaths"`
+		}
+		prefsStatus, prefsErr := c.get(ctx, base+"/tailnet/-/dns/preferences", token, &preferences)
+		if prefsErr == nil && prefsStatus < 400 && preferences.MagicDNS {
+			pathsStatus, pathsErr := c.get(ctx, base+"/tailnet/-/dns/searchpaths", token, &paths)
+			if pathsErr == nil && pathsStatus < 400 && len(paths.SearchPaths) > 0 {
+				name := strings.TrimRight(strings.ToLower(strings.TrimSpace(paths.SearchPaths[0])), ".")
+				label, suffix, ok := strings.Cut(name, ".")
+				if ok && suffix == "ts.net" && label != "" && strings.Trim(label, "abcdefghijklmnopqrstuvwxyz0123456789-") == "" && !strings.HasPrefix(label, "-") && !strings.HasSuffix(label, "-") {
+					seen[name] = true
+				}
+			}
 		}
 	}
 	out := make([]string, 0, len(seen))

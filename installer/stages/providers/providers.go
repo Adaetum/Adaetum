@@ -12,13 +12,14 @@
 //
 // Secrets: every token enters through a secret screen, is passed to the scripts on
 // standard input (never as an argument), is held in memory in engine.Env, and is
-// saved only in the OS credential store with the operator's agreement.
+// kept in memory for the current setup run.
 package providers
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"runtime"
 	"strings"
@@ -94,7 +95,7 @@ func (s *Step) Plan(ctx context.Context, env *engine.Env) ([]string, error) {
 		"Use a Cloudflare account token (saved one if still valid) and choose your public DNS zone and its owning account.",
 		"Use a one-day Tailscale access token and choose your tailnet.",
 		"Prepare Tailscale tag ownership, then create the scoped node and Kubernetes operator OAuth clients.",
-		"Offer to save each credential in your operating system's credential store so a cancelled setup can resume. Nothing is written to a file.",
+		"Keep provider credentials in memory for the remaining setup stages.",
 		"Right now: " + finding.Detail + ".",
 	}, nil
 }
@@ -156,36 +157,6 @@ func (f *flow) forget(keys ...string) {
 	}
 }
 
-// save offers to keep credentials for resuming. Nothing is saved without the
-// operator's agreement, except on a clean run, whose purpose is to replace them.
-func (f *flow) save(ctx context.Context, what string, pairs map[string]string) error {
-	if !f.store.Available() {
-		return nil
-	}
-	if !f.env.Clean {
-		err := engine.Approve(ctx, f.ui, "save-"+slug(what), "Save this "+what+" in "+f.store.Name()+" so a cancelled setup can resume?")
-		if errors.Is(err, engine.ErrDeclined) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
-	for k, v := range pairs {
-		if err := f.store.Set(f.ns, k, v); err != nil {
-			f.say("Could not save the " + what + ": " + err.Error())
-			return nil
-		}
-	}
-	f.say("Saved the " + what + " in " + f.store.Name() + ".")
-	return nil
-}
-
-// slug turns a description into a stable screen id a headless run can answer.
-func slug(what string) string {
-	return strings.Trim(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(strings.ToLower(what), "-"), "-")
-}
-
 func (f *flow) secret(ctx context.Context, id, prompt string) (string, error) {
 	v, err := f.ui.Ask(ctx, engine.Screen{ID: id, Kind: engine.Secret, Prompt: prompt})
 	if err != nil {
@@ -196,25 +167,23 @@ func (f *flow) secret(ctx context.Context, id, prompt string) (string, error) {
 
 // ---- Cloudflare -------------------------------------------------------------
 
-// cloudflareTokenScreen is the one screen where the operator creates and pastes a
-// Cloudflare token: what to do, in order, and the permissions as a list to tick off.
+// Cloudflare's account-token template requests the bootstrap permissions. The
+// Tunnel group ID identifies the specific required permission.
+func cloudflareTokenTemplateURL() string {
+	permissions := `[{"key":"account_api_tokens","type":"read"},{"key":"account_api_tokens","type":"edit"},{"key":"workers_r2","type":"read"},{"key":"workers_r2","type":"edit"},{"key":"c07321b023e944ff818fec44d8203567","type":"edit"},{"key":"workers_scripts","type":"read"},{"key":"workers_scripts","type":"edit"},{"key":"zone","type":"read"},{"key":"dns","type":"read"},{"key":"dns","type":"edit"},{"key":"workers_routes","type":"read"},{"key":"workers_routes","type":"edit"}]`
+	return "https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=" + url.QueryEscape(permissions) + "&name=" + url.QueryEscape("Adaetum bootstrap")
+}
+
+// cloudflareTokenScreen opens the account-owned token template and collects its secret.
 func cloudflareTokenScreen() engine.Screen {
 	return engine.Screen{
 		ID: "cloudflare-token", Kind: engine.Secret, Prompt: "Cloudflare token",
 		Title: "Connect Cloudflare",
-		Intro: "Use the Cloudflare account that owns your domain. Adaetum needs one scoped API token to set up your domain, storage and tunnel.",
+		Intro: "Sign in or create a Cloudflare account.",
 		Steps: []engine.Instruction{
-			{Text: "Create a Cloudflare account or sign in, then add your domain if it is not there yet", Link: "https://dash.cloudflare.com/sign-up"},
-			{Text: "Open your API tokens page", Link: "https://dash.cloudflare.com/profile/api-tokens"},
-			{Text: "Create an Account API token named “Adaetum bootstrap” (this needs Super Administrator) and grant the permissions listed below"},
-			{Text: "Limit it to your whole account, and to your domain's zone only"},
-			{Text: "Paste the token here"},
-		},
-		ListTitle: "Permissions",
-		List: []string{
-			"Account API Tokens — Read & Write", "Workers R2 Storage — Read & Write", "Cloudflare Tunnel — Write",
-			"Connectivity Directory — Read, Bind & Admin", "Workers Scripts — Read & Write",
-			"Zone — Read", "DNS — Read & Write", "Workers Routes — Read & Write",
+			{Text: "Open the template and select your account.", Link: cloudflareTokenTemplateURL()},
+			{Text: "Review permissions; select your account and domain as the scope."},
+			{Text: "Create the token and paste it below."},
 		},
 	}
 }
@@ -245,15 +214,13 @@ func (f *flow) cloudflare(ctx context.Context, existing platform.Profile) error 
 		return err
 	}
 
-	rejected := false
 	if !f.cloudflareAccess(ctx, token, zone) {
 		if f.store.Available() {
 			// It passed discovery but not the whole contract; never leave it for a
 			// later run to select again.
 			f.forget(keyCloudflare)
-			rejected = true
 		}
-		if token, err = f.fixCloudflareAccess(ctx, token, zone, rejected); err != nil {
+		if token, err = f.fixCloudflareAccess(ctx, token, zone); err != nil {
 			return err
 		}
 	}
@@ -300,9 +267,6 @@ func (f *flow) askCloudflareToken(ctx context.Context) (string, []provider.Zone,
 			return "", nil, err
 		}
 	}
-	if err := f.save(ctx, "Cloudflare setup token", map[string]string{keyCloudflare: token}); err != nil {
-		return "", nil, err
-	}
 	return token, zones, nil
 }
 
@@ -340,13 +304,13 @@ func (f *flow) cloudflareAccess(ctx context.Context, token string, z provider.Zo
 	return err == nil && res.OK()
 }
 
-func (f *flow) fixCloudflareAccess(ctx context.Context, token string, z provider.Zone, rejected bool) (string, error) {
+func (f *flow) fixCloudflareAccess(ctx context.Context, token string, z provider.Zone) (string, error) {
 	err := engine.ApproveScreen(ctx, f.ui, engine.Screen{
 		ID: "cloudflare-permissions-updated", Title: "One more permission needed",
 		Intro: "The token can't do everything setup needs.",
 		Steps: []engine.Instruction{
 			{Text: "Open the token and edit it (or create a replacement)", Link: "https://dash.cloudflare.com/" + z.AccountID + "/api-tokens/create"},
-			{Text: "Make sure Cloudflare Tunnel → Write and Connectivity Directory → Read, Bind & Admin apply to the whole account"},
+			{Text: "Check the account and domain permissions, including Cloudflare Tunnel → Write for the whole account"},
 			{Text: "Save it, then check again"},
 		},
 		YesLabel: "Check again", NoLabel: "Cancel",
@@ -356,9 +320,6 @@ func (f *flow) fixCloudflareAccess(ctx context.Context, token string, z provider
 	}
 	if f.cloudflareAccess(ctx, token, z) {
 		f.say("The existing Cloudflare token now has the access setup needs.")
-		if rejected {
-			return token, f.save(ctx, "Cloudflare setup token", map[string]string{keyCloudflare: token})
-		}
 		return token, nil
 	}
 
@@ -391,7 +352,7 @@ func (f *flow) fixCloudflareAccess(ctx context.Context, token string, z provider
 		return "", err
 	}
 	replacement = strings.TrimSpace(replacement)
-	return replacement, f.save(ctx, "Cloudflare setup token", map[string]string{keyCloudflare: replacement})
+	return replacement, nil
 }
 
 // ---- Tailscale --------------------------------------------------------------
@@ -402,16 +363,12 @@ func tailscaleTokenScreen() engine.Screen {
 	return engine.Screen{
 		ID: "tailscale-token", Kind: engine.Secret, Prompt: "Tailscale access token",
 		Title: "Connect Tailscale",
-		Intro: "Sign in to Tailscale, or create an account with Google, Microsoft, GitHub or Apple. A one-day token lets Adaetum prepare your tailnet; it is not kept after setup.",
+		Intro: "Sign in or create a Tailscale account. The one-day token gives setup full API access until it expires.",
 		Steps: []engine.Instruction{
-			{Text: "Create a Tailscale account, or sign in to your existing one", Link: "https://login.tailscale.com/start"},
-			{Text: "Open your Tailscale keys page", Link: "https://login.tailscale.com/admin/settings/keys"},
-			{Text: "Create an API access token named “Adaetum setup” that expires in 1 day"},
-			{Text: "Grant the permissions listed below"},
-			{Text: "Paste the token here"},
+			{Text: "Open Tailscale Keys and sign in.", Link: "https://login.tailscale.com/admin/settings/keys"},
+			{Text: "Generate an API access token with a 1-day expiry."},
+			{Text: "Copy the token and paste it below."},
 		},
-		ListTitle: "Permissions",
-		List:      []string{"Devices → Core — Read", "Devices → Posture Attributes — Read", "Policy File — Write", "OAuth Keys — Write"},
 	}
 }
 
@@ -510,9 +467,6 @@ func (f *flow) askTailscaleToken(ctx context.Context) (string, []string, error) 
 		return "", nil, err
 	}
 	token = strings.TrimSpace(token)
-	if err := f.save(ctx, "one-day Tailscale token", map[string]string{keyTailscale: token}); err != nil {
-		return "", nil, err
-	}
 	return token, tailnets, nil
 }
 
@@ -533,11 +487,15 @@ func (f *flow) chooseTailnet(ctx context.Context, tailnets []string, saved strin
 		}
 		f.say("Saved Tailscale DNS name " + saved + " is no longer available; choose another tailnet.")
 	}
-	if len(tailnets) > 0 {
+	if len(tailnets) == 1 {
+		f.say("Using discovered Tailscale tailnet " + tailnets[0] + ".")
+		return tailnets[0], nil
+	}
+	if len(tailnets) > 1 {
 		return engine.Choose(ctx, f.ui, "tailscale-tailnet", "Choose the Tailscale tailnet for this cluster", tailnets, "")
 	}
 
-	f.say("No devices on this tailnet yet, so enter its name.")
+	f.say("Could not discover the tailnet DNS name; find it on Tailscale's DNS page.")
 	for attempt := 0; attempt < maxNameAttempts; attempt++ {
 		in, err := engine.AskText(ctx, f.ui, "tailscale-tailnet", "Tailnet name (ends in .ts.net; shown in Tailscale under DNS)", "")
 		if err != nil {
@@ -561,14 +519,14 @@ func (f *flow) chooseTailnet(ctx context.Context, tailnets []string, saved strin
 // later, and is an application identity rather than one person's.
 func (f *flow) oauth(ctx context.Context, tailnet string) error {
 	if err := f.createClient(ctx, tailnet, "tailscale_oauth_client", "Tailscale OAuth client", "--create-oauth-client", true,
-		"TAILSCALE_OAUTH_CLIENT_ID", "TAILSCALE_OAUTH_CLIENT_SECRET", keyOAuthID, keyOAuthSecret); err != nil {
+		"TAILSCALE_OAUTH_CLIENT_ID", "TAILSCALE_OAUTH_CLIENT_SECRET"); err != nil {
 		return err
 	}
 	return f.createClient(ctx, tailnet, "tailscale_operator_oauth_client", "Tailscale Kubernetes Operator OAuth client", "--create-operator-oauth-client", false,
-		"TAILSCALE_OPERATOR_OAUTH_CLIENT_ID", "TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET", keyOperatorID, keyOperatorSec)
+		"TAILSCALE_OPERATOR_OAUTH_CLIENT_ID", "TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET")
 }
 
-func (f *flow) createClient(ctx context.Context, tailnet, envPrefix, what, flag string, withTag bool, idVar, secretVar, idKey, secretKey string) error {
+func (f *flow) createClient(ctx context.Context, tailnet, envPrefix, what, flag string, withTag bool, idVar, secretVar string) error {
 	if f.env.Secret(envPrefix+"_id") != "" && f.env.Secret(envPrefix+"_secret") != "" {
 		return nil
 	}
@@ -602,5 +560,5 @@ func (f *flow) createClient(ctx context.Context, tailnet, envPrefix, what, flag 
 	f.say("The " + what + " was created.")
 	f.env.SetSecret(envPrefix+"_id", id)
 	f.env.SetSecret(envPrefix+"_secret", secret)
-	return f.save(ctx, what, map[string]string{idKey: id, secretKey: secret})
+	return nil
 }

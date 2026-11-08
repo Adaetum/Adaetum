@@ -20,8 +20,8 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:     "Adaetum setup",
-		Width:     1100,
-		Height:    760,
+		Width:     900,
+		Height:    620,
 		MinWidth:  720,
 		MinHeight: 520,
 		AssetServer: &assetserver.Options{

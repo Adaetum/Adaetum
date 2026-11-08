@@ -8,7 +8,7 @@ import (
 	"github.com/Adaetum/Adaetum/installer/engine"
 )
 
-// Simulate reuses the media choices and download approval, but does not discover,
+// Simulate reuses the media choices, but does not discover,
 // download, verify, or copy an ISO.
 func (s *Step) Simulate(ctx context.Context, env *engine.Env, ui engine.UI) error {
 	say := func(message string) { ui.Report(engine.Event{StepID: stepID, Message: message}) }
@@ -35,9 +35,6 @@ func (s *Step) Simulate(ctx context.Context, env *engine.Env, ui engine.UI) erro
 	}
 	arch := strings.Fields(architectureChoice)[0]
 	say("Rocky Linux " + Release + " " + imageType + " installer selected for " + arch + ".")
-	if err := engine.ApproveCreate(ctx, ui, "download-media", "Download the official installer now?"); err != nil {
-		return err
-	}
 	say("Downloading the example installer image...")
 	say("Download complete; Rocky's published SHA-256 matches.")
 	path := filepath.Join(s.Lib.Root, "dist", "Rocky-"+Release+"-"+arch+"-"+imageType+"-demo.iso")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/Adaetum/Adaetum/installer/checkout"
 	"github.com/Adaetum/Adaetum/installer/engine"
@@ -145,18 +146,63 @@ func (a *App) Start() string {
 	a.running, a.cancel = true, cancel
 	dryRun := a.DryRunMode()
 	go func() {
+		var ui engine.UI = windowUI{app: a}
+		if dryRun {
+			ui = rehearsalUI{UI: ui, ctx: ctx}
+		}
 		// ADAETUM_CLEAN=1 (set by `task init:clean`) ignores saved credentials and values.
 		rep := report(engine.Run(ctx, steps, &engine.Env{
 			Clean:  os.Getenv("ADAETUM_CLEAN") == "1",
 			DryRun: dryRun,
 			UIOnly: dryRun,
-		}, windowUI{app: a}))
+		}, ui))
 		a.mu.Lock()
 		a.running, a.cancel = false, nil
 		a.mu.Unlock()
 		runtime.EventsEmit(a.ctx, "finished", rep)
 	}()
 	return ""
+}
+
+// Pace only the UI-only window so working states remain visible during review.
+type rehearsalUI struct {
+	engine.UI
+	ctx context.Context
+}
+
+func (u rehearsalUI) wait(ctx context.Context) error {
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (u rehearsalUI) Ask(ctx context.Context, screen engine.Screen) (string, error) {
+	answer, err := u.UI.Ask(ctx, screen)
+	if err != nil {
+		return "", err
+	}
+	if err := u.wait(ctx); err != nil {
+		return "", err
+	}
+	return answer, nil
+}
+
+func (u rehearsalUI) Report(event engine.Event) {
+	u.UI.Report(event)
+	if event.Kind == engine.StepStarted || (event.Message != "" && (event.Kind == "" || event.Kind == engine.Progress)) {
+		_ = u.wait(u.ctx)
+	}
+}
+
+func (u rehearsalUI) CanRetry() bool { r, ok := u.UI.(engine.Retrier); return ok && r.CanRetry() }
+func (u rehearsalUI) CanRetrySteps() bool {
+	r, ok := u.UI.(engine.StageRetrier)
+	return ok && r.CanRetrySteps()
 }
 
 // Answer delivers the operator's reply to the question on screen.

@@ -83,9 +83,6 @@ def main() -> int:
             "Workers R2 Storage Read",
             "Workers R2 Storage Write",
             permission,
-            "Connectivity Directory Read",
-            "Connectivity Directory Bind",
-            "Connectivity Directory Admin",
             "Workers Scripts Read",
             "Workers Scripts Write",
         ]

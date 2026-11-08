@@ -22,6 +22,34 @@ const name = "Rocky-10.2-x86_64-minimal.iso"
 
 var image = []byte(strings.Repeat("rocky-installer-bytes-", 4000))
 
+type guidedDownloadUI struct{ screens []string }
+
+func (u *guidedDownloadUI) CanRetrySteps() bool { return true }
+func (u *guidedDownloadUI) Report(engine.Event) {}
+func (u *guidedDownloadUI) Ask(_ context.Context, s engine.Screen) (string, error) {
+	u.screens = append(u.screens, s.ID)
+	if len(s.Options) > 0 {
+		return s.Options[0], nil
+	}
+	return "", fmt.Errorf("unexpected question: %s", s.ID)
+}
+
+func TestGuidedDownloadStartsAfterImageAndArchitectureSelection(t *testing.T) {
+	srv, _ := mirror(t, digestOf(image))
+	s := &Step{Lib: lib(t, srv), Arch: "x86_64"}
+	ui := &guidedDownloadUI{}
+	path, err := s.download(context.Background(), ui, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ui.screens, ",") != "media-type,media-arch" {
+		t.Fatalf("unexpected screens: %v", ui.screens)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("download missing: %v", err)
+	}
+}
+
 func digestOf(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 // mirror serves the image with range support, as Rocky's does.

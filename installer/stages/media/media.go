@@ -167,8 +167,12 @@ func (s *Step) download(ctx context.Context, ui engine.UI, say func(string)) (st
 	arch := strings.Fields(archChoice)[0]
 
 	say(fmt.Sprintf("Rocky Linux %s %s for %s (%s).", Release, imageType, arch, sizes[arch+":"+imageType]))
-	if err := engine.ApproveCreate(ctx, ui, "download-media", "Download the official installer now?"); err != nil {
-		return "", err
+	// In the window, selecting the image and target authorizes the download.
+	// Headless replay keeps the explicit creation guard for large downloads.
+	if r, ok := ui.(engine.StageRetrier); !ok || !r.CanRetrySteps() {
+		if err := engine.ApproveCreate(ctx, ui, "download-media", "Download the official installer now?"); err != nil {
+			return "", err
+		}
 	}
 
 	var last time.Time

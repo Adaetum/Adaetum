@@ -1,11 +1,11 @@
-import { Badge, Button, Callout, RadioCards, TextField } from "@radix-ui/themes";
-import { ArrowLeft, BookOpen, Check, Copy, ExternalLink, LoaderCircle, Rocket, TriangleAlert } from "lucide-react";
+import { Badge, Button, Callout, TextField } from "@radix-ui/themes";
+import { ArrowLeft, Check, Copy, ExternalLink, LoaderCircle, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Answer, Cancel, DryRun, DryRunMode, Stages, Start } from "../wailsjs/go/main/App";
 import { main } from "../wailsjs/go/models";
 import { BrowserOpenURL, EventsOn } from "../wailsjs/runtime/runtime";
 import "./App.css";
-import Book, { BookHandoff } from "./Book";
+import Book, { BookHandoff, type BookPosition } from "./Book";
 import BookCover from "./BookCover";
 import CoverLock from "./CoverLock";
 import { chapterNumerals, journey } from "./journey";
@@ -20,6 +20,21 @@ export interface Screen {
 interface Note { stepId: string; kind: string; message: string; link?: string }
 interface Code { code: string; link: string; stepId: string }
 interface Line { text: string; progress: boolean }
+interface Selection { id: string; label: string; value: string }
+
+// Only public configuration choices belong in the review. Credentials and
+// arbitrary text answers must not be retained by the presentation layer.
+const reviewLabels: Record<string, string> = {
+  "repository-owner": "GitHub account or organization",
+  "reuse-repository-select": "Recovery repository",
+  repository: "Recovery repository",
+  "cloudflare-zone": "Cloudflare zone",
+  "tailscale-tailnet": "Tailscale tailnet",
+  domain: "Public domain",
+  "overlay-domain": "Tailscale domain",
+  "media-type": "Installer image",
+  "media-arch": "Target architecture",
+};
 
 type Status = "pending" | "needed" | "done" | "blocked" | "running" | "failed";
 
@@ -48,9 +63,11 @@ export default function App() {
   const dryRunModeRef = useRef(false);
   const [dryRunComplete, setDryRunComplete] = useState(false);
   const [stages, setStages] = useState<main.Stage[]>([]);
+  const [githubUser, setGithubUser] = useState("");
   const [results, setResults] = useState<Record<string, main.StageResult>>({});
   const [started, setStarted] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
+  const [coverResume, setCoverResume] = useState(false);
   const [returningToCover, setReturningToCover] = useState(false);
   const [running, setRunning] = useState(false);
   const [stopped, setStopped] = useState("");
@@ -60,6 +77,8 @@ export default function App() {
   const [live, setLive] = useState<Record<string, Status>>({});
   const [current, setCurrent] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, Line[]>>({});
+  const [selections, setSelections] = useState<Record<string, Selection[]>>({});
+  const pendingSelection = useRef<{ stepId: string; selection: Selection } | null>(null);
   const [screen, setScreen] = useState<Screen | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [code, setCode] = useState<Code | null>(null);
@@ -68,9 +87,17 @@ export default function App() {
   const [handoffScreen, setHandoffScreen] = useState<Screen | null>(null);
   const [handoffAnswer, setHandoffAnswer] = useState<string | null>(null);
   const [handoffClosed, setHandoffClosed] = useState(false);
+  const [handoffPosition, setHandoffPosition] = useState<BookPosition | undefined>();
   const [cancelPending, setCancelPending] = useState(false);
   const cancelReset = useRef(false);
   const checking = useRef(false);
+
+  function savePendingSelection() {
+    const pending = pendingSelection.current;
+    pendingSelection.current = null;
+    if (!pending) return;
+    setSelections(all => ({ ...all, [pending.stepId]: [...(all[pending.stepId] ?? []).filter(s => s.label !== pending.selection.label), pending.selection] }));
+  }
 
   useEffect(() => {
     if (!toast) return;
@@ -87,6 +114,8 @@ export default function App() {
     const off = [
       EventsOn("screen", (s: Screen) => {
         if (cancelReset.current) return;
+        if (pendingSelection.current && (s.id !== pendingSelection.current.selection.id || s.stepId !== pendingSelection.current.stepId)) savePendingSelection();
+        else if (s.error) pendingSelection.current = null;
         if (s.error) setToast({ message: s.error });
         setSubmitting(false);
         setLooking(null);
@@ -95,7 +124,9 @@ export default function App() {
       }),
       EventsOn("note", (n: Note) => {
         if (cancelReset.current) return;
+        if (n.kind === "github-account") { setGithubUser(n.message); return; }
         if (n.kind === "step-reset" || n.kind === "step-retry") {
+          pendingSelection.current = null;
           setLooking(null);
           setCurrent(n.stepId);
           setSubmitting(false);
@@ -112,17 +143,15 @@ export default function App() {
           setCode(n.message ? { code: n.message, link: n.link ?? "", stepId: n.stepId } : null);
           return;
         }
-        // Any report after a typed answer means the engine accepted it.
-        setSubmitting((was) => {
-          if (was) setScreen(null);
-          return false;
-        });
+        // A progress event can arrive immediately before the next question.
+        // Do not clear the screen from a state updater: React may run it after
+        // that question is displayed, leaving the engine waiting on a hidden form.
         if (n.kind === "step-started" || n.kind === "step-finished" || n.kind === "step-failed") setCode(null);
         if (n.kind === "step-started") {
           setLooking(null);
           setCurrent(n.stepId);
           setLive((l) => ({ ...l, [n.stepId]: "running" }));
-        } else if (n.kind === "step-finished") setLive((l) => ({ ...l, [n.stepId]: "done" }));
+        } else if (n.kind === "step-finished") { savePendingSelection(); setLive((l) => ({ ...l, [n.stepId]: "done" })); }
         else if (n.kind === "step-failed") setLive((l) => ({ ...l, [n.stepId]: "failed" }));
         if (n.message)
           setNotes((all) => {
@@ -172,6 +201,8 @@ export default function App() {
     cancelReset.current = false;
     setToast(null);
     setNotes({});
+    setSelections({});
+    pendingSelection.current = null;
     setLive({});
     setStopped("");
     setComplete(false);
@@ -180,6 +211,7 @@ export default function App() {
     setHandoffScreen(null);
     setHandoffAnswer(null);
     setHandoffClosed(false);
+    setHandoffPosition(undefined);
     const problem = await Start();
     if (problem) {
       setStopped(problem);
@@ -194,6 +226,7 @@ export default function App() {
   }
 
   async function openFromCover(): Promise<boolean> {
+    setCoverResume(hasStarted);
     if (hasStarted) {
       setStarted(true);
       return true;
@@ -239,11 +272,14 @@ export default function App() {
     setLive({});
     setResults({});
     setNotes({});
+    setSelections({});
+    pendingSelection.current = null;
     setComplete(false);
     setDryRunComplete(false);
     setHandoffScreen(null);
     setHandoffAnswer(null);
     setHandoffClosed(false);
+    setHandoffPosition(undefined);
     setHasStarted(false);
   }
 
@@ -253,6 +289,10 @@ export default function App() {
     if (screen?.stepId === "finalize") {
       setHandoffScreen(screen);
       setHandoffAnswer(value);
+    }
+    if (screen && screen.kind !== "secret" && reviewLabels[screen.id] && value.trim()) {
+      const selection = { id: screen.id, label: reviewLabels[screen.id], value: value.trim() };
+      pendingSelection.current = { stepId: screen.stepId, selection };
     }
     if (screen && (screen.kind === "secret" || screen.kind === "text")) setSubmitting(true);
     else setScreen(null);
@@ -272,18 +312,27 @@ export default function App() {
       <article className="chapter-page" key={`${item.id}-chapter`}>
         <div className="eyebrow">Quest {chapterNumerals[pageIndex] ?? pageIndex + 1}</div>
         <h1 className="chapter-title">{info?.title ?? item.title}</h1>
-        <p className="chapter-purpose">{info?.purpose}</p>
         <span className="chapter-rule" />
-        <div className="chapter-outcome"><small>{dryRunMode ? dryRunComplete ? "Rehearsal complete" : `${todo} part${todo === 1 ? "" : "s"} remaining` : complete ? "All quests complete" : `${todo} quest${todo === 1 ? "" : "s"} remaining`}</small><p>{info?.outcome}</p></div>
+        <div className="chapter-overview" aria-label="Step overview">
+          <div className="chapter-overview-block">
+            <small>WHAT HAPPENS</small>
+            <p>{info?.purpose}</p>
+          </div>
+          <div className="chapter-overview-block">
+            <small>YOU’LL LEAVE WITH</small>
+            <p>{info?.outcome}</p>
+          </div>
+        </div>
+        <div className="chapter-outcome"><small>{dryRunMode ? dryRunComplete ? "Rehearsal complete" : `${todo} part${todo === 1 ? "" : "s"} remaining` : complete ? "All quests complete" : `${todo} quest${todo === 1 ? "" : "s"} remaining`}</small></div>
       </article>,
       <article className="action-page" aria-label={`Setup step ${pageIndex + 1}`} key={`${item.id}-action`}>
         <div className="eyebrow">Quest {pageIndex + 1} of {stages.length}</div>
-        {code && item.id === code.stepId && item.id === shownId && <CodeCard code={code} simulation={dryRunMode} />}
+        {code && item.id === code.stepId && item.id === shownId && !screen && <CodeCard code={code} simulation={dryRunMode} />}
         {stopped && item.id === shownId && <Callout.Root color="red" role="alert" mb="4"><Callout.Icon><TriangleAlert size={16} /></Callout.Icon><Callout.Text>Setup stopped: {stopped}</Callout.Text></Callout.Root>}
         {complete && !dryRunMode && item.id === shownId && <Callout.Root color="green" mb="4"><Callout.Icon><Check size={16} /></Callout.Icon><Callout.Text>All quests complete. Your server kit is ready.</Callout.Text></Callout.Root>}
         {dryRunComplete && item.id === shownId && <Callout.Root color="blue" mb="4"><Callout.Icon><Check size={16} /></Callout.Icon><Callout.Text>The UI rehearsal is complete. No services or files were changed.</Callout.Text></Callout.Root>}
         <div className="guide-card">
-          {screen && screen.stepId === item.id ? <QuestionCard screen={screen} busy={submitting} simulation={dryRunMode} onAnswer={answer} /> : <StepView stage={{ ...item, title: journey[item.id]?.title ?? item.title }} status={statusOf(item.id)} result={results[item.id]} lines={notes[item.id] ?? []} />}
+          {screen && screen.stepId === item.id ? <QuestionCard screen={screen} busy={submitting} simulation={dryRunMode} code={code && code.stepId === item.id && item.id === shownId ? code : undefined} githubUser={githubUser} onAnswer={answer} /> : looking === item.id && (selections[item.id]?.length ?? 0) > 0 ? <SelectionReview selections={selections[item.id]} /> : <StepView stage={{ ...item, title: journey[item.id]?.title ?? item.title }} status={statusOf(item.id)} result={results[item.id]} lines={notes[item.id] ?? []} />}
         </div>
       </article>,
     ];
@@ -291,14 +340,16 @@ export default function App() {
 
   if (!started) return <Welcome stages={cancelReset.current && running ? [] : stages} stopped={preflightStopped || stopped} resume={hasStarted} onStart={openFromCover} />;
 
-  if (handoffClosed && handoffScreen) {
-    const copyPath = !dryRunMode && handoffAnswer === "yes" ? handoffScreen.prompt.replace(/^Save a copy to\s*/, "").replace(/\?\s*$/, "") : undefined;
-    return <BookHandoff isoPath={handoffScreen.intro ?? ""} copyPath={copyPath} instructions={(handoffScreen.steps ?? []).map(step => step.text)} simulation={dryRunMode} />;
-  }
+  const finishing = complete && !!handoffScreen;
+  const showHandoff = (finishing || handoffClosed) && !returningToCover && !!handoffScreen;
+  const copyPath = !dryRunMode && handoffAnswer === "yes" ? handoffScreen?.prompt.replace(/^Save a copy to\s*/, "").replace(/\?\s*$/, "") : undefined;
 
   return <>
+    {showHandoff && <BookHandoff isoPath={handoffScreen?.intro ?? "example/adaetum-installer.iso"} copyPath={copyPath} instructions={(handoffScreen?.steps ?? []).map(step => step.text)} simulation={dryRunMode} from={handoffPosition} closing={!handoffClosed} />}
     {toast && <div className="setup-toast" role="status" aria-live="polite"><span>{toast.message}</span><button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}>×</button></div>}
-    <Book
+    {!handoffClosed && <div className={showHandoff ? "book-over-handoff" : undefined}><Book
+    activity={running ? (code || (screen && !submitting) ? "waiting" : "working") : undefined}
+    coverResume={returningToCover ? !cancelReset.current : coverResume}
     pageIndex={Math.max(0, index)}
     chapter={Math.max(0, index)}
     title={stage ? journey[stage.id]?.title ?? stage.title : "Adaetum"}
@@ -307,16 +358,16 @@ export default function App() {
     onChapter={id => setLooking(id)}
     onPageChange={page => { const selected = stages[page]; if (selected) setLooking(selected.id); }}
     footer={<footer className="footer"><Button variant="soft" color="gray" onClick={back}><ArrowLeft size={15} /> Back</Button>{running && <Button variant={cancelPending ? "solid" : "soft"} color={cancelPending ? "red" : "gray"} onClick={cancelPending ? cancelSetup : requestCancel}>{cancelPending ? "Confirm cancel" : "Cancel"}</Button>}</footer>}
-    closing={returningToCover || (complete && !!handoffScreen)}
+    closing={returningToCover || finishing}
     returnToCover={returningToCover}
-    onClosed={() => {
+    onClosed={(position) => {
       if (returningToCover) {
         setStarted(false);
         if (cancelReset.current) clearCancelledRun();
         setReturningToCover(false);
-      } else setHandoffClosed(true);
+      } else { setHandoffPosition(position); setHandoffClosed(true); }
     }}
-  /></>;
+  /></div>}</>;
 }
 
 // The first screen introduces the setup journey before opening the book.
@@ -353,11 +404,7 @@ function Welcome({ stages, stopped, resume, onStart }: {
         }}
       >
       <div className="closed-cover-content">
-      <BookCover />
-      <p className="closed-intro">Configure your installer ISO, install your private cloud on your servers, and connect an LLM to manage it.</p>
-      <div className="actions welcome-actions">
-        <Button size="3" onClick={() => setUnlockStage("shake")} disabled={!stages.length || unlockStage !== "idle"}>{resume ? <BookOpen size={16} /> : <Rocket size={16} />}{resume ? "Reopen your Adaetum" : "Create your Adaetum"}</Button>
-      </div>
+      <BookCover resume={resume} onStart={() => { if (unlockStage === "idle") setUnlockStage("shake"); }} disabled={!stages.length} />
       {stopped && (
         <Callout.Root color="red" role="alert" mt="4">
           <Callout.Icon><TriangleAlert size={16} /></Callout.Icon>
@@ -374,21 +421,28 @@ function Welcome({ stages, stopped, resume, onStart }: {
   );
 }
 
-function CodeCard({ code, simulation = false }: { code: Code; simulation?: boolean }) {
+function CodeCard({ code, simulation = false, embedded = false }: { code: Code; simulation?: boolean; embedded?: boolean }) {
   return (
-    <div className="code-card" role="status">
-      <div className="eyebrow">Connect your GitHub account</div>
-      <p className="code-text">{simulation ? "Example device code for the UI rehearsal:" : "GitHub should have opened in your browser. Enter this code there:"}</p>
-      <p className="code-text muted">{simulation ? "No browser sign-in or GitHub request will happen." : "Already have an account? Sign in and approve the code. New to GitHub? Create an account, then return here. Your account needs permission to create a private repository."}</p>
+    <div className={`code-card${embedded ? " code-card-embedded" : ""}`} role="status">
+      {!embedded && <div className="eyebrow">Connect your GitHub account</div>}
+      {!embedded && <p className="code-text">{simulation ? "Example device code for the UI rehearsal:" : "GitHub should have opened in your browser. Enter this code there:"}</p>}
+      {!embedded && <p className="code-text muted">{simulation ? "No browser sign-in or GitHub request will happen." : "Already have an account? Sign in and approve the code. New to GitHub? Create an account, then return here. Your account needs permission to create a private repository."}</p>}
       <div className="code-row">
         <code className="code">{code.code}</code>
         <Button size="2" variant="soft" disabled={simulation} onClick={() => navigator.clipboard.writeText(code.code)}><Copy size={14} /> Copy</Button>
         <Button size="2" disabled={simulation} onClick={() => BrowserOpenURL(code.link)}><ExternalLink size={14} /> Open GitHub</Button>
-        <Button size="2" variant="soft" disabled={simulation} onClick={() => BrowserOpenURL("https://github.com/signup")}><ExternalLink size={14} /> Create account</Button>
       </div>
       {!simulation && <p className="code-text muted">Waiting for you to approve it. This continues by itself.</p>}
     </div>
   );
+}
+
+function SelectionReview({ selections }: { selections: Selection[] }) {
+  return <section className="selection-review" aria-label="Your selections">
+    <h1 className="title">Your selections</h1>
+    <dl>{selections.map(selection => <div key={selection.id}><dt>{selection.label}</dt><dd>{selection.value}</dd></div>)}</dl>
+    <p className="lede small">Editing completed selections is not available in this run.</p>
+  </section>;
 }
 
 // What a step looks like when it is not asking anything: a live checklist while it runs,
@@ -437,7 +491,7 @@ function StepView({ stage, status, result, lines }: { stage: main.Stage; status:
 // One question, in the step it belongs to. A question that needs the operator to do
 // something first shows numbered actions and a short list; a plain question is just
 // the question and its control.
-function QuestionCard({ screen, busy, simulation = false, onAnswer }: { screen: Screen; busy: boolean; simulation?: boolean; onAnswer: (v: string) => void }) {
+function QuestionCard({ screen, busy, simulation = false, code, githubUser, onAnswer }: { screen: Screen; busy: boolean; simulation?: boolean; code?: Code; githubUser?: string; onAnswer: (v: string) => void }) {
   const [text, setText] = useState("");
   useEffect(() => setText(screen.default ?? ""), [screen]);
   const confirm = screen.kind === "confirm";
@@ -454,12 +508,24 @@ function QuestionCard({ screen, busy, simulation = false, onAnswer }: { screen: 
   const isCommand = (l: string) => /^(gh|git|task) /.test(l);
   const yes = screen.yesLabel || (confirm ? "Continue" : screen.kind === "secret" ? "Check token" : "Continue");
   const no = screen.noLabel || (confirm ? "No" : "Cancel");
+  const autoAdvance = simulation && screen.id === "github-signin";
+  // A discovered value is still a selection when there is only one option.
+  // Single-action screens with an explicit label (such as Retry) keep that label.
+  const multiChoice = screen.kind === "choice" && screen.options.length > 0 && (screen.options.length > 1 || !screen.yesLabel);
+
+  useEffect(() => {
+    if (!autoAdvance) return;
+    const timer = window.setTimeout(() => onAnswer("yes"), 1800);
+    return () => window.clearTimeout(timer);
+  }, [autoAdvance, onAnswer]);
 
   return (
-    <div className="qcard">
-      <div className="action-label">YOUR OBJECTIVE</div>
-      <h1 ref={heading} tabIndex={-1} className="title">{screen.title || (screen.kind === "choice" ? "Choose one" : lines[0])}</h1>
-      {screen.intro && <p className="lede small">{screen.intro}</p>}
+    <div className="qcard" data-screen={screen.id}>
+      {code && <div className="action-label">CONNECT YOUR GITHUB ACCOUNT</div>}
+      {!code && <h1 ref={heading} tabIndex={-1} className="title">{screen.title || (screen.kind === "choice" ? screen.prompt : lines[0])}</h1>}
+      {screen.id === "create-or-reuse-repository" && githubUser && <div className="github-account"><span>Signed in to GitHub as <strong>{githubUser}</strong></span><Button size="2" variant="soft" color="gray" onClick={() => onAnswer("__switch_github_account__")}>Log out</Button></div>}
+      {screen.intro && !code && <p className="lede small">{screen.intro}</p>}
+      {code && <CodeCard code={code} simulation={simulation} embedded />}
 
       {guided && (
         <ol className="instr">
@@ -495,7 +561,6 @@ function QuestionCard({ screen, busy, simulation = false, onAnswer }: { screen: 
           <p className="lede small" key={i}>{line}</p>
         ),
       )}
-      {!screen.title && screen.kind === "choice" && screen.prompt && <p className="lede small">{screen.prompt}</p>}
       {screen.title && !confirm && screen.prompt && !guided && <p className="lede small">{screen.prompt}</p>}
       {screen.title && confirm && screen.prompt && <p className="lede small">{screen.prompt}</p>}
 
@@ -506,13 +571,9 @@ function QuestionCard({ screen, busy, simulation = false, onAnswer }: { screen: 
         </Callout.Root>
       )}
 
-      {screen.kind === "choice" && screen.options.length > 1 && (
-        <RadioCards.Root value={text} onValueChange={setText} columns="1" mt="4">
-          {screen.options.map((o) => (
-            <RadioCards.Item key={o} value={o}>{o}</RadioCards.Item>
-          ))}
-        </RadioCards.Root>
-      )}
+      {multiChoice && <div className="choice-actions">
+        {screen.options.map((o) => <Button key={o} size="3" onClick={() => onAnswer(o)}>{o}</Button>)}
+      </div>}
       {typed && (
         <div className="field">
           <label htmlFor={`answer-${screen.id}`}>{screen.prompt}</label>
@@ -530,10 +591,10 @@ function QuestionCard({ screen, busy, simulation = false, onAnswer }: { screen: 
         </div>
       )}
 
-      <div className="qactions">
+      {!autoAdvance && !multiChoice && <div className="qactions">
         <Button size="3" loading={busy} onClick={() => onAnswer(confirm ? "yes" : text)}>{busy ? "Checking…" : yes}</Button>
         {confirm && no.toLowerCase() !== "cancel" && <Button size="3" variant="soft" color="gray" disabled={busy} onClick={() => onAnswer("no")}>{no}</Button>}
-      </div>
+      </div>}
     </div>
   );
 }

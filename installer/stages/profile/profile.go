@@ -82,7 +82,7 @@ func (s *Step) remoteHead(ctx context.Context) string {
 	return ""
 }
 
-func (s *Step) Check(ctx context.Context, _ *engine.Env) (engine.Finding, error) {
+func (s *Step) Check(ctx context.Context, env *engine.Env) (engine.Finding, error) {
 	if res, err := s.Run.Run(ctx, s.Dir, "python3", "--version"); err != nil || !res.OK() {
 		return engine.Finding{Status: engine.Blocked, Detail: "python3 is required to read and render platform.yaml. Install it from https://www.python.org/downloads/."}, nil
 	}
@@ -92,6 +92,9 @@ func (s *Step) Check(ctx context.Context, _ *engine.Env) (engine.Finding, error)
 	}
 	if current.Placeholder() {
 		return engine.Finding{Status: engine.Needed, Detail: "platform.yaml still holds the template domain and tailnet"}, nil
+	}
+	if (env.Value(domainKey) != "" && env.Value(domainKey) != current[domainKey]) || (env.Value(overlayKey) != "" && env.Value(overlayKey) != current[overlayKey]) {
+		return engine.Finding{Status: engine.Needed, Detail: "provider selections differ from platform.yaml"}, nil
 	}
 	if !s.clean(ctx) {
 		return engine.Finding{Status: engine.Needed, Detail: "the profile has changes that are not committed"}, nil
@@ -155,10 +158,6 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 	}
 	proposal := platform.Standard(domain, overlay)
 	say(fmt.Sprintf("Domain %s, tailnet %s.", domain, overlay))
-	if err := engine.Approve(ctx, ui, "apply-profile", "Apply this public configuration to your private recovery repository?"); err != nil {
-		return err
-	}
-
 	tmp, err := os.CreateTemp("", "adaetum-platform-*.yaml")
 	if err != nil {
 		return err

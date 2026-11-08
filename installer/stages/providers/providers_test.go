@@ -2,10 +2,12 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -17,6 +19,32 @@ import (
 )
 
 func ok(out string) sys.Result { return sys.Result{Stdout: out} }
+
+func TestCloudflareTokenTemplateIncludesDocumentedPermissions(t *testing.T) {
+	u, err := url.Parse(cloudflareTokenTemplateURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Host != "dash.cloudflare.com" || u.Query().Get("to") != "/:account/api-tokens" || u.Query().Get("name") != "Adaetum bootstrap" {
+		t.Fatalf("unexpected template URL: %s", u)
+	}
+	var permissions []struct {
+		Key  string `json:"key"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(u.Query().Get("permissionGroupKeys")), &permissions); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, p := range permissions {
+		got[p.Key+":"+p.Type] = true
+	}
+	for _, want := range []string{"account_api_tokens:read", "account_api_tokens:edit", "workers_r2:read", "workers_r2:edit", "c07321b023e944ff818fec44d8203567:edit", "workers_scripts:read", "workers_scripts:edit", "zone:read", "dns:read", "dns:edit", "workers_routes:read", "workers_routes:edit"} {
+		if !got[want] {
+			t.Errorf("template is missing %s", want)
+		}
+	}
+}
 
 // apis starts fake Cloudflare and Tailscale services that accept only the given
 // tokens, so a wrong or revoked token is rejected the way the real ones do.
@@ -101,7 +129,7 @@ func apply(t *testing.T, s *Step, env *engine.Env, answers map[string]string) er
 	return s.Apply(context.Background(), env, engine.Headless{Answers: plain, Getenv: func(k string) string { return secret[k] }})
 }
 
-func TestAFirstRunAuthorizesBothProvidersAndSavesTheCredentials(t *testing.T) {
+func TestAFirstRunKeepsProviderCredentialsInMemory(t *testing.T) {
 	f, store, env := runner(), &secrets.Memory{}, &engine.Env{}
 	s := step(f, store, apis(t, []string{"cfat_good"}, []string{"tskey-good"}, devices))
 	if err := apply(t, s, env, fresh); err != nil {
@@ -122,8 +150,8 @@ func TestAFirstRunAuthorizesBothProvidersAndSavesTheCredentials(t *testing.T) {
 	}
 	ns := "github.com/alice/adaetum-cluster"
 	for _, k := range []string{keyCloudflare, keyTailscale, keyOAuthID, keyOAuthSecret, keyOperatorID, keyOperatorSec} {
-		if v, err := store.Get(ns, k); err != nil || v == "" {
-			t.Errorf("%s was not saved (%v)", k, err)
+		if v, err := store.Get(ns, k); v != "" {
+			t.Errorf("%s was saved locally (%v)", k, err)
 		}
 	}
 	// Tokens travel on stdin only; no process ever sees one as an argument.
@@ -174,8 +202,8 @@ func TestARejectedSavedTokenIsForgottenAndAskedForAgain(t *testing.T) {
 	if err := apply(t, s, &engine.Env{}, fresh); err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := store.Get(ns, keyCloudflare); v != "cfat_good" {
-		t.Fatalf("the saved token is %q; the revoked one should have been replaced", v)
+	if v, _ := store.Get(ns, keyCloudflare); v != "" {
+		t.Fatal("the revoked token should be removed without saving the replacement")
 	}
 }
 
@@ -201,8 +229,8 @@ func TestMissingCloudflareAccessSendsTheOperatorToFixTheToken(t *testing.T) {
 	if err := apply(t, s, &engine.Env{}, fresh); err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := store.Get("github.com/alice/adaetum-cluster", keyCloudflare); v != "cfat_good" {
-		t.Fatalf("the token was not saved again after it was fixed: %q", v)
+	if v, _ := store.Get("github.com/alice/adaetum-cluster", keyCloudflare); v != "" {
+		t.Fatal("the fixed token was saved locally")
 	}
 }
 
@@ -353,8 +381,7 @@ func TestInstructionsAndTheTokenBoxAreOneScreen(t *testing.T) {
 			for _, st := range sc.Steps {
 				hasLink = hasLink || strings.HasPrefix(st.Link, "https://dash.cloudflare.com")
 			}
-			listed := strings.Join(sc.List, "|")
-			if sc.Kind != engine.Secret || sc.Title == "" || len(sc.Steps) < 3 || !hasLink || !strings.Contains(listed, "Cloudflare Tunnel") {
+			if sc.Kind != engine.Secret || sc.Title == "" || len(sc.Steps) < 3 || !hasLink {
 				t.Fatalf("the token screen is not a guided, structured screen: %+v", sc)
 			}
 			if len(sc.Prompt) > 40 {

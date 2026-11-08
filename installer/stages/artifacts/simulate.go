@@ -6,14 +6,10 @@ import (
 	"github.com/Adaetum/Adaetum/installer/engine"
 )
 
-// Simulate reuses the publish confirmation and reports a successful artifact
-// pipeline without uploading files, syncing secrets, dispatching workflows, or
+// Simulate reports a successful artifact pipeline without uploading files,
+// syncing secrets, dispatching workflows, or
 // building an ISO.
 func (s *Step) Simulate(ctx context.Context, _ *engine.Env, ui engine.UI) error {
-	if err := engine.Approve(ctx, ui, "publish-artifacts",
-		"This uploads installer images to your R2 bucket, syncs secrets to your private repository's GitHub environment, and triggers its workflows. Continue?"); err != nil {
-		return err
-	}
 	for _, message := range []string{
 		"Installer images uploaded to the example R2 bucket.",
 		"Break-glass bundle built and published.",

@@ -174,9 +174,6 @@ def validate_bootstrap_access(token: str, account_id: str, zone_domain: str = ""
       "Cloudflare One Connectors Write",
       "Cloudflare One Connector: cloudflared Write",
     },
-    "Connectivity Directory Read": {"Connectivity Directory Read"},
-    "Connectivity Directory Bind": {"Connectivity Directory Bind"},
-    "Connectivity Directory Admin": {"Connectivity Directory Admin"},
     "Workers Scripts Read": {"Workers Scripts Read"},
     "Workers Scripts Write": {"Workers Scripts Write", "Workers Scripts Edit"},
   }
@@ -257,8 +254,7 @@ def validate_bootstrap_access(token: str, account_id: str, zone_domain: str = ""
     raise RuntimeError(
       "Cloudflare rejected the required tunnel capability. Edit or recreate the "
       "bootstrap token with Cloudflare Tunnel > Write for the entire selected "
-      "account. The currently validated setup baseline also includes Connectivity "
-      "Directory > Read, Bind, and Admin."
+      "account, and check the other required account and zone permissions."
     ) from exc
 
 
