@@ -9,14 +9,14 @@ resources:
   - deployment.yaml
   - service.yaml
   - embed.yaml
-# Initial release tags are replaced with the published digests before activation.
+# Pinned to the published beta release; updates are reviewed through GitOps.
 images:
   - name: adaetum-agent
     newName: ghcr.io/adaetum/adaetum-agent
-    newTag: adaetum-v0.1.0
+    digest: sha256:359e70c18a95f3fa89e955d43aba8181cacd6bd4542f88e72ac0ebe1dd8c2a86
   - name: adaetum-auth
     newName: ghcr.io/adaetum/adaetum-auth
-    newTag: adaetum-v0.1.0
+    digest: sha256:f134f985d67b9ba9eca16d3fb7b70f26e0d1d6c8dcc6736b1775f8b5d89ba087
   - name: adaetum-embed
     newName: ghcr.io/adaetum/adaetum-embed
-    newTag: adaetum-v0.1.0
+    digest: sha256:09656dd1e21272a6dea2f774bdd26d442c46affb4d1cba5a14905c3468c033a6

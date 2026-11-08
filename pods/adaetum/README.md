@@ -1,8 +1,8 @@
 # Adaetum cluster agent
 
 The `adaetum-agent` application runs the cluster agent and its authentication
-service together, with a separate embedding service. It starts with automatic
-Argo CD sync disabled until release images have been published and pinned.
+service together, with a separate embedding service. Argo CD syncs the application automatically using the image digests pinned in
+its kustomization.
 
 The service is cluster-internal. For initial access, an operator with cluster
 access can run `kubectl -n adaetum port-forward service/adaetum-cluster-agent
@@ -39,5 +39,15 @@ The workflow uses the repository's `GITHUB_TOKEN`, even when a person starts it.
 The three GHCR packages must grant this repository's Actions workflow write
 access; public visibility is required for anonymous cluster pulls. GitHub may
 create packages as private. Check each package's settings after its first
-publication. The operator must pin the resulting image digests in the pod
-kustomization and enable the application before deploying it.
+publication. Release updates can be proposed and reviewed through the agent before GitOps
+applies the new image digests.
+
+## Host installation
+
+The Rocky installer media includes the pinned host-agent binary for its target
+architecture. Kickstart installs it, creates a unique token under
+`/etc/adaetum/agent-token`, and enables the service on every installed server.
+The host agent starts independently of the cluster and can be managed later by
+the `host-agent` Ansible playbook. An operator must still enroll each host with
+the cluster agent using a one-time join token; installing the binary alone does
+not enroll it or configure firewall access. See `adaetum/agent/docs/cluster.md`.

@@ -19,6 +19,15 @@ if [ ! -f "${detector_source}" ]; then
 fi
 install -D -m 0755 "${detector_source}" "${detector_target}"
 
+# The ISO builder verifies the release checksum before writing this binary to
+# media. Every installed server gets its own token and service on first boot.
+agent_source="/run/install/repo/ks/adaetum-agent"
+if [ ! -f "${agent_source}" ]; then
+  echo "[BOOTSTRAP] Missing host agent on installer media" >>"${target_root}/root/bootstrap-post.log"
+  exit 1
+fi
+install -D -m 0755 "${agent_source}" "${target_root}/usr/local/bin/adaetum-agent"
+
 if [ ! -f "${gum_source}" ]; then
   echo "[BOOTSTRAP] Missing required Gum RPM on installer media" \
     >>"${target_root}/root/bootstrap-post.log"

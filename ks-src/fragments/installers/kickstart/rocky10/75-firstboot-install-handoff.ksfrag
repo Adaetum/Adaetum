@@ -100,6 +100,36 @@ fi
 
 systemctl enable tailscale-firstboot.service || true
 
+# Each host owns an independent recovery token. Never rotate it on a rerun.
+install -d -m 0700 /var/lib/adaetum
+install -d -m 0750 /etc/adaetum
+if [ ! -s /etc/adaetum/agent-token ]; then
+  /usr/local/bin/adaetum-agent token create -file /etc/adaetum/agent-token
+fi
+cat >/etc/systemd/system/adaetum-agent.service <<'UNIT'
+[Unit]
+Description=Adaetum host agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=TURSO_GO_CACHE_DIR=/var/lib/adaetum/cache
+ExecStart=/usr/local/bin/adaetum-agent serve -listen 0.0.0.0:8443 -data-dir /var/lib/adaetum -token-file /etc/adaetum/agent-token
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon /usr/local/bin/adaetum-agent /etc/systemd/system/adaetum-agent.service || true
+fi
+systemctl enable adaetum-agent.service
+
 section_begin "git-install"
 echo "[BOOTSTRAP] Ensuring git is installed"
 if ! command -v git >/dev/null 2>&1; then

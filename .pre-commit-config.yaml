@@ -99,6 +99,12 @@ repos:
           - --self-test
         pass_filenames: false
         files: ^(ks-src/|tasks/scripts/compile-kickstarts\.py|tasks/ks\.yml|Taskfile\.yml)
+      - id: validate-host-agent-iso
+        name: Validate host agent media
+        entry: python3 .validator/validate-host-agent-iso.py
+        language: python
+        pass_filenames: false
+        files: ^(adaetum/host-agent-release\.json|tasks/scripts/fetch-host-agent\.py|\.validator/validate-host-agent-iso\.py)$
       - id: validate-firstboot-console
         name: Validate first-boot console contract
         entry: python3 .validator/validate-firstboot-console.py

@@ -80,7 +80,7 @@ export function ReleaseCard({ servers, nodesError }: { servers: ServerStatus[]; 
       <AlertDialog.Root open={confirming} onOpenChange={setConfirming}>
         <AlertDialog.Content maxWidth="480px">
           <AlertDialog.Title>Propose this update?</AlertDialog.Title>
-          <AlertDialog.Description size="2">Create a new branch and pull request for the agent, auth and embedding images in your cluster GitOps repository. Review and merge it separately to deploy. Host agents are updated through the preview below.</AlertDialog.Description>
+          <AlertDialog.Description size="2">Create a new branch and pull request for the agent, auth and embedding images and the host agent included in new installer media. Review and merge it separately to deploy. Host agents are updated through the preview below.</AlertDialog.Description>
           <Flex gap="3" mt="4" justify="end"><Button variant="soft" color="gray" onClick={() => setConfirming(false)}>Cancel</Button><Button disabled={busy} onClick={propose}>{busy ? "Creating…" : "Create pull request"}</Button></Flex>
         </AlertDialog.Content>
       </AlertDialog.Root>

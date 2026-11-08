@@ -34,7 +34,7 @@ type Proposal struct {
 // operator's existing Gitea repository. It never merges or changes the base branch.
 type GitOps struct {
 	BaseURL, PublicHost, Owner, Repository, Branch, TokenFile string
-	HTTP                                          *http.Client
+	HTTP                                                      *http.Client
 }
 
 func (g GitOps) configured() error {
@@ -44,7 +44,9 @@ func (g GitOps) configured() error {
 	if g.TokenFile == "" {
 		return errors.New("the GitOps update credential is not configured")
 	}
-	if g.PublicHost != "" && !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(g.PublicHost) { return errors.New("the public Gitea host is invalid") }
+	if g.PublicHost != "" && !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(g.PublicHost) {
+		return errors.New("the public Gitea host is invalid")
+	}
 	return nil
 }
 func (g GitOps) call(ctx context.Context, method, path string, body any, out any) error {
@@ -209,24 +211,53 @@ func (g GitOps) CreateProposal(ctx context.Context, m Manifest) (Proposal, error
 	if bytes.Equal(bytes.TrimSpace(decoded), bytes.TrimSpace(updated)) {
 		return Proposal{}, errors.New("this release is already pinned")
 	}
+	// New media and cluster images must advance together in the reviewed change.
+	if err := validate(m, m.Version, "adaetum-v"+m.Version); err != nil {
+		return Proposal{}, err
+	}
+	const hostReleaseFile = "adaetum/host-agent-release.json"
+	var hostFile struct {
+		SHA string `json:"sha"`
+	}
+	if err := g.call(ctx, "GET", prefix+"/contents/"+hostReleaseFile+"?ref="+url.QueryEscape(g.Branch), nil, &hostFile); err != nil {
+		return Proposal{}, err
+	}
+	if hostFile.SHA == "" {
+		return Proposal{}, errors.New("Gitea returned invalid host release metadata")
+	}
+	hostLock := map[string]any{"version": m.Version, "sha256": map[string]string{
+		"amd64": m.Binaries["adaetum-agent-linux-amd64"].SHA256,
+		"arm64": m.Binaries["adaetum-agent-linux-arm64"].SHA256,
+	}}
+	hostData, err := json.MarshalIndent(hostLock, "", "  ")
+	if err != nil {
+		return Proposal{}, err
+	}
+	hostData = append(hostData, '\n')
 	var random [6]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return Proposal{}, err
 	}
 	branch := "adaetum/update-v" + m.Version + "-" + hex.EncodeToString(random[:])
-	payload := map[string]any{"branch": g.Branch, "new_branch": branch, "message": "Update Adaetum agent to " + m.Version, "files": []any{map[string]any{"operation": "update", "path": gitopsFile, "sha": current.SHA, "content": base64.StdEncoding.EncodeToString(updated)}}}
+	payload := map[string]any{"branch": g.Branch, "new_branch": branch, "message": "Update Adaetum agent to " + m.Version, "files": []any{map[string]any{"operation": "update", "path": gitopsFile, "sha": current.SHA, "content": base64.StdEncoding.EncodeToString(updated)}, map[string]any{"operation": "update", "path": hostReleaseFile, "sha": hostFile.SHA, "content": base64.StdEncoding.EncodeToString(hostData)}}}
 	if err := g.call(ctx, "POST", prefix+"/contents", payload, nil); err != nil {
 		return Proposal{}, err
 	}
-	var pull struct { Number int `json:"number"` }
-	body := map[string]any{"base": g.Branch, "head": branch, "title": "Update Adaetum agent to " + m.Version, "body": "Pins the agent, auth, and embedding images to the immutable digests in the Adaetum release manifest. Review and merge to apply the update."}
+	var pull struct {
+		Number int `json:"number"`
+	}
+	body := map[string]any{"base": g.Branch, "head": branch, "title": "Update Adaetum agent to " + m.Version, "body": "Pins the agent, auth, and embedding images and the host agent included in new installer media. Review and merge to apply the update."}
 	if err := g.call(ctx, "POST", prefix+"/pulls", body, &pull); err != nil {
 		return Proposal{Branch: branch}, fmt.Errorf("the update branch %s was created, but the pull request failed: %w", branch, err)
 	}
-	if pull.Number <= 0 { return Proposal{Branch: branch}, errors.New("the pull request was created but Gitea returned no pull request number") }
+	if pull.Number <= 0 {
+		return Proposal{Branch: branch}, errors.New("the pull request was created but Gitea returned no pull request number")
+	}
 	base := strings.TrimRight(g.BaseURL, "/")
 	if g.PublicHost != "" {
-		if !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(g.PublicHost) { return Proposal{Branch: branch}, errors.New("the pull request was created but the public Gitea host is invalid") }
+		if !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(g.PublicHost) {
+			return Proposal{Branch: branch}, errors.New("the pull request was created but the public Gitea host is invalid")
+		}
 		base = "https://" + g.PublicHost
 	}
 	return Proposal{URL: fmt.Sprintf("%s/%s/%s/pulls/%d", base, url.PathEscape(g.Owner), url.PathEscape(g.Repository), pull.Number), Branch: branch}, nil

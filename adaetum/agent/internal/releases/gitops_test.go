@@ -69,6 +69,8 @@ func TestGitOpsCreatesASeparateReviewBranchAndPullRequest(t *testing.T) {
 		switch {
 		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/contents/"+gitopsFile):
 			fmt.Fprintf(w, `{"sha":"abc","encoding":"base64","content":%q}`, base64.StdEncoding.EncodeToString([]byte(originalKustomization)))
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/contents/adaetum/host-agent-release.json"):
+			fmt.Fprint(w, `{"sha":"host-sha"}`)
 		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/contents"):
 			var body struct {
 				Branch    string `json:"branch"`
@@ -79,6 +81,19 @@ func TestGitOpsCreatesASeparateReviewBranchAndPullRequest(t *testing.T) {
 				t.Error(err)
 			}
 			decoded, _ := base64.StdEncoding.DecodeString(body.Files[0].Content)
+			if len(body.Files) == 2 {
+				data, err := base64.StdEncoding.DecodeString(body.Files[1].Content)
+				var lock struct {
+					Version string            `json:"version"`
+					SHA256  map[string]string `json:"sha256"`
+				}
+				if err != nil || json.Unmarshal(data, &lock) != nil || lock.Version != "1.2.3" || lock.SHA256["amd64"] != strings.Repeat("c", 64) || lock.SHA256["arm64"] != strings.Repeat("c", 64) {
+					t.Errorf("invalid host release pin: %s", data)
+				}
+			}
+			if len(body.Files) != 2 || body.Files[1].Path != "adaetum/host-agent-release.json" || body.Files[1].SHA != "host-sha" {
+				t.Errorf("missing host release pin: %+v", body.Files)
+			}
 			if body.Branch != "main" || !strings.HasPrefix(body.NewBranch, "adaetum/update-v1.2.3-") || body.Files[0].Path != gitopsFile || body.Files[0].SHA != "abc" || !strings.Contains(string(decoded), "digest: sha256:") {
 				t.Errorf("unexpected change: %+v", body)
 			}

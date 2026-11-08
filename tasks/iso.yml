@@ -432,10 +432,12 @@ tasks:
         gum_version="0.17.0"
         case "${iso_base}" in
           *aarch64*)
+            host_agent_arch="arm64"
             gum_rpm_arch="aarch64"
             gum_rpm_sha256="48447f9d7b3f604cf0765cabc3ae3aaf72b1b2ab474deac33b5feb49c50ce765"
             ;;
           *x86_64*)
+            host_agent_arch="amd64"
             gum_rpm_arch="x86_64"
             gum_rpm_sha256="789d5b0252238608c807c640d053fa3d0461fd88d676eb8ae92b74635c57bc79"
             ;;
@@ -477,6 +479,10 @@ tasks:
           exit 1
         fi
         mv -f "${gum_rpm_partial}" "${gum_rpm_path}"
+        # The kickstart installs this on each host, including when the
+        # kickstart itself is fetched rather than embedded on the media.
+        python3 tasks/scripts/fetch-host-agent.py --arch "${host_agent_arch}" \
+          --output "${work_dir}/ks/adaetum-agent"
         if [ "${embed_ks}" = "1" ]; then
           ks_rendered="{{.KS_OUT_DIR}}/${ks_name}"
           if [ ! -f "${ks_rendered}" ]; then
