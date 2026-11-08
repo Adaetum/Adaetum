@@ -8,6 +8,16 @@ host_agent_binary_src: ""
 host_agent_binary_url: ""
 host_agent_binary_checksum: ""
 
+# Optional local sign-in service. Its release binary is independently pinned;
+# installing a new agent must never silently replace or enable authentication.
+host_agent_auth_enabled: false
+host_agent_auth_binary_src: ""
+host_agent_auth_binary_url: ""
+host_agent_auth_binary_checksum: ""
+host_agent_auth_path: /usr/local/bin/adaetum-auth
+host_agent_auth_service_unit: adaetum-auth.service
+host_agent_auth_state_dir: /var/lib/adaetum/auth
+
 # Everything the role installs belongs to this owner. Root on a real server; the
 # variables exist so the role can be exercised by an unprivileged user in tests.
 host_agent_owner: root

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Enforce the agent's security boundary: who may run commands on a server.
 
-The rule (agent/docs/security-boundary.md): the agent does not run commands on
+The rule (adaetum/agent/docs/security-boundary.md): the agent does not run commands on
 servers. Servers are changed by Ansible playbooks the agent launches. The only
-exception is an explicit, off-by-default override in agent/internal/hostaccess.
+exception is an explicit, off-by-default override in adaetum/agent/internal/hostaccess.
 
 This check keeps that true as the code grows. It fails if any Go package other
 than the ones listed below imports os/exec or an SSH library, or otherwise starts a
@@ -20,15 +20,15 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-AGENT = Path("agent")
+AGENT = Path("adaetum/agent")
 
 # Packages that may start processes, and why. Changing this list is the review.
 ALLOWED = {
-    "agent/internal/inspect": "read-only inspection: a fixed allowlist of commands, locally or over SSH in development",
-    "agent/internal/cleanup": "removes unused container images on the machine the agent itself runs on (root, flag, token)",
-    "agent/internal/ansiblerun": "launches ansible-playbook: the sanctioned way to change servers",
-    "agent/internal/hostaccess": "the optional, off-by-default SSH override",
-    "agent/cmd/adaetum-agent": "only exec.LookPath, to check that a program exists",
+    "adaetum/agent/internal/inspect": "read-only inspection: a fixed allowlist of commands, locally or over SSH in development",
+    "adaetum/agent/internal/cleanup": "removes unused container images on the machine the agent itself runs on (root, flag, token)",
+    "adaetum/agent/internal/ansiblerun": "launches ansible-playbook: the sanctioned way to change servers",
+    "adaetum/agent/internal/hostaccess": "the optional, off-by-default SSH override",
+    "adaetum/agent/cmd/adaetum-agent": "only exec.LookPath, to check that a program exists",
 }
 
 FORBIDDEN_IMPORTS = ("os/exec", "golang.org/x/crypto/ssh")
@@ -39,7 +39,7 @@ CMD_EXEC_USE = re.compile(r"\bexec\.(?!LookPath\b)\w+")
 
 HOSTACCESS_IMPORT = "internal/hostaccess"
 # Files allowed to wire the override. The host agent (serve) must not.
-HOSTACCESS_WIRING = {"agent/cmd/adaetum-agent/hostaccess.go", "agent/cmd/adaetum-agent/cluster.go"}
+HOSTACCESS_WIRING = {"adaetum/agent/cmd/adaetum-agent/hostaccess.go", "adaetum/agent/cmd/adaetum-agent/cluster.go"}
 
 
 def go_files(root: Path):
@@ -83,18 +83,18 @@ def check(root: Path) -> list[str]:
             if forbidden in imports and package not in ALLOWED:
                 problems.append(
                     f"{relative}: imports {forbidden}, but {package} is not allowed to run commands. "
-                    "Change servers by launching an Ansible playbook (agent/internal/ansiblerun) instead. "
+                    "Change servers by launching an Ansible playbook (adaetum/agent/internal/ansiblerun) instead. "
                     "If a new package truly must run commands, add it to ALLOWED in "
                     ".validator/validate-agent-boundary.py with a reason, as a reviewed change."
                 )
         if FORBIDDEN_CALLS.search(source) and package not in ALLOWED:
-            problems.append(f"{relative}: starts a process, which {package} may not do (see agent/docs/security-boundary.md)")
+            problems.append(f"{relative}: starts a process, which {package} may not do (see adaetum/agent/docs/security-boundary.md)")
 
-        if package == "agent/cmd/adaetum-agent" and "os/exec" in imports:
+        if package == "adaetum/agent/cmd/adaetum-agent" and "os/exec" in imports:
             for match in CMD_EXEC_USE.finditer(source):
                 problems.append(f"{relative}: uses {match.group(0)}; the command package may only use exec.LookPath")
 
-        if any(i.endswith(HOSTACCESS_IMPORT) for i in imports) and relative not in HOSTACCESS_WIRING and package != "agent/internal/hostaccess":
+        if any(i.endswith(HOSTACCESS_IMPORT) for i in imports) and relative not in HOSTACCESS_WIRING and package != "adaetum/agent/internal/hostaccess":
             problems.append(
                 f"{relative}: imports the SSH override. Only the cluster agent's wiring "
                 f"({', '.join(sorted(HOSTACCESS_WIRING))}) may; the host agent must not offer it."
@@ -102,10 +102,10 @@ def check(root: Path) -> list[str]:
 
     main = root / AGENT / "cmd/adaetum-agent/main.go"
     if main.exists() and "setupHostAccess" in main.read_text(encoding="utf-8"):
-        problems.append("agent/cmd/adaetum-agent/main.go wires the SSH override into the host agent (serve); it belongs to the cluster agent only")
+        problems.append("adaetum/agent/cmd/adaetum-agent/main.go wires the SSH override into the host agent (serve); it belongs to the cluster agent only")
 
     if not (root / AGENT / "docs/security-boundary.md").exists():
-        problems.append("agent/docs/security-boundary.md is missing: the boundary must stay documented")
+        problems.append("adaetum/agent/docs/security-boundary.md is missing: the boundary must stay documented")
     return problems
 
 
@@ -115,8 +115,8 @@ def self_test() -> list[str]:
 
     def tree(files: dict[str, str]) -> Path:
         base = Path(tempfile.mkdtemp())
-        (base / "agent/docs").mkdir(parents=True)
-        (base / "agent/docs/security-boundary.md").write_text("x")
+        (base / "adaetum/agent/docs").mkdir(parents=True)
+        (base / "adaetum/agent/docs/security-boundary.md").write_text("x")
         for name, content in files.items():
             target = base / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -124,22 +124,22 @@ def self_test() -> list[str]:
         return base
 
     sneaky = 'package cluster\n\nimport (\n\t"fmt"\n\t"os/exec"\n)\n\nfunc f() { exec.Command("id") }\n'
-    if not check(tree({"agent/internal/cluster/x.go": sneaky})):
+    if not check(tree({"adaetum/agent/internal/cluster/x.go": sneaky})):
         failures.append("a cluster package importing os/exec was accepted")
-    if not check(tree({"agent/internal/fleet/x.go": 'package fleet\nimport "golang.org/x/crypto/ssh"\n'})):
+    if not check(tree({"adaetum/agent/internal/fleet/x.go": 'package fleet\nimport "golang.org/x/crypto/ssh"\n'})):
         failures.append("an SSH library import outside the allowed packages was accepted")
-    if not check(tree({"agent/internal/store/x.go": "package store\nfunc f() { syscall.Exec(\"/bin/sh\", nil, nil) }\n"})):
+    if not check(tree({"adaetum/agent/internal/store/x.go": "package store\nfunc f() { syscall.Exec(\"/bin/sh\", nil, nil) }\n"})):
         failures.append("syscall.Exec outside the allowed packages was accepted")
-    if not check(tree({"agent/cmd/adaetum-agent/x.go": 'package main\nimport "os/exec"\nfunc f() { exec.Command("id") }\n'})):
+    if not check(tree({"adaetum/agent/cmd/adaetum-agent/x.go": 'package main\nimport "os/exec"\nfunc f() { exec.Command("id") }\n'})):
         failures.append("exec.Command in the command package was accepted")
-    if not check(tree({"agent/cmd/adaetum-agent/main.go": "package main\nfunc main() { setupHostAccess() }\n"})):
+    if not check(tree({"adaetum/agent/cmd/adaetum-agent/main.go": "package main\nfunc main() { setupHostAccess() }\n"})):
         failures.append("the SSH override wired into the host agent was accepted")
-    if not check(tree({"agent/internal/webui/x.go": 'package webui\nimport "github.com/Adaetum/Adaetum/agent/internal/hostaccess"\n'})):
+    if not check(tree({"adaetum/agent/internal/webui/x.go": 'package webui\nimport "github.com/Adaetum/Adaetum/agent/internal/hostaccess"\n'})):
         failures.append("the SSH override imported by an unrelated package was accepted")
     clean = tree({
-        "agent/internal/ansiblerun/x.go": 'package ansiblerun\nimport "os/exec"\nfunc f() { exec.Command("ansible-playbook") }\n',
-        "agent/cmd/adaetum-agent/x.go": 'package main\nimport "os/exec"\nfunc f() { exec.LookPath("ssh") }\n',
-        "agent/cmd/adaetum-agent/hostaccess.go": 'package main\nimport "github.com/Adaetum/Adaetum/agent/internal/hostaccess"\n',
+        "adaetum/agent/internal/ansiblerun/x.go": 'package ansiblerun\nimport "os/exec"\nfunc f() { exec.Command("ansible-playbook") }\n',
+        "adaetum/agent/cmd/adaetum-agent/x.go": 'package main\nimport "os/exec"\nfunc f() { exec.LookPath("ssh") }\n',
+        "adaetum/agent/cmd/adaetum-agent/hostaccess.go": 'package main\nimport "github.com/Adaetum/Adaetum/agent/internal/hostaccess"\n',
     })
     if check(clean):
         failures.append(f"a compliant tree was rejected: {check(clean)}")

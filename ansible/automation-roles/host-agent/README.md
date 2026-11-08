@@ -20,6 +20,13 @@ certificate, requires its access token for the API, and keeps its data in
 set. The UI cannot remove images unless `host_agent_allow_changes` is true (the
 `image-cleanup` role's timer handles routine cleanup without it).
 
+`host_agent_auth_enabled` is off by default. When enabled, the role also installs
+the separately released auth binary, a local-only Unix socket service, and a shared
+secret created once. The auth database and signing key remain on the host across
+updates. Specify exactly one `host_agent_auth_binary_src` or
+`host_agent_auth_binary_url`; the URL also needs `host_agent_auth_binary_checksum`
+in `sha256:<hex>` form.
+
 Exactly one binary source is required. The binary runs as root everywhere, so it is
 installed only from a checked source: a file on the controller, or a URL with a
 required `sha256:` checksum.

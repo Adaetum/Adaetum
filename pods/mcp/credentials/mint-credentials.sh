@@ -119,6 +119,40 @@ mint_gitea() {
   log "gitea: issued a new token and stored it."
 }
 
+# This token can propose repository changes, but is separate from the MCP token.
+# Gitea scopes apply to the issuing account, so the administrator remains the
+# authority boundary until a dedicated repository-scoped account is available.
+mint_agent_gitops() {
+  local admin user password current token response name id
+  admin="$(bao_read gitea/admin)"
+  user="$(jq -er '.username' <<<"${admin}")"
+  password="$(jq -er '.password' <<<"${admin}")"
+  current="$(bao_read adaetum/gitops-update)"
+  token="$(jq -r '.token // empty' <<<"${current}")"
+  if [[ -n "${token}" ]] && curl --silent --fail --max-time 20 --output /dev/null \
+      --header "Authorization: token ${token}" "${GITEA_URL}/api/v1/user"; then
+    log "agent-gitops: the stored token is valid."
+    return 0
+  fi
+  name="adaetum-agent-update-$(date +%s)"
+  response="$(jq -n --arg name "${name}" '{name: $name, scopes: ["read:user", "write:repository", "write:issue"]}' |
+    curl --silent --show-error --fail --max-time 20 --user "${user}:${password}" \
+      --header 'Content-Type: application/json' --request POST --data @- \
+      "${GITEA_URL}/api/v1/users/${user}/tokens")"
+  token="$(jq -er '.sha1 // .token' <<<"${response}")"
+  curl --silent --show-error --fail --max-time 20 --output /dev/null \
+    --header "Authorization: token ${token}" "${GITEA_URL}/api/v1/user"
+  persist adaetum/gitops-update "$(jq -c --arg token "${token}" '. + {token: $token}' <<<"${current}")"
+  curl --silent --show-error --fail --max-time 20 --user "${user}:${password}" \
+    "${GITEA_URL}/api/v1/users/${user}/tokens" |
+    jq -r --arg keep "${name}" '.[] | select(.name | startswith("adaetum-agent-update-")) | select(.name != $keep) | .id' |
+    while read -r id; do
+      curl --silent --show-error --fail --max-time 20 --user "${user}:${password}" \
+        --request DELETE --output /dev/null "${GITEA_URL}/api/v1/users/${user}/tokens/${id}"
+    done
+  log "agent-gitops: issued a new token and stored it."
+}
+
 # --- Argo CD --------------------------------------------------------------------
 
 mint_argocd() {
@@ -250,7 +284,7 @@ mint_grafana() {
 
 bao_login
 failed=0
-for service in gitea argocd grafana; do
+for service in gitea agent_gitops argocd grafana; do
   # A subshell run as its own command keeps `set -e` in force inside it, so the first
   # failing step stops that product only; the others still get their turn.
   set +e

@@ -1,0 +1,9 @@
+name: adaetum-agent
+project: default
+# First activation is deliberate until the release images are published and
+# pinned. After that, GitOps owns changes to the selected artifact digests.
+sync_automated: false
+source_type: git
+source_target_revision: HEAD
+source_path: pods/adaetum/agent
+destination_namespace: adaetum

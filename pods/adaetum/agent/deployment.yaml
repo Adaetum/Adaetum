@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adaetum-cluster-agent
+  namespace: adaetum
+spec:
+  # One writer owns the SQLite databases; never overlap old and new pods.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: adaetum-cluster-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: adaetum-cluster-agent
+        app.kubernetes.io/part-of: adaetum
+        adaetum.io/mcp-client: "true"
+    spec:
+      serviceAccountName: adaetum-cluster-agent
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: initialize-credentials
+          image: adaetum-agent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              test -s /data/access-token || adaetum-agent token create -file /data/access-token
+              test -s /data/auth/internal-secret || adaetum-agent token create -file /data/auth/internal-secret
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      containers:
+        - name: agent
+          image: adaetum-agent
+          args:
+            - cluster
+            - -listen
+            - 0.0.0.0:8444
+            - -data-dir
+            - /data/cluster
+            - -token-file
+            - /data/access-token
+            - -auth-socket
+            - /data/auth/auth.sock
+            - -auth-secret-file
+            - /data/auth/internal-secret
+            - -security-audit
+            - /data/security.log
+            - -ansible-executor
+            - kubernetes
+            - -ansible-audit
+            - /data/ansible.log
+            - -embedder
+            - http
+            - -embedder-url
+            - http://adaetum-embed.adaetum.svc/embed
+          envFrom:
+            - configMapRef: {name: adaetum-agent-cluster-config}
+          env:
+            - {name: ADAETUM_GITOPS_TOKEN_FILE, value: /run/adaetum-gitops/token}
+            - {name: TURSO_GO_CACHE_DIR, value: /data/cache}
+          ports:
+            - {name: https, containerPort: 8444}
+          readinessProbe:
+            httpGet: {scheme: HTTPS, path: /healthz, port: https}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {scheme: HTTPS, path: /healthz, port: https}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+            - {name: gitops-credential, mountPath: /run/adaetum-gitops, readOnly: true}
+        - name: auth
+          image: adaetum-auth
+          env:
+            - {name: AUTH_STATE_DIR, value: /data/auth}
+            - {name: AUTH_SOCKET, value: /data/auth/auth.sock}
+            - {name: AUTH_BASE_URL, value: 'https://adaetum-cluster-agent.adaetum.svc:8444'}
+            - {name: AUTH_MODE, value: primary}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "test -S /data/auth/auth.sock"]
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 25m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: adaetum-agent-data
+        - name: gitops-credential
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes: {secretProviderClass: adaetum-agent-gitops}
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}

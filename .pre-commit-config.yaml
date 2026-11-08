@@ -53,7 +53,7 @@ repos:
         entry: python3 .validator/validate-agent-boundary.py --self-test
         language: python
         pass_filenames: false
-        files: ^(agent/.*\.go|agent/docs/security-boundary\.md|\.validator/validate-agent-boundary\.py)$
+        files: ^(adaetum/agent/.*\.go|adaetum/agent/docs/security-boundary\.md|\.validator/validate-agent-boundary\.py)$
       - id: validate-workload-autoscaling
         name: Validate safe workload autoscaling
         entry: python3 .validator/validate-workload-autoscaling.py

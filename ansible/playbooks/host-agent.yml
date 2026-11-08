@@ -1,6 +1,6 @@
 ---
 # Install, upgrade, or repair the host agent on servers. This is the lever the
-# cluster agent's fleet view points at (see agent/docs/fleet.md): a server with no
+# cluster agent's fleet view points at (see adaetum/agent/docs/fleet.md): a server with no
 # agent or an old one is fixed by running this against it. It is not part of
 # day2.yml on purpose: it runs a binary as root on every server, so it is run
 # deliberately, one server at a time, and rehearsed with --check first.
