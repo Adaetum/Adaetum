@@ -10,7 +10,7 @@ spec:
     - name: gitea-registry-creds
   containers:
     - name: ansible-host-config-sync
-      image: registry.adaetum.invalid/gitea-admin/ansible-runner:build-1311ae568fda5f6d
+      image: registry.adaetum.invalid/gitea-admin/ansible-runner:build-a27e74dd03f76290
       imagePullPolicy: Always
       env:
         - name: CRON_SCHEDULE

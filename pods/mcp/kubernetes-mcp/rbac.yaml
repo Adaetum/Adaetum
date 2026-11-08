@@ -1,0 +1,32 @@
+# Full read and write on every Kubernetes resource, including pod exec and logs, so
+# the assistant can do what an administrator does. The two things deliberately left
+# out are the verbs that raise privilege (escalate, bind) and impersonate: with them
+# this account could grant itself more than it has, without them it cannot.
+#
+# Secret contents are readable. OpenBao, not Kubernetes, is where credentials live;
+# a Secret that appears here is a delivery copy. Narrow this role (for example by
+# removing `secrets` from the rule's resources and listing the rest) if the
+# assistant should never see them.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubernetes-mcp
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - nonResourceURLs: ["/version", "/healthz", "/livez", "/readyz", "/openapi/*", "/api", "/api/*", "/apis", "/apis/*"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubernetes-mcp
+subjects:
+  - kind: ServiceAccount
+    name: kubernetes-mcp
+    namespace: mcp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubernetes-mcp

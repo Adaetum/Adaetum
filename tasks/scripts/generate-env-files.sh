@@ -60,7 +60,7 @@ existing_value() {
   if [ -f "${existing_file}" ]; then
     value="$(awk -F= -v k="${key}" '$1==k {print substr($0, index($0, "=")+1); exit}' "${existing_file}")"
   fi
-  # run-opinionated-setup passes a temp "existing" file that may omit previously
+  # The installer's render stage passes a temp "existing" file that may omit previously
   # generated Cloudflare/R2 credentials. Fall back to current .env values so
   # reruns reuse existing R2 API credentials instead of creating new tokens.
   if [ "${ADAETUM_IGNORE_EXISTING_ENV:-0}" != 1 ] && [ -z "${value}" ] && [ "${out_file}" != "${existing_file}" ] && [ -f "${out_file}" ]; then
@@ -70,7 +70,7 @@ existing_value() {
 }
 
 # Read from the provided existing file only (no fallback to out_file).
-# Use this when run-opinionated-setup passes a curated temp existing file and we
+# Use this when the installer's render stage passes a curated temp existing file and we
 # want current run inputs (like KS_BASE_URL) to drive derived defaults.
 existing_value_primary() {
   local key="$1"
@@ -1276,7 +1276,7 @@ if [ -n "${CLOUDFLARE_API_TOKEN}" ] && [ -n "${RANCHER_PUBLIC_DOMAIN}" ]; then
     echo "Auto-generated/validated Rancher cloudflared tunnel settings from CLOUDFLARE_API_TOKEN."
   else
     echo "Warning: could not auto-generate Rancher cloudflared tunnel token from CLOUDFLARE_API_TOKEN."
-    echo "If this persists, verify the token includes Cloudflare Tunnel Write, Connectivity Directory Read/Bind/Admin, and Zone DNS Read/Write."
+    echo "If this persists, verify the token includes Cloudflare Tunnel Write and Zone DNS Read/Write."
   fi
 fi
 
@@ -1311,7 +1311,7 @@ RANCHER_CLOUDFLARED_TUNNEL_TOKEN="$(prompt_value RANCHER_CLOUDFLARED_TUNNEL_TOKE
 if [ -z "${RANCHER_CLOUDFLARED_TUNNEL_TOKEN}" ]; then
   echo "Missing required RANCHER_CLOUDFLARED_TUNNEL_TOKEN for break-glass bootstrap."
   echo "Setup should auto-generate this from CLOUDFLARE_API_TOKEN."
-  echo "Required Cloudflare scopes include Account Cloudflare Tunnel Write and Connectivity Directory Read/Bind/Admin, plus Zone DNS Read/Write."
+  echo "Required Cloudflare scopes include Account Cloudflare Tunnel Write and Zone DNS Read/Write."
   exit 1
 fi
 

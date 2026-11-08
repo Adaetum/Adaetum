@@ -1554,6 +1554,11 @@ fi
   --from-file=authentik.hcl="${policy_dir}/authentik.hcl" \
   --from-file=gitea.hcl="${policy_dir}/gitea.hcl" \
   --from-file=crafty-credential-sync.hcl="${policy_dir}/crafty-credential-sync.hcl" \
+  --from-file=adaetum-agent-gitops.hcl="${policy_dir}/adaetum-agent-gitops.hcl" \
+  --from-file=mcp-credentials.hcl="${policy_dir}/mcp-credentials.hcl" \
+  --from-file=mcp-argocd.hcl="${policy_dir}/mcp-argocd.hcl" \
+  --from-file=mcp-grafana.hcl="${policy_dir}/mcp-grafana.hcl" \
+  --from-file=mcp-gitea.hcl="${policy_dir}/mcp-gitea.hcl" \
   --dry-run=client -o yaml | "${kubectl_bin}" apply -f -
 # A Job pod template is immutable. Configuration is idempotent, so replace
 # the completed runner whenever policy or auth-role desired state changes.

@@ -2,6 +2,7 @@
 """Build each pod Kustomization when kubectl is available, without a cluster."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,13 @@ LOAD_RESTRICTOR_EXCEPTIONS = {
 
 def main() -> int:
     kubectl = shutil.which("kubectl")
+    # GUI Git clients on macOS often omit Homebrew and Docker Desktop's bin
+    # directories from PATH, even though kubectl is installed for the user.
+    if not kubectl and sys.platform == "darwin":
+        for candidate in ("/opt/homebrew/bin/kubectl", "/usr/local/bin/kubectl"):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                kubectl = candidate
+                break
     if not kubectl:
         print("kubectl is required to validate pods kustomize directories", file=sys.stderr)
         return 1

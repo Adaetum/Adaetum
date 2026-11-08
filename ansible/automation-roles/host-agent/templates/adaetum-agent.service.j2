@@ -1,0 +1,33 @@
+# Managed by Ansible (host-agent role).
+[Unit]
+Description=Adaetum host agent
+Documentation=https://github.com/Adaetum/Adaetum/blob/main/adaetum/agent/README.md
+After=network-online.target
+Wants=network-online.target
+{% if host_agent_auth_enabled | bool %}
+Requires={{ host_agent_auth_service_unit }}
+After={{ host_agent_auth_service_unit }}
+{% endif %}
+
+[Service]
+Type=simple
+# Root: the agent reads the RKE2 kubeconfig and the container runtime. Everything
+# that changes a server is separately gated (token, -allow-changes) inside the agent.
+User=root
+# The Turso engine unpacks its native library here, not into a temporary directory.
+Environment=TURSO_GO_CACHE_DIR={{ host_agent_state_dir }}/cache
+ExecStart={{ host_agent_path }} serve \
+  -listen 0.0.0.0:{{ host_agent_port }} \
+  -data-dir {{ host_agent_state_dir }} \
+  -token-file {{ host_agent_token_file }}{% if host_agent_auth_enabled | bool %} \
+  -auth-socket {{ host_agent_auth_state_dir }}/auth.sock \
+  -auth-secret-file {{ host_agent_auth_state_dir }}/internal-secret{% endif %}{% if host_agent_allow_changes | bool %} \
+  -allow-changes{% endif %}
+
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

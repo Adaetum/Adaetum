@@ -1,0 +1,22 @@
+---
+# Install, upgrade, or repair the host agent on servers. This is the lever the
+# cluster agent's fleet view points at (see adaetum/agent/docs/fleet.md): a server with no
+# agent or an old one is fixed by running this against it. It is not part of
+# day2.yml on purpose: it runs a binary as root on every server, so it is run
+# deliberately, one server at a time, and rehearsed with --check first.
+#
+#   ansible-playbook playbooks/host-agent.yml --limit node-50449 \
+#     -e host_agent_binary_src=/path/to/adaetum-agent --check
+#
+# On a single machine without the runner, add -e break_glass=true to target only
+# this host over a local connection.
+- import_playbook: _break_glass.yml
+
+- name: Install or update the host agent
+  hosts: "{{ 'break_glass' if break_glass | default(false) | bool else 'all' }}"
+  become: true
+  gather_facts: false
+  # One server at a time: a bad binary then breaks one server, not the fleet.
+  serial: 1
+  roles:
+    - host-agent

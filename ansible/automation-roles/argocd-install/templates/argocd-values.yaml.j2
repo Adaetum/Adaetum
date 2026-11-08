@@ -10,8 +10,13 @@ global:
 configs:
   cm:
     accounts.readonly: apiKey
+    # The account the Argo CD MCP server (pods/mcp/argocd-mcp) acts as. Its token is
+    # issued by pods/mcp/credentials and kept in OpenBao.
+    accounts.mcp: apiKey
   rbac:
-    policy.csv: "g, readonly, role:readonly"
+    policy.csv: |
+      g, readonly, role:readonly
+      g, mcp, role:admin
   secret:
     createSecret: true
 {% if argocd_admin_password | length > 0 %}

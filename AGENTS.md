@@ -12,37 +12,45 @@ Ansible layout below.
   playbooks detect the local hostname and run only that matched host with
   `ansible_connection=local`.
 - `ansible/ansible-host-config-sync.yaml`: Kubernetes manifest for running the container.
+- `adaetum/`: the agent software: `agent/` is the Go agent, `auth/` is its
+  account sign-in service (Better Auth on Bun), and `embed/` is its text
+  embedding service. See `adaetum/agent/docs/recovery-login.md` for auth.
+  Tests: `cd adaetum/agent && go test ./...`, `cd adaetum/auth && bun test`,
+  and `cd adaetum/embed && go test ./...`.
 - `ks-src/`: kickstart source templates, manifests, and fragments used to generate rendered kickstarts under `dist/ks-templates/`.
 - `.github/workflows/ks-worker.yml`: defines the Cloudflare KS/log Worker (worker.mjs is generated inline).
-- `tasks/scripts/run-opinionated-setup.sh`: Opinionated end-to-end setup automation
-- `tasks/scripts/run-initial-setup.sh`: Comprehensive bootstrap automation flow
+- `installer/`: the setup program (Go; a Wails window plus a headless command). It owns the whole
+  first-run journey; see `installer/stages/`. Tests: `cd installer && go test ./...`.
 - `tasks/env.yml`: Environment setup tasks including new opinionated workflow
 
 ## Setup workflow
-The repository uses a new opinionated setup process:
+Setup is the Go installer in `installer/`. One engine (`installer/engine`) owns the order,
+checks, questions and dry run; the window (`installer/app`) and the headless command
+(`installer/cmd/adaetum-setup`) only draw its questions and return answers.
 
-1. **Initial Setup**: Run `task init` for the first guided end-to-end setup
-   - Installs Gum for the first-run presentation layer when the local package
-     manager supports it, then confirms Cloudflare, GitHub, and Tailscale
-     account readiness before secrets are requested
-   - When the checkout points at upstream, installs GitHub CLI and uses its
-     existing authentication when available to create or reuse the operator's
-     standalone private recovery repository, preserves canonical Adaetum as `upstream`, and changes
-     the existing checkout's `origin` without cloning another local copy
-   - Collects and reviews the public profile, finds or downloads Rocky media,
-     then runs read-only preflight after the guided preparation is complete
-   - `task init:dryrun` is the no-mutation rehearsal path: it validates local
-     readiness and simulates the same first-run journey without installing
-     tools, contacting providers, or mutating repository state
-   - Use `task initialize` to rerun the automation without the first-run
-     account walkthrough
-   - Prompts for required runtime credentials; public cluster and delivery
-     settings come from `platform.yaml`
-   - Automatically generates `.env`
-   - Validates Tailscale OAuth credentials
-   - Uploads golden ISOs to R2
-   - Syncs secrets to GitHub environments
-   - Triggers required GitHub workflows
+1. **First run**: `task init` opens the setup window, building it from `installer/` on first use
+   (needs Go and Node; installs the Wails CLI with `go install` if missing). It installs GitHub CLI
+   first because the repository stage uses it. The stages, in order:
+   - **repository**: signs in to GitHub, creates or reuses the operator's standalone private
+     recovery repository, preserves canonical Adaetum as `upstream`, changes the existing
+     checkout's `origin`, publishes `main`, and checks that Actions sees the workflows
+   - **providers**: authorizes Cloudflare and Tailscale, chooses the DNS zone and tailnet,
+     prepares tag ownership and creates the scoped OAuth clients
+   - **profile**: writes and publishes `platform.yaml` from the two public choices
+   - **media**: finds or downloads and verifies the Rocky ISO, then runs the setup readiness check
+   - **validate**, **render**, **artifacts**, **finalize**: check inputs, render `.env` and the
+     GitOps files and push them, publish to R2 and GitHub and trigger the workflows, hand over
+     the installer ISO
+2. `task init:dryrun` shows every step and what it would do, changing nothing, with no window. Pass `-- --window` to rehearse the full guided UI; provider responses are assumed successful and no real checks or changes run.
+3. `task init:clean` is `task init` ignoring saved credentials and values.
+4. `task initialize` and `task init:silent` run the same stages with no window. Questions are
+   answered with `-- --answer id=value`, and a question with no answer stops the run instead of
+   guessing. Secrets are never accepted as `--answer` (command lines are visible to other
+   users); a secret question reads `ADAETUM_SECRET_<ID>` from the environment. `init:silent`
+   adds `--replay`: it reuses what exists and refuses to create a repository or start a large
+   download on its own. `task init:dryrun` adds `--dry-run` and refuses `--apply`.
+5. Resume credentials are saved only in the OS credential store, and only with the operator's
+   agreement. There is no file fallback.
 
 ## Machine joining process
 New nodes join the cluster through a phase-based break-glass process:
@@ -115,11 +123,17 @@ New nodes join the cluster through a phase-based break-glass process:
   `platform.yaml` for public platform changes; provide `.env` values only when
   setup requests runtime secrets. Never treat `.env` as a second public
   configuration contract.
-- Gum is an optional terminal presentation layer everywhere except `task init`,
-  where it owns the first-run account walkthrough. Keep the shell workflows as
-  the behavior owners, retain their plain-terminal fallbacks, and honor
-  `ADAETUM_GUM_UI=0`; do not put secrets, provider logic, or configuration
-  ownership in the presentation helper.
+- Gum is an optional terminal presentation layer for the remaining shell tools. Keep those
+  workflows as the behavior owners, retain their plain-terminal fallbacks, and honor
+  `ADAETUM_GUM_UI=0`; do not put secrets, provider logic, or configuration ownership in the
+  presentation helper. First-run setup does not use Gum: the installer owns its own interface.
+- Setup logic lives in `installer/`. Do not add a second setup path in shell or Python. The
+  installer calls other programs only through `installer/sys` (fixed argument lists, never a
+  shell string), passes secrets through standard input or the environment and never as
+  arguments, and calls the Taskfile only from `installer/stages/artifacts` for
+  `bundle:publish:external` and `build-iso`. Stage ownership of the scripts it still calls
+  (`generate-env-files.sh`, the renderer and validators, `bootstrap-cloudflare.py`,
+  `bootstrap-tailscale.py`) is named in the stage's package comment.
 - When adding new playbooks or roles, place them under `ansible/playbooks/` and `ansible/automation-roles/`
   and keep names descriptive and stable for automation.
 - Role README structure: follow the `healthcheck` style and keep sections filled out

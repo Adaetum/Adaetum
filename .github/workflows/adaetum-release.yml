@@ -1,0 +1,153 @@
+name: Release Adaetum agent software
+
+# A release is an explicit operator decision; ordinary commits never update
+# clusters. The manifest records immutable image and binary hashes.
+on:
+  push:
+    tags:
+      - 'adaetum-v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'New tag, e.g. adaetum-v0.1.2-beta.1 or adaetum-v0.1.2'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: adaetum-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: vars.ADAETUM_DISABLE_ACTIONS != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.3'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.11.1'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Validate release tag
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${REQUESTED_TAG:-${GITHUB_REF_NAME}}"
+          if [[ ! "$tag" =~ ^adaetum-v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.(0|[1-9][0-9]*))?)$ ]]; then
+            echo "Expected a tag like adaetum-v1.2.3 or adaetum-v1.2.3-beta.1." >&2
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          channel=stable
+          if [[ "$version" == *-beta.* ]]; then
+            channel=beta
+          else
+            # A stable release must be built from the current public main tip.
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            if [[ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]]; then
+              echo "Stable releases must use the current main branch; use a -beta.N tag for development." >&2
+              exit 1
+            fi
+          fi
+          echo "ADAETUM_CHANNEL=$channel" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] && gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --silent 2>/dev/null; then
+            echo "The tag $tag already exists; choose a new version." >&2
+            exit 1
+          fi
+          echo "ADAETUM_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "ADAETUM_RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "ADAETUM_REGISTRY=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+      - name: Test the three components
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd adaetum/auth && bun install --frozen-lockfile && bun test)
+          (cd adaetum/agent && go test ./...)
+          (cd adaetum/embed && go test ./...)
+          python3 .validator/validate-agent-boundary.py --self-test
+          python3 .validator/validate-agent-boundary.py
+          python3 .validator/validate-agent-release.py
+      - name: Build the host binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          (cd adaetum/agent/web && npm ci && npm run build)
+          for arch in amd64 arm64; do
+            (cd adaetum/agent && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags="-s -w -X main.agentVersion=${ADAETUM_VERSION}" \
+              -o "${GITHUB_WORKSPACE}/release/adaetum-agent-linux-${arch}" ./cmd/adaetum-agent)
+          done
+          (cd adaetum/auth && bun build --compile --target=bun-linux-x64 src/server.ts --outfile "${GITHUB_WORKSPACE}/release/adaetum-auth-linux-amd64")
+          (cd adaetum/auth && bun build --compile --target=bun-linux-arm64 src/server.ts --outfile "${GITHUB_WORKSPACE}/release/adaetum-auth-linux-arm64")
+          (cd release && sha256sum adaetum-* > SHA256SUMS)
+      - name: Build and publish pinned images
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for component in agent auth embed; do
+            image="${ADAETUM_REGISTRY}/adaetum-${component}:${ADAETUM_RELEASE_TAG}"
+            if [ "$component" = agent ]; then
+              docker build --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" --build-arg "ADAETUM_VERSION=${ADAETUM_VERSION}" -t "$image" "adaetum/$component"
+            else
+              docker build --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" -t "$image" "adaetum/$component"
+            fi
+            case "$component" in
+              agent)
+                test "$(docker run --rm "$image" version)" = "$ADAETUM_VERSION"
+                ;;
+              auth)
+                docker run --rm --entrypoint bun "$image" --version
+                ;;
+              embed)
+                # Exercise the real model before publishing the image, not the
+                # hash-only test implementation. The port is runner-local.
+                docker run -d --name adaetum-embed-smoke -p 127.0.0.1:18700:8080 "$image"
+                trap 'docker rm -f adaetum-embed-smoke >/dev/null 2>&1 || true' EXIT
+                ready=0
+                for attempt in {1..30}; do
+                  if curl -fsS http://127.0.0.1:18700/readyz >/dev/null; then ready=1; break; fi
+                  sleep 2
+                done
+                if [ "$ready" != 1 ]; then docker logs adaetum-embed-smoke; exit 1; fi
+                curl -fsS -H 'Content-Type: application/json' -d '{"texts":["Adaetum"]}' \
+                  http://127.0.0.1:18700/embed | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["dim"] == 384 and len(r["vectors"]) == 1'
+                docker rm -f adaetum-embed-smoke >/dev/null
+                trap - EXIT
+                ;;
+            esac
+            docker push "$image"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Could not determine the published digest for $image" >&2
+              exit 1
+            fi
+            printf '%s\n' "${ADAETUM_REGISTRY}/adaetum-${component}@${digest}" > "release/${component}.image"
+          done
+      - name: Publish release and immutable artifact manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 adaetum/release-manifest.py release
+          release_flags=()
+          if [[ "$ADAETUM_CHANNEL" == beta ]]; then release_flags+=(--prerelease --latest=false); fi
+          gh release create "$ADAETUM_RELEASE_TAG" release/adaetum-* release/SHA256SUMS release/release.json "${release_flags[@]}" \
+            --target "$GITHUB_SHA" \
+            --title "Adaetum agent ${ADAETUM_VERSION}" \
+            --notes "Versioned agent, auth, and embedding artifacts. See release.json for image digests and host binary checksums. Updating a cluster or host remains an operator decision."

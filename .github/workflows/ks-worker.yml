@@ -122,6 +122,10 @@ jobs:
             '    };' \
             '' \
             '    const isoResolve = (file) => {' \
+            '      // Recovery secrets are for the bucket owner, never bootstrap token holders.' \
+            '      if (file.toLowerCase().startsWith("recovery/")) {' \
+            '        return { error: "unsupported artifact path" };' \
+            '      }' \
             '      const allowed = [".iso", ".ks", ".tar.gz", ".tgz", ".env"];' \
             '      if (!allowed.some((ext) => file.endsWith(ext))) {' \
             '        return { error: "unsupported file type" };' \

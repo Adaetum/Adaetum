@@ -22,6 +22,7 @@ if (-not $winget) {
 
 Write-Output "rclone not found. Installing via winget..."
 winget install --id Rclone.Rclone -e --accept-package-agreements --accept-source-agreements --silent | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "rclone installation failed (winget exit $LASTEXITCODE)." }
 
 # Refresh PATH for current process after winget install.
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -31,6 +32,12 @@ $env:Path = "$machinePath;$userPath"
 $rclone = Get-Command rclone -ErrorAction SilentlyContinue
 if ($rclone) {
   Write-Output ("rclone installed: " + $rclone.Source)
+  exit 0
+}
+
+$wingetInstalled = Get-ChildItem -Path (Join-Path $env:LocalAppData 'Microsoft\WinGet\Packages') -Filter rclone.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($wingetInstalled -and $wingetInstalled.FullName) {
+  Write-Output ("rclone installed at " + $wingetInstalled.FullName)
   exit 0
 }
 

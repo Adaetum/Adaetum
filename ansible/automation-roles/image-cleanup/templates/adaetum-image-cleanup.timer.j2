@@ -1,0 +1,12 @@
+# Managed by Ansible (image-cleanup role). Edit spec.imageCleanup in platform.yaml.
+[Unit]
+Description=Daily unused container image cleanup (Adaetum)
+
+[Timer]
+OnCalendar=*-*-* {{ image_cleanup.time }}:00
+RandomizedDelaySec={{ image_cleanup_randomized_delay }}
+# A node that was off at the scheduled time catches up when it comes back.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

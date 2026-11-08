@@ -50,3 +50,10 @@ spec:
     observability:
       metrics: true
       annotateNodes: true
+  imageCleanup:
+    enabled: true
+    level: aggressive
+    time: 04:00
+    maxImagesPerRun: 100
+    onlyIfDiskOverPercent: 0
+    checkOnly: false

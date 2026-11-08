@@ -1,0 +1,22 @@
+# Managed by Ansible (host-agent role).
+[Unit]
+Description=Adaetum host account service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The socket and shared secret are private; the host agent runs as the same user.
+User=root
+Environment=NODE_ENV=production
+Environment=AUTH_STATE_DIR={{ host_agent_auth_state_dir }}
+Environment=AUTH_SOCKET={{ host_agent_auth_state_dir }}/auth.sock
+Environment=AUTH_BASE_URL=https://localhost:{{ host_agent_port }}
+ExecStart={{ host_agent_auth_path }}
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

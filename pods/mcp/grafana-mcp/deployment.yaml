@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-mcp
+  namespace: mcp
+  labels:
+    app: grafana-mcp
+  annotations:
+    secret.reloader.stakater.com/reload: grafana-mcp-env
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana-mcp
+  template:
+    metadata:
+      labels:
+        app: grafana-mcp
+    spec:
+      serviceAccountName: grafana-mcp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana-mcp
+          image: grafana/mcp-grafana:2.2.0@sha256:697336440e34878f8e0b26a69675db8d7e97b4d0daec25ec5441c85ac6c60e81
+          imagePullPolicy: IfNotPresent
+          # Writes are allowed (--disable-write is not set). The caller token comes
+          # from MCP_GRAFANA_SERVER_TOKEN, so it is not on the command line. The
+          # allowed hosts are the names the Service is reached by, with and without
+          # the port, because the server compares the Host header exactly.
+          args:
+            - -t
+            - streamable-http
+            - --address
+            - 0.0.0.0:8000
+            - --allowed-hosts
+            - grafana-mcp,grafana-mcp.mcp,grafana-mcp.mcp.svc,grafana-mcp.mcp.svc.cluster.local,grafana-mcp:80,grafana-mcp.mcp:80,grafana-mcp.mcp.svc:80,grafana-mcp.mcp.svc.cluster.local:80
+          env:
+            - name: GRAFANA_URL
+              value: http://grafana.observability.svc.cluster.local
+          envFrom:
+            - secretRef:
+                name: grafana-mcp-env
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          ports:
+            - name: mcp
+              containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: openbao
+              mountPath: /mnt/openbao
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: grafana-mcp-openbao
+        - name: tmp
+          emptyDir: {}

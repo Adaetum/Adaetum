@@ -1,0 +1,21 @@
+# Only the cluster agent may call the embedding service, and the service may call
+# nothing: it needs no DNS, no registry, and no internet once it is running.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: adaetum-embed
+  namespace: adaetum
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: adaetum-embed
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: adaetum-cluster-agent
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress: []

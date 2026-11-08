@@ -1,0 +1,341 @@
+/* Layout and the few things Radix Themes does not provide. Colors come from the
+   design system's tokens (--gray-*, --accent-*, --green-*, ...) so light and
+   dark themes work without any per-theme rules here. */
+
+.radix-themes {
+  --default-font-family: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --code-font-family: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  font-feature-settings: "cv11", "ss01";
+}
+
+body { margin: 0; }
+
+.shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* Collapsed: an icon rail. Everything with .label (names, status text, the theme
+   switch) is hidden; the same controls remain, so nothing is lost, only the words. */
+.shell { transition: grid-template-columns 160ms ease; }
+.shell[data-collapsed="true"] { grid-template-columns: 64px minmax(0, 1fr); }
+.shell[data-collapsed="true"] .sidebar { padding: var(--space-4) var(--space-2); align-items: center; }
+.shell[data-collapsed="true"] .label { display: none; }
+.shell[data-collapsed="true"] .brand { padding: 0; }
+.shell[data-collapsed="true"] .nav { align-items: stretch; }
+.shell[data-collapsed="true"] .nav-link { justify-content: center; padding: var(--space-2); }
+.shell[data-collapsed="true"] .sidebar-footer { align-items: center; }
+.sidebar-toggle { align-self: flex-start; }
+.shell[data-collapsed="true"] .sidebar-toggle { align-self: center; }
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  /* border-box, or the padding adds to 100vh and the page scrolls to reach the
+     bottom of the sidebar. dvh tracks mobile browser chrome; vh is the fallback. */
+  box-sizing: border-box;
+  height: 100vh;
+  height: 100dvh;
+  /* On very short windows the sidebar scrolls itself instead of clipping the
+     footer controls. */
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border-right: 1px solid var(--gray-a5);
+  background: var(--gray-a2);
+}
+
+.brand { padding: var(--space-1) var(--space-2); }
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-3);
+  color: var(--accent-contrast);
+  background: linear-gradient(135deg, var(--accent-9), var(--accent-11));
+}
+
+.nav { display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: min-content; }
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-3);
+  color: var(--gray-11);
+  font-size: var(--font-size-2);
+  text-decoration: none;
+}
+.nav-link:hover { background: var(--gray-a3); color: var(--gray-12); }
+.nav-link[aria-current="page"] { background: var(--accent-a4); color: var(--accent-12); font-weight: 500; }
+.nav-link:focus-visible,
+.sort-button:focus-visible,
+.tile:focus-visible { outline: 2px solid var(--focus-8); outline-offset: 2px; }
+
+.sidebar-footer { padding-top: var(--space-3); border-top: 1px solid var(--gray-a5); }
+
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray-9); }
+.status-dot.green { background: var(--green-9); }
+.status-dot.amber { background: var(--amber-9); }
+.status-dot.red { background: var(--red-9); }
+
+/* border-box so padding does not push the column past its grid cell. */
+.content { box-sizing: border-box; padding: var(--space-6) var(--space-6) var(--space-9); min-width: 0; max-width: 1400px; }
+
+/* Radix callouts are translucent; a sticky one needs an opaque base or the
+   content scrolling underneath shows through the text. */
+.stale-banner.rt-CalloutRoot {
+  position: sticky;
+  top: var(--space-3);
+  z-index: 10;
+  background-color: var(--color-panel-solid);
+  background-image: linear-gradient(var(--amber-a3), var(--amber-a3));
+  box-shadow: var(--shadow-3);
+}
+
+.tile { transition: box-shadow 120ms ease, transform 120ms ease; text-decoration: none; }
+.tile:hover { box-shadow: 0 0 0 1px var(--gray-a7); }
+.tile-chevron { color: var(--gray-9); }
+
+.tile-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.split {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+
+.table-scroll { overflow-x: auto; }
+.table-scroll table { width: 100%; }
+/* Short values (node, counts, badges) stay on one line; the first column and
+   explicitly wrapping content (.clamp, .mono) may wrap. */
+.table-scroll th, .table-scroll td:not(:first-child) { white-space: nowrap; }
+.table-scroll .clamp, .table-scroll .mono { white-space: normal; }
+.table-scroll.wrap th, .table-scroll.wrap td { white-space: normal; }
+/* One scrolling element per table: this container. Radix tables bring their own
+   inner scroll area, which would be a second, unfocusable one. */
+.table-scroll .rt-ScrollAreaRoot, .table-scroll .rt-ScrollAreaViewport { overflow: visible !important; }
+.table-scroll:focus-visible { outline: 2px solid var(--focus-8); outline-offset: 2px; }
+
+.sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.sort-idle { opacity: 0.35; }
+.sort-button:hover .sort-idle { opacity: 0.8; }
+
+.clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.clamp.expanded { display: block; }
+
+.mono { font-family: var(--code-font-family); font-size: var(--font-size-1); overflow-wrap: anywhere; }
+
+.attention-item {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding-right: var(--space-4);
+  border-top: 1px solid var(--gray-a5);
+}
+.attention-fix { flex-shrink: 0; margin-top: var(--space-3); }
+@media (max-width: 560px) {
+  .attention-item { flex-wrap: wrap; padding-bottom: var(--space-3); }
+  .attention-fix { margin: 0 0 0 var(--space-4); }
+}
+.attention-row {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  text-decoration: none;
+  color: inherit;
+}
+.attention-row:hover { background: var(--gray-a2); }
+.attention-row:focus-visible { outline: 2px solid var(--focus-8); outline-offset: -2px; }
+
+.raw-json {
+  max-height: 480px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-3);
+  background: var(--gray-a2);
+  font-family: var(--code-font-family);
+  font-size: var(--font-size-1);
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
+  .tile { transition: none; }
+}
+
+/* On narrow screens the sidebar becomes a top bar with scrolling navigation. */
+@media (max-width: 860px) {
+  /* minmax(0, 1fr), not 1fr: a bare 1fr will not shrink below its content, so
+     the non-wrapping nav row would stretch the whole page. */
+  /* On a narrow screen the sidebar is already a bar across the top: no rail, no toggle. */
+  .shell, .shell[data-collapsed="true"] { grid-template-columns: minmax(0, 1fr); }
+  .shell[data-collapsed="true"] .label { display: revert; }
+  .shell[data-collapsed="true"] .nav-link { justify-content: flex-start; padding: var(--space-2) var(--space-3); }
+  .sidebar-toggle { display: none; }
+  .shell[data-collapsed="true"] .sidebar { padding: var(--space-4); align-items: center; }
+  .sidebar {
+    position: static;
+    height: auto;
+    overflow-y: visible;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--gray-a5);
+  }
+  .nav { flex-direction: row; order: 3; width: 100%; flex: none; overflow-x: auto; padding-bottom: var(--space-1); }
+  .nav-link { white-space: nowrap; }
+  .sidebar-footer { order: 2; margin-left: auto; padding-top: 0; border-top: 0; flex-direction: row; align-items: center; }
+  .content { padding: var(--space-4) var(--space-4) var(--space-8); }
+}
+
+/* Stacked capacity bars. Segments sit in one rounded track; the legend beneath
+   carries the exact numbers, so the colors are reinforcement, not the message. */
+.stacked-bar {
+  display: flex;
+  height: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--gray-a4);
+}
+.stacked-segment { height: 100%; min-width: 0; }
+
+/* Diagonal stripes mean "held back": distinguishable without relying on color. */
+.hatched {
+  background-image: repeating-linear-gradient(135deg, currentColor 0 2px, transparent 2px 6px);
+  opacity: 0.55;
+}
+
+.legend { margin: 0; padding: 0; list-style: none; }
+.legend-row { padding: var(--space-2) 0; border-top: 1px solid var(--gray-a4); }
+.legend-row:first-child { border-top: 0; }
+.swatch { flex: none; width: 12px; height: 12px; margin-top: 4px; border-radius: 3px; }
+
+.command-box {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  background: var(--gray-a2);
+}
+details > summary { cursor: pointer; }
+
+/* Label/value rows for the runner details card. */
+.detail-list { margin: 0; display: grid; gap: var(--space-2); }
+.detail-list > div { display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: var(--space-3); }
+.detail-list dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Live playbook output: monospace, fixed height, keyboard-scrollable. */
+.run-output {
+  margin: 0;
+  max-height: 22rem;
+  overflow: auto;
+  padding: var(--space-3);
+  border-radius: var(--radius-2);
+  background: var(--gray-a3);
+  font-family: var(--code-font-family);
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.run-output:focus-visible { outline: 2px solid var(--focus-8); outline-offset: 2px; }
+
+/* App cards (Apps page) and logos (Apps and Find apps). */
+.app-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-3);
+}
+.app-card { width: 100%; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.app-card:hover { box-shadow: 0 0 0 1px var(--gray-a8); }
+.app-card:focus-visible { outline: 2px solid var(--focus-8); outline-offset: 2px; }
+.app-logo { flex: none; border-radius: var(--radius-3); object-fit: contain; background: var(--color-panel-solid); }
+.app-logo-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: var(--accent-11);
+  background: var(--accent-a3);
+}
+@media (max-width: 480px) {
+  .app-grid { grid-template-columns: 1fr; }
+}
+
+
+/* Sizing scorecard: a four-axis shape (Requests, Limits, Fit, Scaling). */
+.radar-ring { fill: none; stroke: var(--gray-a6); stroke-width: 1; }
+.radar-shape { stroke-width: 1.5; fill-opacity: 0.28; }
+.radar-green { fill: var(--green-9); stroke: var(--green-9); }
+.radar-amber { fill: var(--amber-9); stroke: var(--amber-9); }
+.radar-red { fill: var(--red-9); stroke: var(--red-9); }
+.radar-gray, .radar-blue { fill: var(--gray-9); stroke: var(--gray-9); }
+.radar-score { font-size: 15px; font-weight: 700; fill: var(--gray-12); }
+.app-detail-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3); }
+.sizing-table { width: 100%; border-collapse: collapse; font-size: var(--font-size-1); }
+.sizing-table th, .sizing-table td { text-align: left; padding: 4px 8px 4px 0; border-top: 1px solid var(--gray-a4); vertical-align: top; }
+.sizing-table th { color: var(--gray-11); font-weight: 500; }
+
+/* Usage history charts in the app dialog. */
+.chart-band { fill: var(--accent-a5); }
+.chart-avg { stroke: var(--accent-10); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.chart-request { stroke: var(--amber-10); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.chart-limit { stroke: var(--red-10); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+
+/* Volume fullness bar in the app dialog. */
+.util-track { position: relative; height: 6px; border-radius: 3px; background: var(--gray-a4); }
+.util-fill { height: 100%; border-radius: 3px; min-width: 2px; }
+.util-green { background: var(--green-9); }
+.util-amber { background: var(--amber-9); }
+.util-red { background: var(--red-9); }
+
+/* The app page's "how it fits" flow: address -> service -> copies -> volumes. */
+.trace-flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-3); }
+.trace-col { min-width: 0; }
+.trace-col:not(:last-child) { position: relative; }
+@media (min-width: 900px) {
+  .trace-col:not(:last-child)::after { content: "\2192"; position: absolute; right: calc(var(--space-3) * -0.75); top: 0; color: var(--gray-9); }
+}
+.trace-item { background: var(--gray-a2); }
+a.app-card { display: block; text-decoration: none; }
+
+/* "Advanced": a fold-out under a line, so the plain view stays short. */
+.advanced { border-top: 1px solid var(--gray-a6); padding-top: var(--space-3); margin-top: var(--space-2); }
+.advanced > summary { cursor: pointer; }
+.advanced-scroll { overflow-x: auto; }

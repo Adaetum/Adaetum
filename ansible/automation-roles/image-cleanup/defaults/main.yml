@@ -1,0 +1,14 @@
+---
+# The playbook supplies this mapping directly from spec.imageCleanup in
+# platform.yaml. An empty default makes a missing handoff fail at the assertion.
+image_cleanup: {}
+
+# Controller-side path of the adaetum-agent binary to install. Leave empty when
+# the binary is already on the host (installed by another means).
+image_cleanup_agent_src: ""
+image_cleanup_agent_path: /usr/local/bin/adaetum-agent
+
+image_cleanup_service_unit: adaetum-image-cleanup.service
+image_cleanup_timer_unit: adaetum-image-cleanup.timer
+# Spread the nodes' start times so they do not all pull load at the same moment.
+image_cleanup_randomized_delay: 15m

@@ -1,0 +1,21 @@
+# Only a pod that carries adaetum.io/mcp-client=true (the Adaetum agent, when it
+# connects) may reach this server, in addition to the caller credential it
+# requires.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-mcp
+  namespace: mcp
+spec:
+  podSelector:
+    matchLabels:
+      app: argocd-mcp
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              adaetum.io/mcp-client: "true"
+      ports:
+        - port: 3000
