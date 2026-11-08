@@ -68,6 +68,7 @@ func (s *Step) Plan(context.Context, *engine.Env) ([]string, error) {
 		"Upload the installer ISOs to your Cloudflare R2 bucket (an image of the same size already there is skipped).",
 		"Check that the repository credentials work, then build and publish the break-glass bundle.",
 		"Encrypt and sync the required secrets to your private repository's Prod GitHub environment.",
+		"Back up the setup secrets in the recovery folder of your R2 bucket and verify the copy.",
 		"Trigger the ks-worker, ks-publish and iso-build workflows, and build the installer ISO on this machine at the same time.",
 		"Wait for the workflows and report any that fail.",
 	}, nil
@@ -294,6 +295,22 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 	} else {
 		say("Local ISO build completed.")
 	}
+
+	// The recovery copy is intentionally readable by the bucket owner. Keep it
+	// outside the Worker's supported artifact names and never log its contents.
+	say("Saving setup recovery secrets to R2...")
+	v := envfile.Read(envPath)
+	for _, k := range []string{"R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"} {
+		if v[k] == "" {
+			return fmt.Errorf("setup recovery backup: missing %s", k)
+		}
+	}
+	bucket := r2{run: s.Run, dir: s.Root, endpoint: v["R2_ENDPOINT"], bucket: v["R2_BUCKET"], key: v["R2_ACCESS_KEY_ID"], secret: v["R2_SECRET_ACCESS_KEY"]}
+	key := "recovery/setup-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+	if err := bucket.backupSetup(ctx, envPath, key); err != nil {
+		return fmt.Errorf("setup recovery backup: %w", err)
+	}
+	say("Setup recovery secrets saved and verified in R2: " + v["R2_BUCKET"] + "/" + key)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("one or more workflow runs did not complete successfully:\n%s", strings.Join(errs, "\n"))

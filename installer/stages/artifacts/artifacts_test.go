@@ -110,6 +110,17 @@ func fixture(t *testing.T) (*Step, *engine.Env, *sys.Fake, *githubServer) {
 		{"CLOUDFLARE_API_TOKEN", "cfat_x"}, {"GITHUB_SYNC_TOKEN", ghToken}, {"BOOTSTRAP_BACKUP_PASSPHRASE", "pass"},
 		{"ARGOCD_GITHUB_REPO_URL", "https://github.com/" + repo + ".git"}, {"ARGOCD_GITHUB_USERNAME", "alice"},
 	})
+	cache, err := cacheBuster(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := envfile.Upsert(filepath.Join(root, ".env"), "BOOTSTRAP_RUNTIME_ENV_CACHE_BUSTER", cache); err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := os.ReadFile(filepath.Join(root, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	g, client := newGitHub(t)
 	f := &sys.Fake{Rules: []sys.Rule{
 		{Prefix: "git config --get remote.origin.url", Result: sys.Result{Stdout: "https://github.com/" + repo + ".git\n"}},
@@ -121,6 +132,7 @@ func fixture(t *testing.T) (*Step, *engine.Env, *sys.Fake, *githubServer) {
 		{Prefix: "python3 ./tasks/scripts/compile-kickstarts.py", Result: sys.Result{}},
 		{Prefix: "rclone lsjson", Result: sys.Result{Stdout: "[]"}},
 		{Prefix: "rclone copyto", Result: sys.Result{}},
+		{Prefix: "rclone cat cluster_r2:iso/recovery/", Result: sys.Result{Stdout: string(recovery)}},
 		{Prefix: "task ", Result: sys.Result{}},
 	}}
 	s := New(f, root)
@@ -158,6 +170,17 @@ func TestTheWholeStagePublishesAndAllWorkflowsSucceed(t *testing.T) {
 	if !f.Ran("rclone copyto " + filepath.Join(s.Root, "Rocky-10.2-x86_64-minimal.iso") + " cluster_r2:iso/rocky10/Rocky-10.2-x86_64-minimal.iso") {
 		t.Errorf("the image did not go to its GOLDEN_ISO_KEY: %v", f.Calls)
 	}
+	if !f.Ran("rclone copyto "+filepath.Join(s.Root, ".env")+" cluster_r2:iso/recovery/setup-") || !f.Ran("rclone cat cluster_r2:iso/recovery/setup-") {
+		t.Error("setup recovery copy was not uploaded and verified")
+	}
+}
+
+func TestRecoveryBackupFailsWhenReadbackDiffers(t *testing.T) {
+	s, env, f, _ := fixture(t)
+	f.Rules = append([]sys.Rule{{Prefix: "rclone cat cluster_r2:iso/recovery/", Result: sys.Result{Stdout: "wrong data"}}}, f.Rules...)
+	if err := s.Apply(context.Background(), env, engine.Headless{}); err == nil || !strings.Contains(err.Error(), "could not be verified") {
+		t.Fatalf("expected recovery verification failure, got %v", err)
+	}
 }
 
 func TestNoCredentialIsEverOnACommandLine(t *testing.T) {
@@ -192,14 +215,14 @@ func TestAnImageAlreadyInR2WithTheSameSizeIsNotUploadedAgain(t *testing.T) {
 	if err := s.Apply(context.Background(), env, engine.Headless{}); err != nil {
 		t.Fatal(err)
 	}
-	if f.Ran("rclone copyto") {
+	if f.Ran("rclone copyto " + filepath.Join(s.Root, "Rocky-10.2-x86_64-minimal.iso")) {
 		t.Fatal("an image of the same size was uploaded again")
 	}
 }
 
 func TestAFailedImageUploadIsAWarningNotAStop(t *testing.T) {
 	s, env, f, g := fixture(t)
-	f.Rules = append([]sys.Rule{{Prefix: "rclone copyto", Result: sys.Result{ExitCode: 1, Stderr: "network down"}}}, f.Rules...)
+	f.Rules = append([]sys.Rule{{Prefix: "rclone copyto " + filepath.Join(s.Root, "Rocky-10.2-x86_64-minimal.iso"), Result: sys.Result{ExitCode: 1, Stderr: "network down"}}}, f.Rules...)
 	if err := s.Apply(context.Background(), env, engine.Headless{}); err != nil {
 		t.Fatalf("a failed upload stopped setup: %v", err)
 	}

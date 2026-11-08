@@ -16,6 +16,7 @@ func (s *Step) Simulate(ctx context.Context, _ *engine.Env, ui engine.UI) error 
 		"Required secrets synchronized to the private repository.",
 		"ks-worker, ks-publish, and iso-build workflows completed successfully.",
 		"Local installer ISO build completed.",
+		"Setup recovery secrets saved and verified in the example R2 bucket.",
 	} {
 		ui.Report(engine.Event{StepID: stepID, Message: message})
 	}

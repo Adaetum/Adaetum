@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,25 @@ type r2 struct {
 	run                           sys.Runner
 	dir                           string
 	endpoint, bucket, key, secret string
+}
+
+// backupSetup always writes a new, extensionless recovery object. The bootstrap
+// Worker's artifact route cannot serve extensionless objects; recovery is through
+// the operator's Cloudflare account, not the installer shared token.
+func (r r2) backupSetup(ctx context.Context, local, key string) error {
+	want, err := os.ReadFile(local)
+	if err != nil {
+		return fmt.Errorf("read setup recovery data: %w", err)
+	}
+	res, err := r.run.RunEnv(ctx, r.dir, r.env(), "", "rclone", "copyto", local, r.remote(key))
+	if err != nil || !res.OK() {
+		return fmt.Errorf("upload setup recovery data failed")
+	}
+	res, err = r.run.RunEnv(ctx, r.dir, r.env(), "", "rclone", "cat", r.remote(key))
+	if err != nil || !res.OK() || !bytes.Equal(want, []byte(res.Stdout)) {
+		return fmt.Errorf("setup recovery upload could not be verified")
+	}
+	return nil
 }
 
 func (r r2) env() []string {
