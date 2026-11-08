@@ -1,0 +1,6 @@
+name: grafana-mcp
+project: default
+source_type: git
+source_target_revision: HEAD
+source_path: pods/mcp/grafana-mcp
+destination_namespace: mcp

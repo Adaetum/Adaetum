@@ -1,0 +1,2 @@
+# A `go build` of the headless command leaves its binary here.
+/adaetum-setup

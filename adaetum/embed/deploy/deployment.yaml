@@ -1,0 +1,71 @@
+# The embedding service: one stateless replica. It keeps nothing between requests, so if
+# its node fails Kubernetes simply starts it on another one; the cluster agent's queue
+# holds the work in the meantime and nothing else waits on this pod.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adaetum-embed
+  namespace: adaetum
+  labels:
+    app.kubernetes.io/name: adaetum-embed
+    app.kubernetes.io/part-of: adaetum
+spec:
+  replicas: 1
+  # Replace the pod only after its successor is ready, never the other way round.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: adaetum-embed
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: adaetum-embed
+        app.kubernetes.io/part-of: adaetum
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: embed
+          # Set by kustomization.yaml (images:), or edit it here. Pin a digest in production.
+          image: adaetum-embed
+          args: ["-listen", ":8080", "-threads", "2"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 6
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            failureThreshold: 3
+          # One to two cores, as designed: the model is small and memories are short.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

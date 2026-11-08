@@ -15,7 +15,7 @@ tasks:
 
   inject-ks:
     internal: true
-    desc: Inject inst.ks URL into the Rocky ISO boot args (Docker/Podman tooling)
+    desc: Inject inst.ks URL into the Rocky ISO boot args
     deps: [':hooks:ensure', ':ks:render']
     cmds:
       - |
@@ -268,25 +268,56 @@ tasks:
             "${container_runtime}" "$@"
           fi
         }
-        container_runtime="$(ensure_container_runtime "1" || true)"
-        if [ -z "${container_runtime}" ]; then
-          echo "Docker/Podman runtime is required for ISO build tooling."
-          echo "Start Docker Desktop (or Podman machine) and re-run."
-          exit 2
+        native_iso_tools=""
+        windows_iso_tools=0
+        case "$(uname -s):$(uname -m)" in
+          Darwin:arm64) native_iso_tools="$(pwd)/installer/iso-tools/darwin-arm64" ;;
+          Darwin:x86_64) native_iso_tools="$(pwd)/installer/iso-tools/darwin-amd64" ;;
+          Linux:aarch64|Linux:arm64) native_iso_tools="$(pwd)/installer/iso-tools/linux-arm64" ;;
+          Linux:x86_64|Linux:amd64) native_iso_tools="$(pwd)/installer/iso-tools/linux-amd64" ;;
+          MINGW*:x86_64|MSYS*:x86_64) native_iso_tools="$(pwd)/installer/iso-tools/windows-amd64"; windows_iso_tools=1 ;;
+        esac
+        tool_suffix=""
+        if [ "${windows_iso_tools}" = 1 ]; then tool_suffix=".exe"; fi
+        if [ -n "${native_iso_tools}" ] && { [ ! -f "${native_iso_tools}/xorriso${tool_suffix}" ] || [ ! -f "${native_iso_tools}/iso-checksum${tool_suffix}" ]; }; then
+          echo "Bundled ISO tools are missing in ${native_iso_tools}." >&2
+          exit 1
         fi
-        iso_tool_image="${ISO_TOOL_IMAGE:-cluster-iso-tools:stream9}"
-        ensure_iso_tool_image() {
-          if run_container_runtime image inspect "${iso_tool_image}" >/dev/null 2>&1; then
-            return 0
+        if [ -z "${native_iso_tools}" ]; then
+          container_runtime="$(ensure_container_runtime "1" || true)"
+          if [ -z "${container_runtime}" ]; then
+            echo "Docker/Podman runtime is required for ISO build tooling."
+            echo "Start Docker Desktop (or Podman machine) and re-run."
+            exit 2
           fi
-          echo "[iso] Building tool image: ${iso_tool_image}"
-          printf '%s\n' \
-            'FROM quay.io/centos/centos:stream9' \
-            'RUN dnf -y install xorriso isomd5sum rsync && dnf clean all && rm -rf /var/cache/dnf' \
-            | run_container_runtime build -t "${iso_tool_image}" -
-        }
-        ensure_iso_tool_image
+          iso_tool_image="${ISO_TOOL_IMAGE:-cluster-iso-tools:stream9}"
+          ensure_iso_tool_image() {
+            if run_container_runtime image inspect "${iso_tool_image}" >/dev/null 2>&1; then
+              return 0
+            fi
+            echo "[iso] Building tool image: ${iso_tool_image}"
+            printf '%s\n' \
+              'FROM quay.io/centos/centos:stream9' \
+              'RUN dnf -y install xorriso isomd5sum rsync && dnf clean all && rm -rf /var/cache/dnf' \
+              | run_container_runtime build -t "${iso_tool_image}" -
+          }
+          ensure_iso_tool_image
+        fi
         run_iso_tool() {
+          if [ -n "${native_iso_tools}" ]; then
+            case "$1" in
+              xorriso) shift; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "${native_iso_tools}/xorriso${tool_suffix}" "$@" ;;
+              implantisomd5)
+                shift
+                if [ "${windows_iso_tools}" = 1 ]; then
+                  "${native_iso_tools}/iso-checksum.exe" implant "$(cygpath -w "$1")"
+                else
+                  "${native_iso_tools}/iso-checksum" implant "$@"
+                fi ;;
+              *) "$@" ;;
+            esac
+            return $?
+          fi
           iso_verbose="$(printf '%s' "${ISO_VERBOSE:-0}" | tr '[:upper:]' '[:lower:]')"
           if [ "${iso_verbose}" = "1" ] || [ "${iso_verbose}" = "true" ]; then
             run_container_runtime run --rm -v "$(pwd):/work" -w /work \
@@ -321,6 +352,10 @@ tasks:
           restamp_checksum="1"
         fi
         iso_path="{{.ISO_PATH}}"
+        if [ "${windows_iso_tools}" = 1 ] && [ -n "${iso_path}" ]; then
+          iso_path="$(cygpath -u "${iso_path}")"
+          if [ -n "${iso_out}" ]; then iso_out="$(cygpath -u "${iso_out}")"; fi
+        fi
         if [ -z "${iso_path}" ]; then
           echo "Set ISO_PATH or LOCAL_ISO_PATH to the golden ISO file."
           exit 1
@@ -365,7 +400,27 @@ tasks:
         rm -rf "${work_dir}"
         mkdir -p "${work_dir}"
         echo "[iso] Extracting base ISO..."
-        run_iso_tool xorriso -osirrox on -indev "${iso_path}" -extract / "${work_dir}"
+        if [ "${windows_iso_tools}" = 1 ]; then
+          # Preserve the original Linux filesystem and its links and modes;
+          # Windows cannot round-trip those through an extracted directory.
+          iso_configs="${work_dir}/.iso-configs"
+          run_iso_tool xorriso -indev "${iso_path}" -find / -name '*.cfg' > "${iso_configs}"
+          for config in /isolinux/isolinux.cfg /EFI/BOOT/grub.cfg /boot/grub2/grub.cfg; do
+            if grep -Fxq "'${config}'" "${iso_configs}"; then
+              mkdir -p "${work_dir}$(dirname "${config}")"
+              # Writable ISO metadata avoids the Windows read-only flag
+              # preventing xorriso from restoring the file's timestamps.
+              run_iso_tool xorriso -osirrox on -indev "${iso_path}" -chmod u+w "${config}" -- -extract "${config}" "${work_dir}${config}" -rollback
+            fi
+          done
+          rm -f "${iso_configs}"
+          if [ ! -f "${work_dir}/isolinux/isolinux.cfg" ] && [ ! -f "${work_dir}/EFI/BOOT/grub.cfg" ] && [ ! -f "${work_dir}/boot/grub2/grub.cfg" ]; then
+            echo "No supported Rocky boot configuration was found in the ISO." >&2
+            exit 1
+          fi
+        else
+          run_iso_tool xorriso -osirrox on -indev "${iso_path}" -extract / "${work_dir}"
+        fi
         # Ensure extracted files are writable before host-side in-place edits.
         # Container extraction can leave root-owned files on Linux runners.
         run_iso_tool chmod -R a+rwX "${work_dir}" >/dev/null 2>&1 || true
@@ -730,7 +785,15 @@ tasks:
         mkdir -p "$(dirname "${iso_out}")"
         rm -f "${iso_out}"
         echo "[iso] Rebuilding ISO image..."
-        run_iso_tool xorriso -indev "${iso_path}" -outdev "${iso_out}" -boot_image any replay -map "${work_dir}" /
+        if [ "${windows_iso_tools}" = 1 ]; then
+          set -- -map "${work_dir}/ks" /ks
+          for config in /isolinux/isolinux.cfg /EFI/BOOT/grub.cfg /boot/grub2/grub.cfg; do
+            if [ -f "${work_dir}${config}" ]; then set -- "$@" -map "${work_dir}${config}" "${config}"; fi
+          done
+          run_iso_tool xorriso -indev "${iso_path}" -outdev "${iso_out}" "$@" -boot_image any replay
+        else
+          run_iso_tool xorriso -indev "${iso_path}" -outdev "${iso_out}" -boot_image any replay -map "${work_dir}" /
+        fi
         if [ "${restamp_checksum}" = "1" ]; then
           echo "[iso] Restamping ISO checksum..."
           run_iso_tool implantisomd5 "${iso_out}"
@@ -786,7 +849,7 @@ tasks:
 
   validate:
     internal: true
-    desc: Validate the ISO checksum post-build (Docker/Podman tooling)
+    desc: Validate the ISO checksum post-build
     deps: [':hooks:ensure']
     cmds:
       - |
@@ -910,6 +973,24 @@ tasks:
         if [ ! -f "${iso_path}" ]; then
           echo "Missing ISO: ${iso_path}"
           exit 1
+        fi
+        native_iso_tools=""
+        tool_suffix=""
+        case "$(uname -s):$(uname -m)" in
+          Darwin:arm64) native_iso_tools="$(pwd)/installer/iso-tools/darwin-arm64" ;;
+          Darwin:x86_64) native_iso_tools="$(pwd)/installer/iso-tools/darwin-amd64" ;;
+          Linux:aarch64|Linux:arm64) native_iso_tools="$(pwd)/installer/iso-tools/linux-arm64" ;;
+          Linux:x86_64|Linux:amd64) native_iso_tools="$(pwd)/installer/iso-tools/linux-amd64" ;;
+          MINGW*:x86_64|MSYS*:x86_64) native_iso_tools="$(pwd)/installer/iso-tools/windows-amd64"; tool_suffix=".exe" ;;
+        esac
+        if [ -n "${native_iso_tools}" ]; then
+          if [ ! -f "${native_iso_tools}/iso-checksum${tool_suffix}" ]; then
+            echo "Bundled ISO checksum tool is missing in ${native_iso_tools}." >&2
+            exit 1
+          fi
+          if [ "${tool_suffix}" = .exe ]; then iso_path="$(cygpath -w "${iso_path}")"; fi
+          "${native_iso_tools}/iso-checksum${tool_suffix}" check "${iso_path}"
+          exit $?
         fi
         container_runtime="$(ensure_container_runtime "1" || true)"
         if [ -z "${container_runtime}" ]; then

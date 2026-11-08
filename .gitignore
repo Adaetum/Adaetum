@@ -7,6 +7,7 @@ ansible/node-inventory.yml
 .fact_cache/
 .cache/
 .adaetum/
+.logs/
 
 # Build outputs
 dist/
@@ -36,3 +37,6 @@ __pycache__/
 node_modules/
 cluster-local.patch
 .maintainer-overrides/
+
+# Auth service dependencies
+adaetum/auth/node_modules/

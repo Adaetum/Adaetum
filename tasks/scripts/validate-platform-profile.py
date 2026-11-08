@@ -58,7 +58,7 @@ def validate_profile(profile: dict[str, Any]) -> list[str]:
     spec = profile.get("spec")
     if not isinstance(spec, dict):
         return errors + ["spec must be a mapping"]
-    unknown_spec_fields = set(spec) - {"installation", "cluster", "delivery", "hostMaintenance"}
+    unknown_spec_fields = set(spec) - {"installation", "cluster", "delivery", "hostMaintenance", "imageCleanup"}
     if unknown_spec_fields:
         errors.append(f"unknown spec fields: {', '.join(sorted(unknown_spec_fields))}")
     if spec.get("installation") != "rocky10":
@@ -246,6 +246,29 @@ def validate_profile(profile: dict[str, Any]) -> list[str]:
                         f"spec.hostMaintenance.observability.{field} must be a boolean"
                     )
 
+    cleanup = spec.get("imageCleanup")
+    if not isinstance(cleanup, dict):
+        errors.append("spec.imageCleanup must be a mapping")
+    else:
+        unknown_cleanup = set(cleanup) - {
+            "enabled", "level", "time", "maxImagesPerRun", "onlyIfDiskOverPercent", "checkOnly",
+        }
+        if unknown_cleanup:
+            errors.append("unknown spec.imageCleanup fields: " + ", ".join(sorted(unknown_cleanup)))
+        for field in ("enabled", "checkOnly"):
+            if not isinstance(cleanup.get(field), bool):
+                errors.append(f"spec.imageCleanup.{field} must be a boolean")
+        if cleanup.get("level") not in ("careful", "aggressive"):
+            errors.append("spec.imageCleanup.level must be careful or aggressive")
+        if not isinstance(cleanup.get("time"), str) or not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", cleanup["time"]):
+            errors.append("spec.imageCleanup.time must use 24-hour HH:MM")
+        max_images = cleanup.get("maxImagesPerRun")
+        if isinstance(max_images, bool) or not isinstance(max_images, int) or not 1 <= max_images <= 1000:
+            errors.append("spec.imageCleanup.maxImagesPerRun must be an integer from 1 to 1000")
+        disk_floor = cleanup.get("onlyIfDiskOverPercent")
+        if isinstance(disk_floor, bool) or not isinstance(disk_floor, int) or not 0 <= disk_floor <= 99:
+            errors.append("spec.imageCleanup.onlyIfDiskOverPercent must be an integer from 0 to 99")
+
     def contains_secret_key(value: Any, path: str = "") -> None:
         if isinstance(value, dict):
             for key, child in value.items():
@@ -291,6 +314,14 @@ def run_self_test() -> list[str]:
     invalid_timezone["spec"]["hostMaintenance"]["reboots"]["timeZone"] = "not/a-zone"
     if not any("timeZone" in error for error in validate_profile(invalid_timezone)):
         failures.append("invalid host-maintenance timezone was accepted")
+    invalid_cleanup = copy.deepcopy(profile)
+    invalid_cleanup["spec"]["imageCleanup"]["level"] = "reckless"
+    if not any("imageCleanup.level" in error for error in validate_profile(invalid_cleanup)):
+        failures.append("invalid image-cleanup level was accepted")
+    invalid_time = copy.deepcopy(profile)
+    invalid_time["spec"]["imageCleanup"]["time"] = "25:99"
+    if not any("imageCleanup.time" in error for error in validate_profile(invalid_time)):
+        failures.append("invalid image-cleanup time was accepted")
     return failures
 
 

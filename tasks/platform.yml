@@ -21,5 +21,6 @@ tasks:
   setup:
     desc: Run setup using platform.yaml as public configuration
     deps: [validate]
+    dir: installer
     cmds:
-      - bash ./tasks/scripts/run-opinionated-setup.sh
+      - go run ./cmd/adaetum-setup --apply {{.CLI_ARGS}}

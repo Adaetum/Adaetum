@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-mcp
+  namespace: mcp
+  labels:
+    app: gitea-mcp
+  annotations:
+    secret.reloader.stakater.com/reload: gitea-mcp-env
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea-mcp
+  template:
+    metadata:
+      labels:
+        app: gitea-mcp
+    spec:
+      serviceAccountName: gitea-mcp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gitea-mcp
+          image: gitea/gitea-mcp-server:1.12.0@sha256:7abff2c58718f80fc777b9b1a04885332e182814921cc61967313eea4136c3b2
+          imagePullPolicy: IfNotPresent
+          # Every tool is available (the server's read-only mode is not set).
+          args:
+            - -t
+            - http
+            - --port
+            - "8080"
+            - --host
+            - http://gitea-http.gitea.svc.cluster.local:3000
+          envFrom:
+            - secretRef:
+                name: gitea-mcp-env
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          ports:
+            - name: mcp
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: openbao
+              mountPath: /mnt/openbao
+              readOnly: true
+            # The image's health check needs a writable /tmp on a read-only root.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: gitea-mcp-openbao
+        - name: tmp
+          emptyDir: {}

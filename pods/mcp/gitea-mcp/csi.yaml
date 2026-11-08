@@ -1,0 +1,22 @@
+# The Gitea access token is minted by mcp-credentials and kept in OpenBao; this
+# pod only reads it. Callers present a Gitea token themselves, and Gitea is what
+# authenticates it, so this server has no separate caller credential.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: gitea-mcp-openbao
+  namespace: mcp
+spec:
+  provider: openbao
+  secretObjects:
+    - secretName: gitea-mcp-env
+      type: Opaque
+      data:
+        - objectName: token
+          key: GITEA_ACCESS_TOKEN
+  parameters:
+    roleName: mcp-gitea
+    objects: |
+      - objectName: token
+        secretPath: secret/data/apps/mcp/gitea
+        secretKey: token

@@ -1,0 +1,4 @@
+# kubernetes-mcp-server settings. Everything is on: tools that change the cluster
+# are available, and what the server may do is decided by the Kubernetes RBAC in
+# rbac.yaml, which is the control to rely on.
+port = "8080"

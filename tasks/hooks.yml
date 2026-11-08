@@ -7,6 +7,19 @@ tasks:
     cmds:
       - |
         set -e
+        # Setup can install Git and Python in a preceding task process. Include
+        # their standard locations without requiring the operator to reopen a shell.
+        setup_root="$(pwd)"
+        # A source archive has no repository yet. The installer initializes it
+        # later; creating .git/hooks here would leave an invalid partial repo.
+        if [ ! -e "${setup_root}/.git" ]; then
+          exit 0
+        fi
+        PATH="${setup_root}/.adaetum/setup-python/bin:${setup_root}/.adaetum/setup-python/Scripts:${HOME}/.local/bin:/usr/local/go/bin:${PATH}"
+        case "${OS:-}:$(uname -s 2>/dev/null || true)" in
+          Windows_NT:*|*:MINGW*|*:MSYS*|*:CYGWIN*) PATH="/c/Program Files/Git/cmd:/c/Program Files/Git/bin:${HOME}/AppData/Local/Programs/Git/cmd:${HOME}/AppData/Local/Programs/Git/bin:${PATH}" ;;
+        esac
+        export PATH
         brew_install_with_retry() {
           formula="$1"
           tries="${2:-10}"

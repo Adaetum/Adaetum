@@ -79,11 +79,12 @@ def main() -> int:
         blockers.append("no supported Rocky Linux 10 Minimal or DVD installer ISO is present in the repository root")
     if not has_command("uv"):
         notes.append("uv is absent; task initialize can install it automatically")
-    if not has_command("gum"):
-        notes.append("Gum is absent; task init will attempt installation, while task initialize uses plain prompts")
-    if not has_command("docker"):
-        notes.append("Docker is absent; use an existing ISO or install Docker for local ISO builds")
-
+    if not has_command("go"):
+        notes.append("Go is absent; setup is a Go program (installer/), so task init and task initialize both need it")
+    if not has_command("npm"):
+        notes.append("Node is absent; task init needs it to build the setup window (task initialize does not)")
+    if not has_command("gh"):
+        notes.append("GitHub CLI (gh) is absent; task init will attempt installation")
     if blockers:
         print("Setup preflight is blocked:", file=sys.stderr)
         for blocker in blockers:

@@ -1,16 +1,9 @@
 param()
 
 $ErrorActionPreference = "Stop"
+$env:Path = @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'), "$env:UserProfile\.local\bin", "$env:UserProfile\.cargo\bin", $env:Path) -join ';'
 
-$py = Get-Command python3 -ErrorAction SilentlyContinue
-if (-not $py) {
-  $py = Get-Command python -ErrorAction SilentlyContinue
-}
-if (-not $py) {
-  Write-Error "python3 is required for setup tasks. Install Python, then re-run."
-  exit 1
-}
-
+# uv is a standalone executable; Python is prepared separately for setup.
 $uv = Get-Command uv -ErrorAction SilentlyContinue
 if ($uv) {
   exit 0
@@ -23,6 +16,7 @@ if (-not $winget) {
 }
 
 winget install --id astral-sh.uv -e --accept-package-agreements --accept-source-agreements --silent | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "uv installation failed (winget exit $LASTEXITCODE)." }
 
 $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
 $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
@@ -48,5 +42,4 @@ foreach ($c in $candidates) {
   }
 }
 
-Write-Warning "uv install attempted, but executable was not found on PATH in this session. Continuing; setup scripts will use python fallback."
-exit 0
+throw "uv was installed but could not be found for this setup session."

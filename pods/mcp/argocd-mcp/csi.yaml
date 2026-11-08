@@ -1,0 +1,28 @@
+# The credential for Argo CD and the token callers must present are minted by
+# mcp-credentials and kept in OpenBao; this pod only reads them. The synchronized
+# Secret exists for the lifetime of the mounted pod, because the server takes both
+# values from environment variables.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: argocd-mcp-openbao
+  namespace: mcp
+spec:
+  provider: openbao
+  secretObjects:
+    - secretName: argocd-mcp-env
+      type: Opaque
+      data:
+        - objectName: token
+          key: ARGOCD_API_TOKEN
+        - objectName: inbound_token
+          key: MCP_AUTH_TOKEN
+  parameters:
+    roleName: mcp-argocd
+    objects: |
+      - objectName: token
+        secretPath: secret/data/apps/mcp/argocd
+        secretKey: token
+      - objectName: inbound_token
+        secretPath: secret/data/apps/mcp/argocd
+        secretKey: inbound_token

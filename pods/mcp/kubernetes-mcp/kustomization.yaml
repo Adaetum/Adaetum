@@ -1,0 +1,14 @@
+resources:
+  - serviceaccount.yaml
+  - rbac.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+
+configMapGenerator:
+  - name: kubernetes-mcp-config
+    files:
+      - config.toml
+
+generatorOptions:
+  disableNameSuffixHash: true

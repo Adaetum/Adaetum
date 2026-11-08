@@ -1,0 +1,618 @@
+package repository
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Adaetum/Adaetum/installer/engine"
+	"github.com/Adaetum/Adaetum/installer/github"
+	"github.com/Adaetum/Adaetum/installer/sys"
+)
+
+func meta(visibility string, admin, fork bool, size int, branch string) string {
+	return fmt.Sprintf(`{"full_name":"x","visibility":%q,"fork":%t,"size":%d,"default_branch":%q,"permissions":{"admin":%t}}`,
+		visibility, fork, size, branch, admin)
+}
+
+var (
+	notFound = sys.Result{ExitCode: 1, Stderr: "gh: Not Found (HTTP 404)"}
+	okEmpty  = sys.Result{}
+)
+
+func ok(out string) sys.Result { return sys.Result{Stdout: out} }
+
+type switchSimulationUI struct {
+	screens  []string
+	accounts []string
+	choices  int
+}
+
+func (u *switchSimulationUI) Report(e engine.Event) {
+	if e.Kind == "github-account" {
+		u.accounts = append(u.accounts, e.Message)
+	}
+}
+func (u *switchSimulationUI) Ask(_ context.Context, s engine.Screen) (string, error) {
+	u.screens = append(u.screens, s.ID)
+	if s.ID == "repository-owner" {
+		return s.Options[0], nil
+	}
+	if s.ID == "create-or-reuse-repository" {
+		u.choices++
+		if u.choices == 1 {
+			return switchAccountAnswer, nil
+		}
+		return s.Options[1], nil
+	}
+	return s.Default, nil
+}
+
+func TestSimulationSwitchAccountReturnsToSignInWithoutCommands(t *testing.T) {
+	f := &sys.Fake{}
+	u := &switchSimulationUI{}
+	if err := newStep(f).Simulate(context.Background(), &engine.Env{UIOnly: true}, u); err != nil {
+		t.Fatal(err)
+	}
+	if len(u.screens) < 6 || u.screens[0] != "github-signin" || u.screens[1] != "repository-owner" || u.screens[2] != "create-or-reuse-repository" || u.screens[3] != "github-signin" || u.screens[4] != "repository-owner" || u.screens[5] != "create-or-reuse-repository" {
+		t.Fatalf("unexpected screens: %v", u.screens)
+	}
+	if len(u.accounts) != 3 || u.accounts[0] == "" || u.accounts[1] != "" || u.accounts[2] == "" {
+		t.Fatalf("unexpected accounts: %v", u.accounts)
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("simulation ran commands: %v", f.Calls)
+	}
+}
+
+func TestReusableRepositoriesFiltersUnsafeRepositories(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh api --paginate user/repos", Result: ok("alice/empty\nalice/recovery\nalice/unrelated\n")},
+		{Prefix: "gh api repos/alice/recovery/contents/platform.yaml", Result: ok("{}")},
+		{Prefix: "gh api repos/alice/unrelated/contents/platform.yaml", Result: notFound},
+		{Prefix: "gh api repos/alice/empty", Result: ok(meta("private", true, false, 0, "main"))},
+		{Prefix: "gh api repos/alice/recovery", Result: ok(meta("private", true, false, 1, "main"))},
+		{Prefix: "gh api repos/alice/unrelated", Result: ok(meta("private", true, false, 1, "main"))},
+	}}
+	repos, err := newStep(f).reusableRepositories(context.Background(), "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(repos, ",") != "alice/empty,alice/recovery" {
+		t.Fatalf("unexpected candidates: %v", repos)
+	}
+}
+
+func TestRepositoryOwnersAndSelection(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{{Prefix: "gh api --paginate user/orgs", Result: ok("Team-One\nteam-two\nTEAM-ONE\n")}}}
+	owners, err := newStep(f).repositoryOwners(context.Background(), "alice")
+	if err != nil || strings.Join(owners, ",") != "alice,Team-One,team-two" {
+		t.Fatalf("owners=%v err=%v", owners, err)
+	}
+	owner, err := chooseRepositoryOwner(context.Background(), engine.Headless{Answers: map[string]string{"repository-owner": "Team-One"}}, owners)
+	if err != nil || owner != "Team-One" {
+		t.Fatalf("owner=%q err=%v", owner, err)
+	}
+	owner, err = chooseRepositoryOwner(context.Background(), engine.Headless{}, []string{"alice"})
+	if err != nil || owner != "alice" {
+		t.Fatalf("single owner=%q err=%v", owner, err)
+	}
+}
+
+func TestReusableRepositoriesRestrictedToChosenOwner(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh api --paginate user/repos", Result: ok("alice/one\nteam/two\n")},
+		{Prefix: "gh api repos/team/two", Result: ok(meta("private", true, false, 0, "main"))},
+	}}
+	repos, err := newStep(f).reusableRepositories(context.Background(), "TEAM")
+	if err != nil || strings.Join(repos, ",") != "team/two" {
+		t.Fatalf("repos=%v err=%v", repos, err)
+	}
+	if f.Ran("gh api repos/alice/one") {
+		t.Fatal("queried a repository outside the selected owner")
+	}
+}
+
+func newStep(f *sys.Fake) *Step {
+	s := New(f, "/checkout")
+	s.Sleep = func(time.Duration) {}
+	s.Render = func(context.Context) error { return nil }
+	return s
+}
+
+func TestCheckIsBlockedWithoutGh(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "git --version", Result: ok("git version 2")},
+		{Prefix: "gh --version", Result: sys.Result{ExitCode: 127}},
+	}}
+	got, err := newStep(f).Check(context.Background(), &engine.Env{})
+	if err != nil || got.Status != engine.Blocked {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+}
+
+func TestCheckNeedsARepositoryWhenOriginIsUpstream(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "git --version", Result: ok("")},
+		{Prefix: "gh --version", Result: ok("")},
+		{Prefix: "git remote get-url origin", Result: ok("https://github.com/Adaetum/Adaetum.git\n")},
+	}}
+	got, _ := newStep(f).Check(context.Background(), &engine.Env{})
+	if got.Status != engine.Needed {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestCheckIsDoneWhenEverythingIsInPlace(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "git --version", Result: ok("")},
+		{Prefix: "gh --version", Result: ok("")},
+		{Prefix: "git remote get-url origin", Result: ok("https://github.com/alice/Adaetum-cluster.git\n")},
+		{Prefix: "gh auth token", Result: ok("token")},
+		{Prefix: "gh api repos/alice/adaetum-cluster/actions/workflows", Result: ok("2\n")},
+		{Prefix: "gh api repos/alice/adaetum-cluster", Result: ok(meta("private", true, false, 0, "main"))},
+		{Prefix: "git branch --show-current", Result: ok("main\n")},
+		{Prefix: "git rev-parse HEAD", Result: ok("abc\n")},
+		{Prefix: "git ls-remote --heads origin main", Result: ok("abc\trefs/heads/main\n")},
+	}}
+	got, err := newStep(f).Check(context.Background(), &engine.Env{})
+	if err != nil || got.Status != engine.Done {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+}
+
+func TestAPublicOriginIsNeverUsable(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{}}
+	s := newStep(f)
+	for name, m := range map[string]repoMeta{
+		"public": {Visibility: "public", Permissions: struct {
+			Admin bool `json:"admin"`
+		}{true}},
+		"fork": {Visibility: "private", Fork: true, Permissions: struct {
+			Admin bool `json:"admin"`
+		}{true}},
+		"not admin": {Visibility: "private"},
+	} {
+		if usable, _ := s.usable(context.Background(), "alice/x", m); usable {
+			t.Errorf("%s repository was accepted", name)
+		}
+	}
+}
+
+func TestAPopulatedRepositoryWithoutTheMarkerIsRefused(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{{Prefix: "gh api repos/alice/x/contents/platform.yaml", Result: notFound}}}
+	m := repoMeta{Visibility: "private", Size: 10}
+	m.Permissions.Admin = true
+	if usable, why := newStep(f).usable(context.Background(), "alice/x", m); usable || !strings.Contains(why, "does not look like Adaetum") {
+		t.Fatalf("usable=%v why=%q", usable, why)
+	}
+}
+
+func TestACollidingNameGetsTheNextFreeSuffix(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh api repos/alice/Adaetum-cluster-2", Result: notFound},
+		{Prefix: "gh api repos/alice/Adaetum-cluster/contents/platform.yaml", Result: notFound},
+		{Prefix: "gh api repos/alice/Adaetum-cluster", Result: ok(meta("public", true, false, 5, "main"))},
+	}}
+	got, err := newStep(f).findPreferred(context.Background(), "alice")
+	if err != nil || got != "alice/Adaetum-cluster-2" {
+		t.Fatalf("got %q err=%v", got, err)
+	}
+}
+
+func TestAnExistingRecoveryRepositoryIsPreferred(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{{Prefix: "gh api repos/alice/Adaetum-cluster", Result: ok(meta("private", true, false, 0, "main"))}}}
+	got, err := newStep(f).findPreferred(context.Background(), "alice")
+	if err != nil || got != "alice/Adaetum-cluster" {
+		t.Fatalf("got %q err=%v", got, err)
+	}
+}
+
+func TestAnOutageIsNotMistakenForAFreeName(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{{Prefix: "gh api repos/", Result: sys.Result{ExitCode: 1, Stderr: "HTTP 503 invalid character '<'"}}}}
+	if _, _, err := newStep(f).lookup(context.Background(), "alice/x"); err == nil {
+		t.Fatal("an outage was treated as a free name")
+	}
+}
+
+// plainRunner hides the fake's streaming, so the terminal fallback is exercised.
+type plainRunner struct{ sys.Runner }
+
+func TestSignInFallsBackToTerminalInstructionsWhenGhCannotBeDrivenInTheWindow(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh auth token", Result: sys.Result{ExitCode: 1}, Then: []sys.Result{{ExitCode: 1}, ok("token")}},
+		{Prefix: "gh api user", Result: ok("alice\n")},
+	}}
+	step := newStep(f)
+	step.Run = plainRunner{f}
+	login, err := step.signIn(context.Background(), engine.Headless{}, func(string) {})
+	if err != nil || login != "alice" {
+		t.Fatalf("login=%q err=%v", login, err)
+	}
+	if f.Ran("gh auth login") {
+		t.Fatal("without streaming the installer must not run gh's sign-in blind")
+	}
+}
+
+// reporter collects the events a step reports.
+type reporter struct {
+	engine.Headless
+	events []engine.Event
+}
+
+func (r *reporter) Report(e engine.Event) { r.events = append(r.events, e) }
+
+func TestSignInRunsGhInTheWindowAndShowsTheOneTimeCode(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh auth token", Result: sys.Result{ExitCode: 1}, Then: []sys.Result{{ExitCode: 1}, ok("token")}},
+		{Prefix: "gh auth login --hostname github.com --web", Result: sys.Result{Stderr: "! First copy your one-time code: ABCD-1234\n- Press Enter to open github.com in your browser...\n"}},
+		{Prefix: "gh api user", Result: ok("alice\n")},
+	}}
+	ui := &reporter{}
+	login, err := newStep(f).signIn(context.Background(), ui, func(string) {})
+	if err != nil || login != "alice" {
+		t.Fatalf("login=%q err=%v", login, err)
+	}
+	var shown *engine.Event
+	dismissed := false
+	for i := range ui.events {
+		if ui.events[i].Kind != engine.KindCode {
+			continue
+		}
+		if ui.events[i].Message != "" && shown == nil {
+			shown = &ui.events[i]
+		}
+		if ui.events[i].Message == "" {
+			dismissed = true
+		}
+	}
+	if shown == nil || shown.Message != "ABCD-1234" || !strings.Contains(shown.Link, "github.com/login/device") {
+		t.Fatalf("the one-time code was not shown: %+v", ui.events)
+	}
+	if !dismissed {
+		t.Fatal("the code was never taken off the screen after sign-in")
+	}
+}
+
+func TestSignInRefreshesInTheWindowWhenGitHubRejectsTheSavedLogin(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh auth token", Result: ok("token")},
+		{Prefix: "gh auth refresh --hostname github.com", Result: sys.Result{Stderr: "! First copy your one-time code: WXYZ-9876\n"}},
+		{Prefix: "gh api user", Result: sys.Result{ExitCode: 1, Stderr: "HTTP 401 Bad credentials"}, Then: []sys.Result{
+			{ExitCode: 1, Stderr: "HTTP 401 Bad credentials"}, ok("alice\n")}},
+	}}
+	ui := &reporter{}
+	if _, err := newStep(f).signIn(context.Background(), ui, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Ran("gh auth refresh") {
+		t.Fatal("the saved login was not refreshed")
+	}
+}
+
+func TestSignInRefreshesRejectedCredentials(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh auth token", Result: ok("token")},
+		{Prefix: "gh api user", Result: sys.Result{ExitCode: 1, Stderr: "HTTP 401 Bad credentials"}, Then: []sys.Result{
+			{ExitCode: 1, Stderr: "HTTP 401 Bad credentials"}, ok("alice\n")}},
+	}}
+	login, err := newStep(f).signIn(context.Background(), engine.Headless{}, func(string) {})
+	if err != nil || login != "alice" {
+		t.Fatalf("login=%q err=%v", login, err)
+	}
+}
+
+func TestDecliningStopsCleanly(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{{Prefix: "gh auth token", Result: sys.Result{ExitCode: 1}}}}
+	_, err := newStep(f).signIn(context.Background(), engine.Headless{Answers: map[string]string{"github-signin": "no"}}, func(string) {})
+	if !errors.Is(err, engine.ErrDeclined) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestActionsRetriesUntilWorkflowsAppear(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh api repos/alice/x/actions/workflows", Result: ok("0"), Then: []sys.Result{ok("0"), ok("0"), ok("3")}},
+		{Prefix: "gh api repos/alice/x", Result: ok(meta("private", true, false, 1, "main"))},
+	}}
+	if err := newStep(f).ensureActions(context.Background(), "alice/x", func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestActionsFixesTheDefaultBranch(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh api repos/alice/x/actions/workflows", Result: ok("1")},
+		{Prefix: "gh api repos/alice/x/branches/main", Result: ok("{}")},
+		{Prefix: "gh repo edit alice/x --default-branch main", Result: okEmpty},
+		{Prefix: "gh api repos/alice/x", Result: ok(meta("private", true, false, 1, "develop"))},
+	}}
+	if err := newStep(f).ensureActions(context.Background(), "alice/x", func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Ran("gh repo edit alice/x --default-branch main") {
+		t.Fatal("the default branch was not corrected")
+	}
+}
+
+// ---- end to end with real git and a fake gh ---------------------------------
+
+func sh(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func write(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyPublishesSelectedBranchWithTheOperatorsProfile(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	for k, v := range map[string]string{
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+		"GIT_CONFIG_GLOBAL": os.DevNull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+	} {
+		t.Setenv(k, v)
+	}
+	root := t.TempDir()
+	public, private, work := filepath.Join(root, "public.git"), filepath.Join(root, "private.git"), filepath.Join(root, "work")
+
+	// Canonical Adaetum, with a seed checkout to give it a main.
+	sh(t, root, "init", "--bare", "-b", "main", public)
+	seed := filepath.Join(root, "seed")
+	sh(t, root, "clone", public, seed)
+	write(t, filepath.Join(seed, "platform.yaml"), "domain: public.example\n")
+	write(t, filepath.Join(seed, "from-public.txt"), "public tree\n")
+	sh(t, seed, "add", ".")
+	sh(t, seed, "commit", "-m", "public main")
+	sh(t, seed, "push", "origin", "HEAD:refs/heads/main")
+
+	// The operator's checkout: cloned from public, with their profile on a dev branch.
+	sh(t, root, "init", "--bare", "-b", "main", private)
+	sh(t, root, "clone", public, work)
+	sh(t, work, "checkout", "-b", "dev")
+	write(t, filepath.Join(work, "platform.yaml"), "domain: mine.example\n")
+	write(t, filepath.Join(work, "dev-only.txt"), "selected branch\n")
+	sh(t, work, "add", ".")
+	sh(t, work, "commit", "-m", "my profile")
+	// A stand-in for GitHub: the private repository's web URL resolves to the local bare repo.
+	sh(t, work, "config", "url."+private+".insteadOf", "https://github.com/alice/Adaetum-cluster.git")
+	sh(t, work, "remote", "add", "upstream", public)
+
+	gh := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh auth token", Result: ok("token")},
+		{Prefix: "gh api user", Result: ok("alice\n")},
+		{Prefix: "gh repo create alice/Adaetum-cluster --private", Result: okEmpty},
+		{Prefix: "gh api repos/alice/Adaetum-cluster/actions/workflows", Result: ok("2")},
+		{Prefix: "gh api repos/alice/Adaetum-cluster", Result: ok(meta("private", true, false, 0, "main")),
+			Then: []sys.Result{notFound, notFound, notFound}},
+	}}
+	step := New(sys.Mux{Real: sys.Exec{}, RealOnly: []string{"git"}, Fake: gh}, work)
+	step.Sleep = func(time.Duration) {}
+	rendered := false
+	step.Render = func(context.Context) error { rendered = true; return nil }
+
+	var said []string
+	ui := engine.Headless{
+		Answers: map[string]string{"repository": "alice/Adaetum-cluster"},
+		Log:     func(e engine.Event) { said = append(said, e.Message) },
+	}
+	if err := step.Apply(context.Background(), &engine.Env{}, ui); err != nil {
+		t.Fatalf("apply: %v\n%s", err, strings.Join(said, "\n"))
+	}
+
+	if !rendered {
+		t.Error("the profile was not re-rendered")
+	}
+	if got := sh(t, work, "branch", "--show-current"); got != "dev" {
+		t.Errorf("on %q, want dev", got)
+	}
+	data, _ := os.ReadFile(filepath.Join(work, "platform.yaml"))
+	if string(data) != "domain: mine.example\n" {
+		t.Errorf("the operator's profile was lost: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(work, "from-public.txt")); err != nil {
+		t.Error("the public tree was not applied")
+	}
+	if got := sh(t, private, "show", "main:dev-only.txt"); got != "selected branch" {
+		t.Errorf("selected branch content was not published: %q", got)
+	}
+	if local, remote := sh(t, work, "rev-parse", "HEAD"), sh(t, private, "rev-parse", "refs/heads/main"); local != remote {
+		t.Errorf("private main %s does not match HEAD %s", remote, local)
+	}
+	if got := sh(t, work, "remote", "get-url", "upstream"); got != public {
+		t.Errorf("upstream changed to %q", got)
+	}
+	if got := sh(t, work, "remote", "get-url", "--push", "origin"); got != private && got != "https://github.com/alice/Adaetum-cluster.git" {
+		t.Errorf("origin push URL is %q", got)
+	}
+	// The dev branch, with the operator's commit, must still exist.
+	if got := sh(t, work, "branch", "--list", "dev"); got == "" {
+		t.Error("the dev branch was lost")
+	}
+}
+
+func TestUnpublishedLocalMainIsPreserved(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	for k, v := range map[string]string{
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+		"GIT_CONFIG_GLOBAL": os.DevNull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+	} {
+		t.Setenv(k, v)
+	}
+	root := t.TempDir()
+	public, private, work := filepath.Join(root, "public.git"), filepath.Join(root, "private.git"), filepath.Join(root, "work")
+	sh(t, root, "init", "--bare", "-b", "main", public)
+	sh(t, root, "init", "--bare", "-b", "main", private)
+	seed := filepath.Join(root, "seed")
+	sh(t, root, "clone", public, seed)
+	write(t, filepath.Join(seed, "platform.yaml"), "a\n")
+	sh(t, seed, "add", ".")
+	sh(t, seed, "commit", "-m", "public")
+	sh(t, seed, "push", "origin", "HEAD:refs/heads/main")
+	sh(t, root, "clone", public, work)
+	write(t, filepath.Join(work, "precious.txt"), "unpublished\n")
+	sh(t, work, "add", ".")
+	sh(t, work, "commit", "-m", "work only on local main")
+	sh(t, work, "remote", "add", "upstream", public)
+	sh(t, work, "remote", "set-url", "origin", private)
+
+	step := New(sys.Exec{}, work)
+	step.Render = func(context.Context) error { return nil }
+	err := step.trackBranch(context.Background(), func(string) {})
+	if err != nil {
+		t.Fatalf("publishing the selected branch: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(work, "precious.txt")); statErr != nil {
+		t.Fatal("the unpublished file was lost")
+	}
+}
+
+func TestAReplayRunNeverCreatesTheRepository(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "gh auth token", Result: ok("tok")},
+		{Prefix: "git remote get-url origin", Result: ok("https://github.com/Adaetum/Adaetum.git\n")},
+		{Prefix: "gh repo create", Result: okEmpty},
+		{Prefix: "gh api repos/", Result: notFound},
+		{Prefix: "git", Result: okEmpty},
+	}}
+	_, err := newStep(f).configure(context.Background(), engine.Headless{Replay: true}, func(string) {}, "alice")
+	if !errors.Is(err, engine.ErrNotReplayable) {
+		t.Fatalf("err = %v", err)
+	}
+	if f.Ran("gh repo create") {
+		t.Fatal("a replay run created a repository")
+	}
+}
+
+func TestACheckThatCannotReachGitHubReportsItInsteadOfFailing(t *testing.T) {
+	f := &sys.Fake{Rules: []sys.Rule{
+		{Prefix: "git --version", Result: ok("")},
+		{Prefix: "gh --version", Result: ok("")},
+		{Prefix: "git remote get-url origin", Result: ok("https://github.com/alice/Adaetum-cluster.git\n")},
+		{Prefix: "gh auth token", Result: ok("tok")},
+		{Prefix: "gh api repos/", Result: sys.Result{ExitCode: 1, Stderr: "HTTP 503 service unavailable"}},
+	}}
+	got, err := newStep(f).Check(context.Background(), &engine.Env{})
+	if err != nil || got.Status != engine.Needed || !strings.Contains(got.Detail, "could not check") {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestDownloadedSourceSnapshot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	write(t, filepath.Join(root, ".gitignore"), ".adaetum/\n.env\n")
+	write(t, filepath.Join(root, "platform.yaml"), "domain: original.example\n")
+	write(t, filepath.Join(root, "source.txt"), "downloaded content with edits\n")
+	write(t, filepath.Join(root, ".env"), "SECRET=local\n")
+	step := New(sys.Exec{}, root)
+	if err := step.prepareSourceSnapshot(context.Background(), func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sh(t, root, "show", "HEAD:source.txt"); got != "downloaded content with edits" {
+		t.Fatalf("snapshot lost source: %q", got)
+	}
+	if got := sh(t, root, "branch", "--show-current"); got != "main" {
+		t.Fatalf("branch = %q", got)
+	}
+	if got := sh(t, root, "ls-files"); strings.Contains(got, ".env") || strings.Contains(got, ".adaetum") {
+		t.Fatalf("snapshot included ignored files: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".adaetum", "source-snapshot-pending")); !os.IsNotExist(err) {
+		t.Fatalf("pending marker remains: %v", err)
+	}
+	// A normal existing checkout is never restaged, including local edits.
+	write(t, filepath.Join(root, "source.txt"), "uncommitted change\n")
+	if err := step.prepareSourceSnapshot(context.Background(), func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sh(t, root, "show", "HEAD:source.txt"); got != "downloaded content with edits" {
+		t.Fatalf("existing checkout changed: %q", got)
+	}
+}
+
+func TestDownloadedSourceSnapshotResumesAfterInit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	write(t, filepath.Join(root, ".gitignore"), ".adaetum/\n")
+	write(t, filepath.Join(root, "platform.yaml"), "example\n")
+	if err := os.Mkdir(filepath.Join(root, ".adaetum"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, ".adaetum", "source-snapshot-pending"), "pending\n")
+	sh(t, root, "init", "-b", "main")
+	if err := New(sys.Exec{}, root).prepareSourceSnapshot(context.Background(), func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sh(t, root, "show", "HEAD:platform.yaml"); got != "example" {
+		t.Fatalf("resumed snapshot = %q", got)
+	}
+}
+
+func TestDownloadedSourcePublishesToPrivateRecovery(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	work := filepath.Join(root, "download")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	private := filepath.Join(root, "private.git")
+	sh(t, root, "init", "--bare", "-b", "main", private)
+	write(t, filepath.Join(work, ".gitignore"), ".adaetum/\n.env\n")
+	write(t, filepath.Join(work, "platform.yaml"), "downloaded profile\n")
+	write(t, filepath.Join(work, "source.txt"), "downloaded version\n")
+	write(t, filepath.Join(work, ".env"), "SECRET=local\n")
+	step := New(sys.Exec{}, work)
+	step.Render = func(context.Context) error { return nil }
+	ctx := context.Background()
+	if err := step.prepareSourceSnapshot(ctx, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if err := step.setOrigin(ctx, private); err != nil {
+		t.Fatal(err)
+	}
+	if err := step.trackBranch(ctx, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sh(t, root, "--git-dir", private, "show", "main:source.txt"); got != "downloaded version" {
+		t.Fatalf("published snapshot = %q", got)
+	}
+	if got := sh(t, work, "remote", "get-url", "upstream"); got != github.UpstreamURL {
+		t.Fatalf("upstream = %q", got)
+	}
+	if got := sh(t, root, "--git-dir", private, "ls-tree", "-r", "--name-only", "main"); strings.Contains(got, ".env") {
+		t.Fatalf("ignored secret was published: %s", got)
+	}
+}

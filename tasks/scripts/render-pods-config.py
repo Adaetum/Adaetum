@@ -64,6 +64,11 @@ TEMPLATE_TARGETS = [
 # These are listed by consumer to make ownership visible during reviews.
 APP_CONFIG_TARGETS = [
     (
+        "pods/adaetum/agent/adaetum-agent-cluster-config.yaml",
+        "adaetum-agent-cluster-config",
+        ("GITEA_REPO_OWNER", "GITEA_REPO_NAME", "GITOPS_REPO_BRANCH", "GITEA_PUBLIC_HOST"),
+    ),
+    (
         "pods/ansible/ansible/ansible-cluster-config.yaml",
         "ansible-cluster-config",
         ("ANSIBLE_RUNNER_IMAGE", "TAILSCALE_DOMAIN", "TAILSCALE_CLUSTER_TAG"),

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea-mcp
+  namespace: mcp
+spec:
+  selector:
+    app: gitea-mcp
+  ports:
+    - name: mcp
+      port: 80
+      targetPort: mcp

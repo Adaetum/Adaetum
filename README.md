@@ -163,7 +163,8 @@ cycles.
 
 ## Quick start
 
-Clone the public project and start the guided setup:
+Install [Task](https://taskfile.dev/docs/installation), then clone the public
+project and start the guided setup:
 
 ```bash
 git clone https://github.com/Adaetum/Adaetum.git
@@ -171,28 +172,36 @@ cd Adaetum
 task init
 ```
 
-The walkthrough has five sections—Repository, Providers, Profile, Installer,
-and Bootstrap—and finishes by printing the generated ISO path. Attach that ISO
-to the first machine and boot it.
+You can instead download and extract the repository ZIP, open a terminal in
+the extracted folder, and run `task init`. Setup installs Git if needed and
+creates a local recovery snapshot from the extracted files. Files excluded by
+`.gitignore` stay local; other files in that folder become part of the private
+recovery repository.
+
+`task init` opens a setup window. It walks through eight steps—repository,
+providers, profile, installer media, validation, rendering, publishing, and
+finalizing—and finishes with the path to the generated ISO. Attach that ISO to
+the first machine and boot it. On first run, setup installs missing tools and
+builds the window using a supported local package manager. ISO tools are bundled
+for supported platforms, so Docker is not required there.
 
 You will need:
 
-- Git and Python 3
-- [Task](https://taskfile.dev/docs/installation)
-- accounts with GitHub, Cloudflare, and Tailscale
-- a supported Rocky Linux 10 Minimal or DVD installer image, which setup can
-  discover or download and verify
-- Docker only when building the ISO locally instead of reusing a published copy
+- A supported package manager for any missing setup tools
+- Access to GitHub, Cloudflare, and Tailscale; setup guides you through
+  connecting them
+- Internet access to download and verify Rocky Linux media if you do not
+  already have a supported image
 
 Useful setup paths:
 
 | Command | Purpose |
 | --- | --- |
-| `task init` | Supported guided first run |
-| `task init:silent` | Replay previously saved choices on the same workstation |
-| `task init:dryrun` | Rehearse the journey without provider calls or mutations |
-| `task init:clean` | Replace saved provider credentials and generated runtime values |
-| `task initialize` | Rerun bootstrap preparation without the first-run account walkthrough |
+| `task init` | Supported guided first run (opens the setup window) |
+| `task init:silent` | Replay setup from saved credentials with no window and no questions |
+| `task init:dryrun` | Show the engine's read-only plans; pass `-- --window` to rehearse the full guided UI with assumed-success responses and no real checks or changes |
+| `task init:clean` | Open the window ignoring saved credentials and values |
+| `task initialize` | Run setup with no window; answer questions with `-- --answer id=value` |
 | `task platform:validate` | Validate the public platform profile |
 | `task platform:render` | Regenerate profile-owned outputs |
 
@@ -219,6 +228,7 @@ operations, follow the [Bootstrap and recovery guide](setup.md).
 - [Architecture and authority audit](docs/audit.md)
 - [Automatic host maintenance](docs/host-maintenance.md)
 - [External integration boundaries](docs/integrations.md)
+- [Host agent scope](adaetum/agent/README.md)
 - [Release evidence](docs/release-evidence.md)
 - [Versioning policy](docs/versioning.md)
 - [Maintainer triage and release process](docs/maintainer-process.md)

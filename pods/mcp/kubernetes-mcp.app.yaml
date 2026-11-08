@@ -1,0 +1,6 @@
+name: kubernetes-mcp
+project: default
+source_type: git
+source_target_revision: HEAD
+source_path: pods/mcp/kubernetes-mcp
+destination_namespace: mcp

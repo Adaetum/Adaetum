@@ -33,6 +33,7 @@ if (-not $winget) {
 }
 
 winget install --id 7zip.7zip -e --accept-package-agreements --accept-source-agreements --silent | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "7-Zip installation failed (winget exit $LASTEXITCODE)." }
 
 # Refresh PATH for current process after winget install.
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")

@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-mcp
+  namespace: mcp
+  labels:
+    app: argocd-mcp
+  annotations:
+    secret.reloader.stakater.com/reload: argocd-mcp-env
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: argocd-mcp
+  template:
+    metadata:
+      labels:
+        app: argocd-mcp
+    spec:
+      serviceAccountName: argocd-mcp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: argocd-mcp
+          image: ghcr.io/argoproj-labs/mcp-for-argocd:v0.9.0@sha256:dffc6c719d8635be2d5f2c8ad1c0178540325da4b40da0b373307e12b4c48f86
+          imagePullPolicy: IfNotPresent
+          # Every tool is available (create, sync, delete, resource actions):
+          # MCP_READ_ONLY is deliberately not set. The listener is widened beyond
+          # loopback, which the server only allows together with the caller token
+          # in MCP_AUTH_TOKEN.
+          args:
+            - http
+            - --port
+            - "3000"
+            - --allowed-host-header
+            - argocd-mcp
+            - --allowed-host-header
+            - argocd-mcp.mcp
+            - --allowed-host-header
+            - argocd-mcp.mcp.svc
+            - --allowed-host-header
+            - argocd-mcp.mcp.svc.cluster.local
+          env:
+            - name: ARGOCD_BASE_URL
+              value: http://argocd-server.argocd.svc.cluster.local
+            - name: MCP_BIND_ADDRESS
+              value: 0.0.0.0
+          envFrom:
+            - secretRef:
+                name: argocd-mcp-env
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          ports:
+            - name: mcp
+              containerPort: 3000
+          readinessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          volumeMounts:
+            - name: openbao
+              mountPath: /mnt/openbao
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: openbao
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: argocd-mcp-openbao
+        - name: tmp
+          emptyDir: {}

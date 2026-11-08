@@ -1,0 +1,47 @@
+---
+# WHERE THE BINARY COMES FROM. Set exactly one source. The binary runs as root on
+# every server, so it is only ever installed from a source whose SHA-256 is checked.
+#
+# From the controller (the machine running Ansible):
+host_agent_binary_src: ""
+# Or downloaded by each host (the checksum is required, as "sha256:<hex>"):
+host_agent_binary_url: ""
+host_agent_binary_checksum: ""
+
+# Optional local sign-in service. Its release binary is independently pinned;
+# installing a new agent must never silently replace or enable authentication.
+host_agent_auth_enabled: false
+host_agent_auth_binary_src: ""
+host_agent_auth_binary_url: ""
+host_agent_auth_binary_checksum: ""
+host_agent_auth_path: /usr/local/bin/adaetum-auth
+host_agent_auth_service_unit: adaetum-auth.service
+host_agent_auth_state_dir: /var/lib/adaetum/auth
+
+# Everything the role installs belongs to this owner. Root on a real server; the
+# variables exist so the role can be exercised by an unprivileged user in tests.
+host_agent_owner: root
+host_agent_group: root
+
+host_agent_path: /usr/local/bin/adaetum-agent
+host_agent_state_dir: /var/lib/adaetum
+host_agent_config_dir: /etc/adaetum
+host_agent_token_file: /etc/adaetum/agent-token
+host_agent_service_unit: adaetum-agent.service
+
+# NETWORK. The agent listens on every interface so a host is reachable directly by
+# IP or hostname even when the cluster is down. It refuses to do that without a
+# token and serves HTTPS with its own certificate.
+host_agent_port: 8443
+# Firewall zone to open the port in (for example "internal"). Empty leaves the
+# firewall alone; the port is then reachable only where the zone already allows it.
+host_agent_firewall_zone: ""
+# Let the UI remove container images (also needs the token). Off: the image-cleanup
+# role's timer handles routine cleanup without the web interface.
+host_agent_allow_changes: false
+
+# JOINING A CLUSTER AGENT (optional). Set all three to enroll this host. The join
+# token is single use and secret: pass it with -e @file or a vault, never inline.
+host_agent_cluster_url: ""
+host_agent_cluster_fingerprint: ""
+host_agent_join_token: ""
