@@ -27,10 +27,13 @@ configure those backups.
 
 ## Publishing a release
 
-After this workflow is available on the repository's default branch, run
-**Release Adaetum agent software** from the Actions tab, choose the branch to
-release, and supply a new tag such as `adaetum-v0.1.2-beta.1` for development or `adaetum-v0.1.2` for stable. Stable releases must use the current main branch; beta releases are GitHub prereleases and do not become latest. Before the workflow is on the default branch, push a beta tag from the development branch to start it. A push of a matching tag
-also runs it. The selected commit supplies the binaries, images and manifest.
+Run **Release Adaetum agent software** from the public repository's Actions tab,
+choose the branch to release, and supply a new tag such as
+`adaetum-v0.1.2-beta.1` for development or `adaetum-v0.1.2` for stable. Stable
+releases must use the current main branch; beta releases are GitHub prereleases
+and do not become latest. The selected commit supplies the binaries, images and
+manifest. Only a manual start can publish a release, including when automatic
+Actions are disabled.
 
 The workflow uses the repository's `GITHUB_TOKEN`, even when a person starts it.
 The three GHCR packages must grant this repository's Actions workflow write

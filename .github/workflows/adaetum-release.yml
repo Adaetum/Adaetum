@@ -3,9 +3,6 @@ name: Release Adaetum agent software
 # A release is an explicit operator decision; ordinary commits never update
 # clusters. The manifest records immutable image and binary hashes.
 on:
-  push:
-    tags:
-      - 'adaetum-v*'
   workflow_dispatch:
     inputs:
       release_tag:
@@ -23,7 +20,6 @@ concurrency:
 
 jobs:
   release:
-    if: vars.ADAETUM_DISABLE_ACTIONS != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -43,7 +39,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="${REQUESTED_TAG:-${GITHUB_REF_NAME}}"
+          tag="${REQUESTED_TAG}"
           if [[ ! "$tag" =~ ^adaetum-v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.(0|[1-9][0-9]*))?)$ ]]; then
             echo "Expected a tag like adaetum-v1.2.3 or adaetum-v1.2.3-beta.1." >&2
             exit 1
@@ -61,7 +57,7 @@ jobs:
             fi
           fi
           echo "ADAETUM_CHANNEL=$channel" >> "$GITHUB_ENV"
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] && gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --silent 2>/dev/null; then
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --silent 2>/dev/null; then
             echo "The tag $tag already exists; choose a new version." >&2
             exit 1
           fi

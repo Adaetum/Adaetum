@@ -5,7 +5,7 @@ Checks:
 - YAML parses cleanly
 - Top-level document is a mapping
 - Required keys are present: `name` and `on`
-- Every job honors the upstream-repository Actions disable variable
+- Jobs honor the Actions disable variable except the manual-only release workflow
 """
 
 from __future__ import annotations
@@ -41,6 +41,15 @@ def validate_file(path: Path) -> list[str]:
     if "on" not in doc and True not in doc:
         errors.append(f"{path}: missing required top-level key: on")
 
+    # A person must explicitly start releases; the disable switch still blocks
+    # every job in any workflow that has an automatic trigger.
+    triggers = doc.get("on", doc.get(True))
+    manual_release = (
+        path.name == "adaetum-release.yml"
+        and isinstance(triggers, dict)
+        and set(triggers) == {"workflow_dispatch"}
+    )
+
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict) or not jobs:
         errors.append(f"{path}: missing required top-level jobs mapping")
@@ -51,7 +60,7 @@ def validate_file(path: Path) -> list[str]:
             errors.append(f"{path}: job {job_name!r} must be a mapping/object")
             continue
         condition = job.get("if")
-        if not isinstance(condition, str) or DISABLE_ACTIONS_CONDITION not in condition:
+        if not manual_release and (not isinstance(condition, str) or DISABLE_ACTIONS_CONDITION not in condition):
             errors.append(
                 f"{path}: job {job_name!r} must honor {DISABLE_ACTIONS_CONDITION}"
             )
