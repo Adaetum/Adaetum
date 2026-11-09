@@ -298,3 +298,23 @@ func TestARejectedOAuthClientStopsBeforeAnythingIsWritten(t *testing.T) {
 		t.Error("secrets were handed to a script after the OAuth client failed validation")
 	}
 }
+
+func TestReusedRecoveryRequiresExistingBackupPassphrase(t *testing.T) {
+	h := newHarness(t)
+	env := h.env()
+	env.SetValue("existing_recovery", "true")
+	t.Setenv("ADAETUM_SECRET_BOOTSTRAP_BACKUP_PASSPHRASE", "")
+	if err := h.step().Apply(context.Background(), env, engine.Headless{}); err == nil || !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("expected passphrase requirement, got %v", err)
+	}
+	h = newHarness(t)
+	env = h.env()
+	env.SetValue("existing_recovery", "true")
+	t.Setenv("ADAETUM_SECRET_BOOTSTRAP_BACKUP_PASSPHRASE", "restored-backup-key")
+	if err := h.step().Apply(context.Background(), env, engine.Headless{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := envfile.Read(filepath.Join(h.root, ".env"))["BOOTSTRAP_BACKUP_PASSPHRASE"]; got != "restored-backup-key" {
+		t.Fatal("did not preserve restored backup passphrase")
+	}
+}

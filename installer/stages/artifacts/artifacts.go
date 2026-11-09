@@ -39,8 +39,9 @@ const stepID = "artifacts"
 
 // Step is the artifacts stage.
 type Step struct {
-	Run  sys.Runner
-	Root string
+	Run     sys.Runner
+	Root    string
+	LogRoot string // retain redacted detail logs outside the disposable checkout
 	// GH builds the GitHub client for a token. Tests point it at a local server.
 	GH func(token string) githubapi.Client
 	// Sleep, PollEvery and MaxPolls shape how long a workflow is watched.
@@ -52,7 +53,7 @@ type Step struct {
 // New returns the stage for the checkout at root.
 func New(run sys.Runner, root string) *Step {
 	return &Step{
-		Run: run, Root: root, Sleep: time.Sleep, PollEvery: 5 * time.Second, MaxPolls: 180,
+		Run: run, Root: root, LogRoot: root, Sleep: time.Sleep, PollEvery: 5 * time.Second, MaxPolls: 180,
 		GH: func(token string) githubapi.Client { return githubapi.Client{Token: token} },
 	}
 }
@@ -187,7 +188,11 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 		return errors.New("the rendered .env is missing; run the render stage first")
 	}
 
-	logPath := filepath.Join(s.Root, ".logs", "initial-setup-details.log")
+	logRoot := s.LogRoot
+	if logRoot == "" {
+		logRoot = s.Root
+	}
+	logPath := filepath.Join(logRoot, ".logs", "initial-setup-details.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}

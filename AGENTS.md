@@ -32,8 +32,9 @@ checks, questions and dry run; the window (`installer/app`) and the headless com
    (needs Go and Node; installs the Wails CLI with `go install` if missing). It installs GitHub CLI
    first because the repository stage uses it. The stages, in order:
    - **repository**: signs in to GitHub, creates or reuses the operator's standalone private
-     recovery repository, preserves canonical Adaetum as `upstream`, changes the existing
-     checkout's `origin`, publishes `main`, and checks that Actions sees the workflows
+     recovery repository in a temporary isolated checkout, publishes its private `main`,
+     and checks that Actions sees the workflows. The launch checkout's branch, files,
+     and remotes remain unchanged
    - **providers**: authorizes Cloudflare and Tailscale, chooses the DNS zone and tailnet,
      prepares tag ownership and creates the scoped OAuth clients
    - **profile**: writes and publishes `platform.yaml` from the two public choices
@@ -115,8 +116,8 @@ New nodes join the cluster through a phase-based break-glass process:
 - Install media is handled directly as ISO files; do not add alternate USB media
   packaging workflows or related documentation back into the repo.
 - GitHub does not allow private forks of a public repository. Operator setup
-  therefore requires a standalone private recovery repository as `origin` and
-  preserves `Adaetum/Adaetum` as the public `upstream`. Never reintroduce a
+  therefore uses a standalone private recovery repository as `origin` inside the
+  temporary setup checkout and preserves `Adaetum/Adaetum` as public `upstream`. Never reintroduce a
   public GitHub fork as the destination for cluster configuration or secrets.
 - Use `task init` for a new private recovery repository and `task initialize`
   for reruns or non-interactive automation. Edit

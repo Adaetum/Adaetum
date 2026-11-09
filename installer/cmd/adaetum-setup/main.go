@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -86,15 +87,51 @@ func main() {
 		runner = diagnostics.Runner{Base: runner, Log: log}
 		ui = diagnostics.UI{UI: ui, Log: log}
 	}
-	steps, err := chooseStages(stages.ISO(root, runner), *only)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	workRoot := root
+	var workspace *checkout.Workspace
+	if *apply {
+		var prepareErr error
+		workspace, prepareErr = checkout.Prepare(ctx, root)
+		if prepareErr != nil {
+			fmt.Fprintln(os.Stderr, "could not prepare isolated setup checkout:", prepareErr)
+			os.Exit(1)
+		}
+		workRoot = workspace.Root
+	}
+	steps, err := chooseStages(stages.ISOFromSource(workRoot, root, runner), *only)
 	if err != nil {
+		if workspace != nil {
+			_ = workspace.Close()
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	if log != nil {
 		steps = diagnostics.Steps(steps, log)
 	}
-	results, runErr := engine.Run(context.Background(), steps, env, ui)
+	results, runErr := engine.Run(ctx, steps, env, ui)
+	if workspace != nil && env.Value("installer_iso") == "" {
+		paths, retainErr := workspace.RetainInstallers(root)
+		for _, path := range paths {
+			fmt.Fprintln(os.Stderr, "Installer retained:", path)
+		}
+		if retainErr != nil {
+			fmt.Fprintln(os.Stderr, "could not retain installer:", retainErr)
+			if runErr == nil {
+				runErr = fmt.Errorf("retain installer: %w", retainErr)
+			}
+		}
+	}
+	if workspace != nil {
+		if cleanupErr := workspace.Close(); cleanupErr != nil {
+			fmt.Fprintln(os.Stderr, "could not remove temporary setup checkout:", cleanupErr)
+			if runErr == nil {
+				runErr = cleanupErr
+			}
+		}
+	}
 	if log != nil {
 		log.Record("headless setup finished stopped=%t", runErr != nil)
 		_ = log.Close()
@@ -153,6 +190,11 @@ func chooseStages(all []engine.Step, only string) ([]engine.Step, error) {
 	want := map[string]bool{}
 	for _, id := range strings.Split(only, ",") {
 		want[strings.TrimSpace(id)] = true
+	}
+	// Publication stages must establish the private destination first. In an
+	// isolated checkout, origin initially identifies the source and may be public.
+	if want["profile"] || want["render"] || want["artifacts"] {
+		want["repository"] = true
 	}
 	var out []engine.Step
 	for _, s := range all {

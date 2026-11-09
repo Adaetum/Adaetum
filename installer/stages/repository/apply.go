@@ -52,6 +52,9 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 		if err != nil {
 			return err
 		}
+		if s.PriorRecovery {
+			env.SetValue("existing_recovery", "true")
+		}
 		return s.ensureActions(ctx, repo, say)
 	}
 }
@@ -453,6 +456,7 @@ func (s *Step) trackBranch(ctx context.Context, say func(string)) error {
 		return errors.New("setup requires a clean tracked worktree; commit or stash changes, then rerun")
 	}
 	remoteHead := s.remoteHead(ctx)
+	s.PriorRecovery = remoteHead != ""
 	if remoteHead != "" {
 		if _, err := s.gitOut(ctx, "fetch origin main", "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"); err != nil {
 			return err

@@ -107,3 +107,18 @@ func TestAnIdenticalCopyIsLeftAlone(t *testing.T) {
 		t.Fatal("an identical copy was rewritten")
 	}
 }
+
+func TestRetainsISOOutsideTemporaryCheckout(t *testing.T) {
+	s, env, _ := setup(t)
+	s.OutputRoot = t.TempDir()
+	if err := s.Apply(context.Background(), env, engine.Headless{}); err != nil {
+		t.Fatal(err)
+	}
+	retained := filepath.Join(s.OutputRoot, "dist", strings.TrimSuffix(iso, ".iso")+"-ks.iso")
+	if data, err := os.ReadFile(retained); err != nil || string(data) != "installer-bytes" {
+		t.Fatalf("retained ISO %q: %v", data, err)
+	}
+	if env.Value("installer_iso") != retained {
+		t.Fatalf("result points to %s", env.Value("installer_iso"))
+	}
+}

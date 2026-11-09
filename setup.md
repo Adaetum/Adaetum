@@ -67,29 +67,18 @@ git clone https://github.com/Adaetum/Adaetum.git
 cd Adaetum
 ```
 
-`task init` checks `origin` before it asks for credentials. If this checkout
-points at canonical `github.com/Adaetum/Adaetum`, it installs GitHub CLI,
-opens GitHub's browser authentication when needed, and uses that session as the
-default setup credential. It then creates or reuses a standalone private
-recovery repository and updates this checkout's `origin`. You confirm before
-that external action. Setup can then push rendered configuration, sync secrets,
-and trigger workflows against that private repository.
+`task init` signs in to GitHub and creates or reuses a standalone private
+recovery repository. It prepares and publishes the selected source branch from a
+temporary, isolated checkout; the branch, remotes and tracked files in the folder
+you launched from stay unchanged. The source checkout must have no uncommitted
+tracked changes, so setup can reproduce the selected branch; untracked files are not
+included. Existing recovery profiles are preserved and re-rendered in the isolated
+checkout. If a reused recovery repository has no locally available backup passphrase,
+setup asks for the existing passphrase instead of silently replacing it.
 
-Setup reuses the current local checkout rather than cloning another directory.
-Canonical Adaetum is retained as the public `upstream` remote and the selected
-private repository becomes `origin`. GitHub requires forks of public
-repositories to remain public, so setup never uses a public fork as the cluster
-recovery store.
-Setup always finishes on `main` and publishes only that branch as the recovery
-and workflow authority. When an existing recovery repository is selected,
-setup merges canonical public `upstream/main` into the private `origin/main`
-history, replaces every tracked path from the public tree, restores the private
-`platform.yaml`, and re-renders its tracked outputs. This prevents a retired
-development branch or stale private file from surviving under the name `main`.
-Untracked and ignored recovery material is not changed, and old local branch
-refs remain available until the operator deliberately removes them. Setup
-refuses the refresh over tracked worktree changes or unpublished local-main
-commits.
+GitHub requires forks of public repositories to remain public, so setup uses a
+standalone private recovery repository. Setup removes the temporary checkout after
+the run and retains the completed installer under the launch folder's `dist/`.
 If an older Adaetum setup already synchronized environment secrets to a public
 fork, remove those secrets and rotate the provider credentials after the private
 repository is ready; GitHub does not permit reading the old secret values back.
@@ -673,7 +662,7 @@ and normally takes roughly 30 minutes for the initial node.
 <details>
 <summary>Targeted reruns</summary>
 
-To rerun only some stages, name them. The stage ids are `repository`, `providers`, `profile`,
+To rerun only some stages, name them. Publication stages also run the repository stage first to select and verify the private destination. The stage ids are `repository`, `providers`, `profile`,
 `media`, `validate`, `render`, `artifacts` and `finalize`:
 
 ```bash
@@ -691,8 +680,8 @@ it says so and stops; rerun it together with the stage it depends on (`providers
 
 After a successful run, expect these results:
 
-- `.env` created or refreshed for the repo
-- Tailscale bootstrap values validated and written into `.env`
+- Runtime `.env` created in the temporary setup checkout
+- Tailscale bootstrap values validated and written into that temporary `.env`
 - Local repo-root installer ISO uploaded to R2 as a golden ISO
 - Break-glass ansible bundle uploaded for bootstrap delivery
 - Runtime bootstrap env payload uploaded for first-boot secret fetch
@@ -704,7 +693,7 @@ After a successful run, expect these results:
 
 | Output | Result |
 | --- | --- |
-| `.env` | Generated runtime configuration for setup and follow-on tasks |
+| `.env` | Temporary runtime configuration, removed with the setup checkout after the run |
 | Golden ISO upload | Local repo-root ISO copied to R2 |
 | Break-glass bundle | Bootstrap ansible bundle uploaded for delivery |
 | Runtime bootstrap env | First-boot secret payload uploaded to R2/Worker |

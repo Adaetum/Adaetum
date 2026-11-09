@@ -54,7 +54,7 @@ func (s *Step) Plan(ctx context.Context, env *engine.Env) ([]string, error) {
 	finding, _ := s.Check(ctx, env)
 	return []string{
 		"Use a Rocky Linux 10 Minimal or DVD installer ISO already on this computer, verified against Rocky's published SHA-256, or download one.",
-		"Copy the ISO into this checkout if it is somewhere else.",
+		"Copy the ISO into the temporary setup workspace if it is somewhere else.",
 		"Run the setup readiness check.",
 		"Right now: " + finding.Detail + ".",
 	}, nil
@@ -126,10 +126,10 @@ func (s *Step) useExisting(ctx context.Context, ui engine.UI, found []ISO, say f
 	if filepath.Dir(chosen.Path) == s.Lib.Root {
 		return chosen.Path, nil
 	}
-	if err := engine.Approve(ctx, ui, "adopt-media", "Use this installer ISO and copy it into the Adaetum checkout?"); err != nil {
+	if err := engine.Approve(ctx, ui, "adopt-media", "Use this installer ISO and copy it into the temporary setup workspace?"); err != nil {
 		return "", err
 	}
-	say("Copying " + filepath.Base(chosen.Path) + " into the checkout...")
+	say("Copying " + filepath.Base(chosen.Path) + " into the temporary setup workspace...")
 	return s.Lib.Adopt(chosen.Path)
 }
 

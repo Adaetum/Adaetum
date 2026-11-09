@@ -119,8 +119,8 @@ manifests, installers, and recovery archives are outputs—not competing sources
 of truth.
 
 GitHub does not allow private forks of a public repository. Adaetum therefore
-uses a standalone private repository as `origin` and preserves canonical
-Adaetum as `upstream`.
+uses a standalone private recovery repository. Setup configures `origin` and
+`upstream` in a temporary checkout without changing the checkout you launched from.
 
 ## Security is part of the architecture
 

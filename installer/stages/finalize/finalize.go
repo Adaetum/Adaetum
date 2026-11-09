@@ -21,7 +21,8 @@ const stepID = "finalize"
 
 // Step is the finalize stage.
 type Step struct {
-	Root string
+	Root       string
+	OutputRoot string // persistent output location when setup uses a temporary checkout
 	// DownloadDir is where the optional copy goes. New sets ~/Downloads, or
 	// ADAETUM_INSTALLER_DOWNLOAD_DIR when that is set.
 	DownloadDir string
@@ -91,6 +92,13 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 			return fmt.Errorf("the installer ISO is stale: %s is older than %s; rebuild it", out, newest)
 		}
 	}
+	if s.OutputRoot != "" && s.OutputRoot != s.Root {
+		retained := filepath.Join(s.OutputRoot, "dist", filepath.Base(out))
+		if err := s.copyDown(out, retained, say); err != nil {
+			return fmt.Errorf("retain installer ISO: %w", err)
+		}
+		out = retained
+	}
 	env.SetValue("installer_iso", out)
 	say("Installer ISO built: " + filepath.Base(out))
 
@@ -128,8 +136,8 @@ func (s *Step) copyDown(src, dest string, say func(string)) error {
 	if _, err := os.Stat(dest); err == nil {
 		say("Replacing the older installer in " + s.DownloadDir + ".")
 	}
-	if err := os.MkdirAll(s.DownloadDir, 0o755); err != nil {
-		return fmt.Errorf("unable to create the installer download directory: %w", err)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("unable to create the installer output directory: %w", err)
 	}
 	partial := dest + ".partial"
 	in, err := os.Open(src)

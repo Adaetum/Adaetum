@@ -54,10 +54,11 @@ func Supported(base string) bool { return isoName.MatchString(base) }
 // Library looks for installer media in the checkout and in the places people
 // download to, and fetches it from Rocky's mirror.
 type Library struct {
-	Root   string
-	Home   string
-	Mirror string
-	HTTP   *http.Client
+	ExtraDirs []string
+	Root      string
+	Home      string
+	Mirror    string
+	HTTP      *http.Client
 }
 
 func (l Library) mirror() string {
@@ -78,7 +79,7 @@ func (l Library) client() *http.Client {
 
 // Discover lists supported ISOs in the checkout root, ~/Downloads and ~/Desktop.
 func (l Library) Discover() []ISO {
-	dirs := []string{l.Root}
+	dirs := append([]string{l.Root}, l.ExtraDirs...)
 	if l.Home != "" {
 		dirs = append(dirs, filepath.Join(l.Home, "Downloads"), filepath.Join(l.Home, "Desktop"))
 	}

@@ -41,9 +41,9 @@ def main() -> int:
     platform_bootstrap = PLATFORM_BOOTSTRAP.read_text(encoding="utf-8")
     gum_ui = (ROOT / "tasks" / "scripts" / "gum-ui.sh").read_text(encoding="utf-8")
     setup_recovery_contract = (
-        "replaces every tracked path from the public tree",
-        "restores the private\n`platform.yaml`",
-        "Untracked and ignored recovery material is not changed",
+        "temporary, isolated checkout",
+        "remotes and tracked files in the folder",
+        "Existing recovery profiles are preserved",
     )
     for expected in setup_recovery_contract:
         if expected not in (ROOT / "setup.md").read_text(encoding="utf-8"):

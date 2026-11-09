@@ -47,6 +47,7 @@ const (
 type Step struct {
 	Run      sys.Runner
 	Root     string
+	LogRoot  string // retain redacted detail logs outside the disposable checkout
 	Platform platform.Scripts
 	// Random fills b with random bytes. It is a field so tests can be deterministic.
 	Random func(b []byte) (int, error)
@@ -54,7 +55,7 @@ type Step struct {
 
 // New returns the stage for the checkout at root.
 func New(run sys.Runner, root string) *Step {
-	return &Step{Run: run, Root: root, Platform: platform.Scripts{Run: run, Dir: root}, Random: rand.Read}
+	return &Step{Run: run, Root: root, LogRoot: root, Platform: platform.Scripts{Run: run, Dir: root}, Random: rand.Read}
 }
 
 func (s *Step) ID() string    { return stepID }
@@ -143,9 +144,14 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 	envPath := filepath.Join(s.Root, ".env")
 	existing := envfile.Read(envPath)
 	if env.Clean {
-		existing = map[string]string{}
+		// Clean setup resets credentials, but backup keys protect old recovery kits.
+		existing = map[string]string{"BOOTSTRAP_BACKUP_PASSPHRASE": existing["BOOTSTRAP_BACKUP_PASSPHRASE"], "BOOTSTRAP_BACKUP_PASSPHRASE_B64": existing["BOOTSTRAP_BACKUP_PASSPHRASE_B64"]}
 	}
-	logPath := filepath.Join(s.Root, detailLogRel)
+	logRoot := s.LogRoot
+	if logRoot == "" {
+		logRoot = s.Root
+	}
+	logPath := filepath.Join(logRoot, detailLogRel)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
@@ -160,7 +166,7 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 	if err := s.tailscale(ctx, r, env, envPath, say); err != nil {
 		return err
 	}
-	pass, passB64, err := s.passphrase(env, existing, envPath, say)
+	pass, passB64, err := s.passphrase(ctx, env, existing, envPath, say, ui)
 	if err != nil {
 		return err
 	}
@@ -337,12 +343,25 @@ func (s *Step) tailscale(ctx context.Context, r *runCtx, env *engine.Env, envPat
 // made are encrypted with it, so replacing it silently would orphan them: an
 // existing one is reused, and a missing one is only generated on a first run or
 // when rotation is explicitly allowed.
-func (s *Step) passphrase(env *engine.Env, existing map[string]string, envPath string, say func(string)) (string, string, error) {
+func (s *Step) passphrase(ctx context.Context, env *engine.Env, existing map[string]string, envPath string, say func(string), ui engine.UI) (string, string, error) {
 	pass := strings.TrimSpace(existing["BOOTSTRAP_BACKUP_PASSPHRASE"])
 	b64 := strings.TrimSpace(existing["BOOTSTRAP_BACKUP_PASSPHRASE_B64"])
 	if pass == "" && b64 != "" {
 		if raw, err := base64.StdEncoding.DecodeString(b64); err == nil {
 			pass = strings.TrimSpace(string(raw))
+		}
+	}
+	if pass == "" && env.Value("existing_recovery") == "true" {
+		rotate := strings.ToLower(os.Getenv("SETUP_ALLOW_BACKUP_PASSPHRASE_ROTATE"))
+		if rotate != "1" && rotate != "true" && rotate != "yes" {
+			value, err := ui.Ask(ctx, engine.Screen{ID: "bootstrap-backup-passphrase", Kind: engine.Secret, Prompt: "Enter the existing backup passphrase from your recovery backup"})
+			if err != nil {
+				return "", "", fmt.Errorf("existing recovery backup passphrase is required: %w", err)
+			}
+			pass = strings.TrimSpace(value)
+			if pass == "" {
+				return "", "", errors.New("existing recovery backup passphrase is required to avoid orphaning earlier backups")
+			}
 		}
 	}
 	if pass == "" {

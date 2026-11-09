@@ -38,8 +38,9 @@ const (
 
 // Step is the repository stage.
 type Step struct {
-	Run sys.Runner
-	Dir string // the checkout this installer was started from
+	Run           sys.Runner
+	Dir           string // the isolated setup checkout
+	PriorRecovery bool
 	// Render regenerates the tracked outputs from platform.yaml. It is a field so
 	// tests do not need the Python scripts; New sets the real one.
 	Render func(ctx context.Context) error
@@ -265,7 +266,7 @@ func (s *Step) findPreferred(ctx context.Context, owner string) (string, error) 
 
 // ---- Check and Plan --------------------------------------------------------
 
-func (s *Step) Check(ctx context.Context, _ *engine.Env) (engine.Finding, error) {
+func (s *Step) Check(ctx context.Context, env *engine.Env) (engine.Finding, error) {
 	if res, err := s.git(ctx, "--version"); err != nil || !res.OK() {
 		return engine.Finding{Status: engine.Blocked, Detail: "git is required. Install it from https://git-scm.com/downloads."}, nil
 	}
@@ -296,11 +297,17 @@ func (s *Step) Check(ctx context.Context, _ *engine.Env) (engine.Finding, error)
 	if ok, why := s.usable(ctx, repo, m); !ok {
 		return needed(why)
 	}
+	if m.Size > 0 && env != nil {
+		env.SetValue("existing_recovery", "true")
+	}
 	if why := s.mainPublished(ctx); why != "" {
 		return needed(why)
 	}
 	if n, _ := s.workflowCount(ctx, repo); n == 0 {
 		return needed("GitHub has not registered workflows in " + repo)
+	}
+	if env != nil {
+		env.SetValue("existing_recovery", "true")
 	}
 	return engine.Finding{Status: engine.Done, Detail: "origin is " + repo + ", main is published, and Actions sees its workflows"}, nil
 }
@@ -327,7 +334,7 @@ func (s *Step) Plan(ctx context.Context, env *engine.Env) ([]string, error) {
 	return []string{
 		"Sign in to GitHub if this machine is not already signed in (a browser step you do in a terminal).",
 		"Create or reuse a private repository for your cluster, and keep canonical Adaetum as read-only upstream.",
-		"Point origin at the private repository and publish the selected checkout to its main branch, preserving your platform.yaml.",
+		"Publish a separate copy of the selected branch to private recovery main, preserving the recovery profile. Your current checkout stays unchanged.",
 		"Check that GitHub Actions has registered the workflows.",
 		"Right now: " + finding.Detail + ".",
 	}, nil

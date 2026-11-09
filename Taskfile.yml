@@ -81,7 +81,7 @@ tasks:
 
   initialize:
     desc: Run setup without the window; answer questions with -- --answer id=value
-    deps: ['hooks:ensure', 'env:install:prerequisites']
+    deps: ['env:install:prerequisites']
     dir: installer
     cmds:
       - go run ./cmd/adaetum-setup --apply {{.CLI_ARGS}}
@@ -91,7 +91,6 @@ tasks:
     cmds:
       - task: env:install:setup-bootstrap
       - task: env:install:prerequisites
-      - task: hooks:ensure
       - task: env:install:github-cli
       - cmd: bash ./installer/launch.sh
         platforms: [linux, darwin]
@@ -126,7 +125,6 @@ tasks:
     cmds:
       - task: env:install:setup-bootstrap
       - task: env:install:prerequisites
-      - task: hooks:ensure
       - task: env:install:github-cli
       - cmd: bash ./installer/launch.sh
         platforms: [linux, darwin]
@@ -135,7 +133,7 @@ tasks:
 
   init:silent:
     desc: Replay setup from saved credentials with no window and no questions
-    deps: ['hooks:ensure', 'env:install:prerequisites']
+    deps: ['env:install:prerequisites']
     dir: installer
     cmds:
       - go run ./cmd/adaetum-setup --apply --replay {{.CLI_ARGS}}

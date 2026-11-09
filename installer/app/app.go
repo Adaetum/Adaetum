@@ -158,7 +158,19 @@ func (a *App) Start() string {
 		runner = diagnostics.Runner{Base: runner, Log: log}
 		log.Record("setup window started")
 	}
-	steps, err := a.stepsWithRunner(runner)
+	root, err := checkout.Find()
+	var workspace *checkout.Workspace
+	workRoot := root
+	if err == nil && !dryRun {
+		workspace, err = checkout.Prepare(a.ctx, root)
+		if err == nil {
+			workRoot = workspace.Root
+		}
+	}
+	var steps []engine.Step
+	if err == nil {
+		steps = stages.ISOFromSource(workRoot, root, runner)
+	}
 	if err != nil {
 		if log != nil {
 			_ = log.Close()
@@ -179,11 +191,31 @@ func (a *App) Start() string {
 			ui = rehearsalUI{UI: ui, ctx: ctx}
 		}
 		// ADAETUM_CLEAN=1 (set by `task init:clean`) ignores saved credentials and values.
-		rep := report(engine.Run(ctx, steps, &engine.Env{
-			Clean:  os.Getenv("ADAETUM_CLEAN") == "1",
-			DryRun: dryRun,
-			UIOnly: dryRun,
-		}, ui))
+		runEnv := &engine.Env{
+			Clean: os.Getenv("ADAETUM_CLEAN") == "1", DryRun: dryRun, UIOnly: dryRun,
+		}
+		results, runErr := engine.Run(ctx, steps, runEnv, ui)
+		if workspace != nil && runEnv.Value("installer_iso") == "" {
+			paths, retainErr := workspace.RetainInstallers(root)
+			for _, path := range paths {
+				ui.Report(engine.Event{StepID: "finalize", Message: "Installer retained: " + path})
+			}
+			if retainErr != nil {
+				ui.Report(engine.Event{StepID: "finalize", Message: "Could not retain installer: " + retainErr.Error()})
+				if runErr == nil {
+					runErr = retainErr
+				}
+			}
+		}
+		if workspace != nil {
+			if cleanupErr := workspace.Close(); cleanupErr != nil {
+				ui.Report(engine.Event{StepID: "finalize", Message: "Could not remove the temporary setup checkout: " + cleanupErr.Error()})
+				if runErr == nil {
+					runErr = cleanupErr
+				}
+			}
+		}
+		rep := report(results, runErr)
 		if log != nil {
 			log.Record("setup window finished stopped=%t", rep.Stopped != "")
 			_ = log.Close()
