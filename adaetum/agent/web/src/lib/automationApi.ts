@@ -83,7 +83,7 @@ export interface AutomationOverview {
 }
 
 export async function fetchAutomation(signal?: AbortSignal): Promise<AutomationOverview> {
-  const response = await authedFetch("/api/v1/automation", { signal });
+  const response = await authedFetch("/api/v1/automation", { signal, quiet: true });
   if (!response.ok) throw new Error(`The agent answered ${response.status}`);
   return response.json();
 }

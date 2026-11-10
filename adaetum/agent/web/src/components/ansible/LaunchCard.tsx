@@ -129,7 +129,7 @@ export function LaunchCard({ capabilities, initialPlaybook, initialLimit, initia
           )}
 
           <div>
-            <Button type="submit" disabled={busy} color={rehearse ? undefined : "red"} variant={rehearse ? "solid" : "soft"} highContrast={!rehearse}>
+            <Button type="submit" loading={busy} color={rehearse ? undefined : "red"} variant={rehearse ? "solid" : "soft"} highContrast={!rehearse}>
               <Play size={14} aria-hidden /> {busy ? "Starting…" : rehearse ? "Preview" : "Run for real"}
             </Button>
           </div>
@@ -204,7 +204,7 @@ function RealRunConfirmation({ open, playbook, limit, busy, onCancel, onConfirm 
         </AlertDialog.Description>
         <Flex gap="3" mt="4" justify="end">
           <Button variant="soft" color="gray" onClick={onCancel}>Cancel</Button>
-          <Button color="red" highContrast variant="soft" onClick={onConfirm} disabled={busy}>Run for real</Button>
+          <Button color="red" highContrast variant="soft" onClick={onConfirm} loading={busy}>Run for real</Button>
         </Flex>
       </AlertDialog.Content>
     </AlertDialog.Root>

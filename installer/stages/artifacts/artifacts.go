@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -48,6 +49,9 @@ type Step struct {
 	Sleep     func(time.Duration)
 	PollEvery time.Duration
 	MaxPolls  int
+	// HTTP reaches the live Worker for the delivery smoke check. Tests replace it
+	// with an httptest client; production uses a bounded default client.
+	HTTP *http.Client
 }
 
 // New returns the stage for the checkout at root.
@@ -55,6 +59,7 @@ func New(run sys.Runner, root string) *Step {
 	return &Step{
 		Run: run, Root: root, LogRoot: root, Sleep: time.Sleep, PollEvery: 5 * time.Second, MaxPolls: 180,
 		GH: func(token string) githubapi.Client { return githubapi.Client{Token: token} },
+		HTTP: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -72,7 +77,7 @@ func (s *Step) Plan(context.Context, *engine.Env) ([]string, error) {
 		"Encrypt and sync the required secrets to your private repository's Prod GitHub environment.",
 		"Back up the setup secrets in the recovery folder of your R2 bucket and verify the copy.",
 		"Trigger the ks-worker, ks-publish and iso-build workflows, and build the installer ISO on this machine at the same time.",
-		"Wait for the workflows and report any that fail.",
+		"Wait for the workflows, then verify an authenticated log can be written, listed, and read through the live Worker/R2 binding.",
 	}, nil
 }
 
@@ -306,6 +311,16 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 		}
 	}
 	wg.Wait()
+
+	// A workflow conclusion only says that deployment reported success. Exercise
+	// the exact authenticated Worker-to-R2 log path before handing the ISO to the
+	// operator, including the list and read routes used for recovery.
+	say("Verifying live Worker/R2 log delivery...")
+	if err := r.verifyLogDelivery(ctx); err != nil {
+		errs = append(errs, "Worker/R2 log delivery: "+err.Error())
+	} else {
+		say("Worker/R2 log delivery verified.")
+	}
 	if isoErr != nil {
 		say("Warning: the local ISO build failed: " + isoErr.Error())
 	} else {

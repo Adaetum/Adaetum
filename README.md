@@ -4,8 +4,17 @@
   <img src="./images/main-crop.png" alt="A chained and locked Adaetum operator's book in a stone sanctuary" width="100%">
 </a>
 
-> Turn a fresh Rocky Linux machine into a security-first, self-hosted Kubernetes
-> platform—and keep the recipe needed to rebuild it.
+> Adaetum is an open-source, MIT-licensed platform that turns a fresh Rocky Linux
+> machine into a security-first, self-hosted RKE2 Kubernetes cluster with GitOps,
+> secrets, identity, monitoring, and recovery built in—and keeps the recipe
+> needed to rebuild it.
+
+**Status:** every tagged [release](https://github.com/Adaetum/Adaetum/releases)
+(currently 0.6.0) is considered production ready. `main` and all other
+branches are alpha and can change or break at any time, so run a release, not a
+branch. Rocky Linux 10 on one machine is the supported starting point. See
+[Project status and boundaries](#project-status-and-boundaries) and the
+[versioning policy](docs/versioning.md).
 
 Adaetum is an opinionated platform-activation project for homelab operators. It
 guides you from a new machine to an RKE2 cluster with GitOps, secrets, identity,
@@ -102,6 +111,36 @@ Whether a change comes from a person, a script, or an AI assistant, the path is
 the same: edit desired state, review the diff, commit it, and let the cluster
 reconcile.
 
+## The agent and web app
+
+The Adaetum agent is a single Go binary that runs directly on each host, outside
+Kubernetes, so it keeps working while RKE2 is down. A built-in web app on top of
+it is where an operator sees the state of the platform and acts on it:
+
+- **Overview:** overall health and an ordered list of what needs attention.
+- **Workloads:** one card per application, with a plain-language setup score for
+  resources, scaling and storage.
+- **Cluster:** which servers run the agent, host details, and Adaetum updates
+  with a stable or beta channel.
+- **Find apps:** search public Helm charts and container images and turn a result
+  into a reviewable draft in the repository's own `pods/` layout.
+- **Automation, Security, People, Settings:** run catalogued Ansible playbooks
+  (off by default, with a rehearsal first and a record of every launch),
+  time-limited security switches, accounts, and the optional assistant.
+
+It is read-only by default and does not run commands on servers; it launches
+Ansible, which stays the one way hosts are changed. An optional AI assistant
+(Anthropic Claude, or an OpenAI-compatible service for testing) is off until
+you choose and enable it, and it asks before changing anything. A read-only
+[Model Context Protocol](https://modelcontextprotocol.io) server lets other AI
+assistants inspect a host the same way.
+
+The design goal is **recovery login**: with the cluster down, you sign in on a
+host with your own account and repair it. That work is in progress; see
+[recovery login](adaetum/agent/docs/recovery-login.md), the
+[agent README](adaetum/agent/README.md) and
+[memory and the assistant](adaetum/agent/docs/memory.md).
+
 ## How the ownership model works
 
 | Boundary | Authority |
@@ -156,10 +195,112 @@ depends on replicas, storage placement, and valid PodDisruptionBudgets.
 | Secrets, identity, and policy | OpenBao, External Secrets, Secrets Store CSI, Authentik, Kubewarden, Kubescape |
 | Networking and edge | Tailscale, ingress-nginx, external-dns, Cloudflare, cloudflared, kube-vip |
 | Operations | Homepage, Headlamp, Prometheus, Grafana, Alertmanager, Kured |
+| Adaetum's own software | Host agent and web app (Go, React), sign-in service (Bun, Better Auth), embedding service |
 
 Adaetum is activation and integration code. Those upstream applications remain
 the operator-facing products, with their own APIs, interfaces, and release
 cycles.
+
+## How Adaetum compares
+
+| | Adaetum | OpenShift (OKD is its community edition) | Talos Linux with Omni | RKE2 or k3s on their own |
+| --- | --- | --- | --- | --- |
+| What it is | An integrated platform that installs and operates a cluster on machines you own | A commercial Kubernetes application platform from Red Hat | An immutable Kubernetes operating system (Talos) and its management console (Omni) | Kubernetes distributions only |
+| Kubernetes | RKE2 | OpenShift's own distribution | Upstream Kubernetes on Talos | RKE2 or k3s |
+| Host operating system | Rocky Linux 10, a normal mutable Linux | Red Hat CoreOS, managed by the platform | Talos, with no shell or SSH, changed through an API | Any Linux you provide |
+| Host changes | Ansible, with rolling patching and reboots | The platform's machine config operators | Machine configuration applied through the API | You do it yourself |
+| GitOps, secrets, identity, policy, monitoring | Included and wired together | Included (OpenShift's own components) | Not included | Not included |
+| Recovery | A private repository you own, with an encrypted recovery export | Backup tooling you set up | Backups you set up | Backups you set up |
+| License and support | MIT, community project, no support contract | Commercial support contracts | Mixed; see the vendor | Open source |
+
+Adaetum is not API-compatible with OpenShift and does not run OpenShift
+Operators. For an honest, detailed comparison, including where Adaetum is
+weaker, see [Adaetum compared with OpenShift and Talos with Omni](docs/comparison.md).
+See also [Project status and boundaries](#project-status-and-boundaries).
+
+## FAQ
+
+### What is Adaetum?
+
+An open-source platform that installs RKE2 Kubernetes on a Rocky Linux machine
+you own and wires up GitOps (Argo CD, Gitea), secrets (OpenBao), identity
+(Authentik), policy, monitoring and recovery. It is made for homelab and small
+self-hosted operators who want the whole stack, not just a cluster.
+
+### Is it production ready?
+
+Every tagged release (currently 0.6.0) is considered production ready, and it is
+the version to run. As with any software, a new release can ship with bugs or
+breaking changes, so read the release notes before upgrading. `main` and every
+other branch are alpha: they change frequently and can break. The Adaetum agent and web app are newer and ship as
+beta pre-releases. Rocky Linux 10 on a single machine is the supported starting
+point. The [public roadmap](TODO.md) lists what remains.
+
+Adoption is still low. As it grows and more people contribute, Adaetum will
+adopt more of the standard, industry-normal practices for release management,
+such as a regular release cadence, formal release candidates, and clearer
+upgrade and support guarantees. See the
+[versioning policy](docs/versioning.md) for how releases work today.
+
+### How is it different from k3s?
+
+Adaetum uses RKE2, not k3s. Both come from the Rancher and SUSE family. k3s is
+the lightweight distribution built for small and edge machines. RKE2 is the
+security-focused one, hardened to CIS benchmarks with a FIPS-capable build, which
+suits a security-first platform. Neither installs GitOps, secrets, identity,
+policy or recovery. Adaetum adds those, so it is a larger system than k3s on its
+own. If all you want is a small cluster, k3s alone is lighter.
+
+### How is it different from OpenShift?
+
+OpenShift is a commercial platform with support contracts and its own APIs and
+Operators. Adaetum is an MIT-licensed, community alternative built from upstream
+projects on RKE2. It is a different operating model, not an API-compatible
+clone, so workloads that depend on OpenShift-specific APIs need migration.
+
+### How is it different from Talos Linux and Omni?
+
+They cover similar ground: declarative Kubernetes and host lifecycle across
+machines you own. Talos is an immutable operating system with no shell, managed
+through an API. Adaetum keeps a normal Rocky Linux host, so you keep package,
+service and Ansible-level control, and it handles patching, draining and rolling
+reboots for you.
+
+### Which operating systems does it support?
+
+Rocky Linux 10 is the stable target. Ubuntu 24.04 is experimental and disabled
+by default.
+
+### Do I need more than one machine?
+
+No. Install is always a single node, and you add more later when the first one
+is stable.
+
+### What accounts and tools do I need?
+
+A GitHub, Cloudflare and Tailscale account, which setup walks you through
+connecting. Setup downloads and verifies the Rocky Linux media if you do not have
+it. Docker is not required for building the installer ISO on supported
+platforms.
+
+### Where does my configuration live, and can I leave?
+
+In a standalone private repository you own, with the public settings in
+[`platform.yaml`](platform.yaml). Everything it deploys is an upstream open-source
+project, and Adaetum is MIT-licensed, so you are not tied to a proprietary
+control plane.
+
+### Can an AI assistant operate it?
+
+Yes, through the same path as a person: edit the desired state, review the diff,
+commit it, and let the cluster reconcile. The web app also has an optional
+assistant and a read-only MCP server. See
+[The agent and web app](#the-agent-and-web-app).
+
+### What does the name mean and how is it said?
+
+It is said "uh-day-tum" and is a play on *adytum*, the inner sanctuary of a
+Greek temple: a protected source of truth for your infrastructure.
 
 ## Quick start
 
@@ -225,10 +366,12 @@ operations, follow the [Bootstrap and recovery guide](setup.md).
 ## Documentation
 
 - [Bootstrap and recovery guide](setup.md)
+- [Comparison with OpenShift and Talos with Omni](docs/comparison.md)
+- [Third-party software and licenses](docs/licenses.md)
 - [Architecture and authority audit](docs/audit.md)
 - [Automatic host maintenance](docs/host-maintenance.md)
 - [External integration boundaries](docs/integrations.md)
-- [Host agent scope](adaetum/agent/README.md)
+- [Host agent and web app](adaetum/agent/README.md)
 - [Release evidence](docs/release-evidence.md)
 - [Versioning policy](docs/versioning.md)
 - [Maintainer triage and release process](docs/maintainer-process.md)

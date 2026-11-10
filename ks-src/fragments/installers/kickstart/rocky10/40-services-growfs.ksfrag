@@ -10,6 +10,18 @@ services --enabled=sshd
 %post --nochroot --interpreter=/bin/bash
 set -euo pipefail
 
+stage_log="/tmp/adaetum-post-growfs.log"
+exec > >(tee -a "${stage_log}") 2>&1
+post_stage_exit() {
+  local rc="$?"
+  if [ "${rc}" -ne 0 ]; then
+    echo "[BOOTSTRAP] growfs installer stage failed (rc=${rc}); uploading installer diagnostics"
+    [ -x /tmp/collect-storage-diag.sh ] && /tmp/collect-storage-diag.sh /tmp || true
+  fi
+  exit "${rc}"
+}
+trap post_stage_exit EXIT
+
 target_root="/mnt/sysroot"
 if [ -d "${target_root}" ] && command -v findmnt >/dev/null 2>&1; then
   root_src="$(findmnt -n -o SOURCE "${target_root}" 2>/dev/null || true)"

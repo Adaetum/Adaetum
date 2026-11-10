@@ -3,6 +3,18 @@
 %post --nochroot --interpreter=/bin/bash
 set -euo pipefail
 
+stage_log="/tmp/adaetum-post-embed-repo.log"
+exec > >(tee -a "${stage_log}") 2>&1
+post_stage_exit() {
+  local rc="$?"
+  if [ "${rc}" -ne 0 ]; then
+    echo "[BOOTSTRAP] embedded bootstrap assets stage failed (rc=${rc}); uploading installer diagnostics"
+    [ -x /tmp/collect-storage-diag.sh ] && /tmp/collect-storage-diag.sh /tmp || true
+  fi
+  exit "${rc}"
+}
+trap post_stage_exit EXIT
+
 target_root="/mnt/sysroot"
 detector_source="/run/install/repo/ks/detect-cluster-bootstrap-mode.py"
 detector_target="${target_root}/usr/local/libexec/adaetum/detect-cluster-bootstrap-mode.py"

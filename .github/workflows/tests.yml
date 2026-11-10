@@ -1,0 +1,18 @@
+name: Tests
+
+# Runs the full Adaetum software test suite on every pull request and on main.
+# The suite itself lives in adaetum-tests.yml so the release workflow runs the
+# identical checks.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    if: vars.ADAETUM_DISABLE_ACTIONS != 'true'
+    uses: ./.github/workflows/adaetum-tests.yml

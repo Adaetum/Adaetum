@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { trackBusy } from "./busy";
 
 // Access to the agent. When an agent is reachable from the network it requires an
 // access token on every API call (see cmd/adaetum-agent/exposure.go); the page
@@ -54,11 +55,16 @@ export class AuthRequiredError extends Error {
 
 // authedFetch sends the token, when there is one, and turns a 401 into
 // AuthRequiredError so the app can show the sign-in screen instead of an error.
-export async function authedFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
+//
+// Every call counts toward the global throbber unless it is `quiet`, which background
+// polling must be so the throbber only ever means "you are waiting on this".
+export async function authedFetch(input: string, init: RequestInit & { quiet?: boolean } = {}): Promise<Response> {
+  const { quiet, ...request } = init;
+  const headers = new Headers(request.headers);
   const token = tokenStore.get();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(input, { ...init, headers });
+  const sent = fetch(input, { ...request, headers });
+  const response = await (quiet ? sent : trackBusy(sent));
   if (response.status === 401) throw new AuthRequiredError();
   return response;
 }

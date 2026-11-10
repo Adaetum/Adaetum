@@ -100,6 +100,80 @@ fi
 
 systemctl enable tailscale-firstboot.service || true
 
+# Retain diagnostic delivery while first boot is incomplete. This covers a
+# failed runtime-payload fetch, when first boot only has one immediate upload
+# attempt. Stable names overwrite the prior attempt instead of filling R2.
+cat >/usr/local/sbin/adaetum-bootstrap-log-upload.sh <<'SCRIPT'
+#!/bin/bash
+set -u
+
+env_file="/etc/tailscale-firstboot.env"
+[ -r "${env_file}" ] || exit 0
+# shellcheck disable=SC1090
+. "${env_file}"
+
+case "${LOG_UPLOAD_URL:-}" in
+  ""|__*__|__KS_LOG_URL_PLACEHOLDER__) exit 0 ;;
+esac
+case "${BOOTSTRAP_SHARED_TOKEN:-}" in
+  __*__) BOOTSTRAP_SHARED_TOKEN="" ;;
+esac
+
+host="$(hostname -s 2>/dev/null || echo node-bootstrap)"
+log_run_id="retry-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo boot)"
+base_url="${LOG_UPLOAD_URL}"
+if [ -n "${BOOTSTRAP_SHARED_TOKEN:-}" ] && ! printf '%s' "${base_url}" | grep -qE '(^|[?&])token='; then
+  case "${base_url}" in *\?*) base_url="${base_url}&token=${BOOTSTRAP_SHARED_TOKEN}" ;; *) base_url="${base_url}?token=${BOOTSTRAP_SHARED_TOKEN}" ;; esac
+fi
+
+upload() {
+  local path="$1" name="$2" sep="?"
+  [ -s "${path}" ] || return 0
+  case "${base_url}" in *\?*) sep="&" ;; esac
+  curl -4 --http1.1 -fsS --connect-timeout 5 --max-time 30 --retry 2 --retry-delay 2 \
+    -H "x-ks-log-run: ${log_run_id}" \
+    -X POST --data-binary @"${path}" \
+    "${base_url}${sep}host=${host}&file=${name}" >/dev/null 2>&1 || true
+}
+
+upload /root/bootstrap-post.log os-installation.log
+upload /var/log/tailscale-firstboot.log first-boot.log
+upload /var/log/ansible-bundle-bootstrap.log ansible-bundle-bootstrap.log
+SCRIPT
+chmod 0700 /usr/local/sbin/adaetum-bootstrap-log-upload.sh
+
+cat >/etc/systemd/system/adaetum-bootstrap-log-upload.service <<'UNIT'
+[Unit]
+Description=Upload retained Adaetum bootstrap diagnostics
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/adaetum-bootstrap-log-upload.sh
+UNIT
+
+cat >/etc/systemd/system/adaetum-bootstrap-log-upload.timer <<'UNIT'
+[Unit]
+Description=Retry Adaetum bootstrap diagnostic upload
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1min
+Persistent=true
+Unit=adaetum-bootstrap-log-upload.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon /usr/local/sbin/adaetum-bootstrap-log-upload.sh \
+    /etc/systemd/system/adaetum-bootstrap-log-upload.service \
+    /etc/systemd/system/adaetum-bootstrap-log-upload.timer 2>&1 || true
+fi
+systemctl enable adaetum-bootstrap-log-upload.timer || true
+
 # Each host owns an independent recovery token. Never rotate it on a rerun.
 install -d -m 0700 /var/lib/adaetum
 install -d -m 0750 /etc/adaetum

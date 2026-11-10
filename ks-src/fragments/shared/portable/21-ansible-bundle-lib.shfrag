@@ -27,6 +27,7 @@ LOG_UPLOAD_URL="${LOG_UPLOAD_URL:-}"
 LOG_UPLOAD_EVENTUAL="${LOG_UPLOAD_EVENTUAL:-__KS_LOG_UPLOAD_EVENTUAL__}"
 LOG_UPLOAD_DEBUG="${LOG_UPLOAD_DEBUG:-__KS_LOG_UPLOAD_DEBUG__}"
 LOG_HOST="$(hostname -s 2>/dev/null || echo node-bootstrap)"
+LOG_RUN_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo boot)-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
 log_file="/var/log/ansible-bundle-bootstrap.log"
 mkdir -p "$(dirname "${log_file}")"
@@ -156,6 +157,7 @@ upload_log() {
   curl_rc=0
   set +e
   http_code="$(curl -4 --http1.1 -sS -o "${response_file}" -w "%{http_code}" --connect-timeout 3 --max-time 10 --retry 2 -X POST \
+    -H "x-ks-log-run: ${LOG_RUN_ID}" \
     --data-binary @"${log_path}" \
     "${log_url}")"
   curl_rc=$?

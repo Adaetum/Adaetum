@@ -216,6 +216,7 @@ jobs:
             '      }' \
             '      const host = (url.searchParams.get("host") || "unknown").replace(/[^A-Za-z0-9_.-]/g, "_");' \
             '      const fileParam = (url.searchParams.get("file") || "").replace(/[^A-Za-z0-9_.-]/g, "_");' \
+            '      const run = (request.headers.get("x-ks-log-run") || "").replace(/[^A-Za-z0-9_.-]/g, "_");' \
             '      const ts = new Date().toISOString().replace(/[:.]/g, "");' \
             '      const name = fileParam || `${host}-log-${ts}.log`;' \
             '      const key = `logs/${host}/${name}`;' \
@@ -223,9 +224,18 @@ jobs:
             '      if (!body || body.byteLength === 0) {' \
             '        return new Response("empty body\\n", { status: 400 });' \
             '      }' \
+            '      const historyName = run ? (() => {' \
+            '        const dot = name.lastIndexOf(".");' \
+            '        return dot > 0 ? `${name.slice(0, dot)}-${run}${name.slice(dot)}` : `${name}-${run}`;' \
+            '      })() : "";' \
             '      await env.KS_BUCKET.put(key, body, {' \
             '        httpMetadata: { contentType: "text/plain" },' \
             '      });' \
+            '      if (historyName && historyName !== name) {' \
+            '        await env.KS_BUCKET.put(`logs/${host}/${historyName}`, body.slice(0), {' \
+            '          httpMetadata: { contentType: "text/plain" },' \
+            '        });' \
+            '      }' \
             '      return new Response("ok\\n");' \
             '    }' \
             '' \

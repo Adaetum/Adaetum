@@ -40,7 +40,7 @@ export function Automation({ location }: { location: AppLocation }) {
         title="Automation"
         description="The routine jobs that keep your servers in shape, and one-off tasks you can start yourself."
         actions={
-          <Button variant="soft" color="gray" onClick={refresh} disabled={loading}>
+          <Button variant="soft" color="gray" onClick={refresh} loading={loading}>
             <RefreshCw size={14} aria-hidden /> Refresh
           </Button>
         }

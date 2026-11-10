@@ -6,6 +6,7 @@ Checks:
 - Top-level document is a mapping
 - Required keys are present: `name` and `on`
 - Jobs honor the Actions disable variable except the manual-only release workflow
+  and workflows that are only callable by other workflows (`workflow_call`)
 """
 
 from __future__ import annotations
@@ -50,6 +51,11 @@ def validate_file(path: Path) -> list[str]:
         and set(triggers) == {"workflow_dispatch"}
     )
 
+    # A workflow that only other workflows can call has no automatic trigger of
+    # its own; the calling workflow carries the disable switch (or is the manual
+    # release, which is deliberately exempt).
+    call_only = isinstance(triggers, dict) and set(triggers) == {"workflow_call"}
+
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict) or not jobs:
         errors.append(f"{path}: missing required top-level jobs mapping")
@@ -60,7 +66,7 @@ def validate_file(path: Path) -> list[str]:
             errors.append(f"{path}: job {job_name!r} must be a mapping/object")
             continue
         condition = job.get("if")
-        if not manual_release and (not isinstance(condition, str) or DISABLE_ACTIONS_CONDITION not in condition):
+        if not (manual_release or call_only) and (not isinstance(condition, str) or DISABLE_ACTIONS_CONDITION not in condition):
             errors.append(
                 f"{path}: job {job_name!r} must honor {DISABLE_ACTIONS_CONDITION}"
             )

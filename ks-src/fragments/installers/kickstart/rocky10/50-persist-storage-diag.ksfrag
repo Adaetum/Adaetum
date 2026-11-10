@@ -3,6 +3,18 @@
 %post --nochroot --interpreter=/bin/bash
 set -euo pipefail
 
+stage_log="/tmp/adaetum-post-storage-diag.log"
+exec > >(tee -a "${stage_log}") 2>&1
+post_stage_exit() {
+  local rc="$?"
+  if [ "${rc}" -ne 0 ]; then
+    echo "[BOOTSTRAP] storage diagnostics persistence failed (rc=${rc}); uploading installer diagnostics"
+    [ -x /tmp/collect-storage-diag.sh ] && /tmp/collect-storage-diag.sh /tmp || true
+  fi
+  exit "${rc}"
+}
+trap post_stage_exit EXIT
+
 target_root="/mnt/sysroot"
 diag_dir="${target_root}/root/bootstrap-storage-diag"
 if [ -d "${target_root}" ]; then

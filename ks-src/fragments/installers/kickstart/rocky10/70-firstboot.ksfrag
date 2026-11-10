@@ -44,6 +44,7 @@ export GITEA_SEED_TARGET_REPO
 export GITHUB_APP_ID
 export GITHUB_APP_INSTALLATION_ID
 LOG_HOST="$(hostname -s 2>/dev/null || echo node-bootstrap)"
+LOG_RUN_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo boot)-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 log_file="/root/bootstrap-post.log"
 : > "${log_file}"
 if command -v stdbuf >/dev/null 2>&1; then
@@ -107,6 +108,7 @@ upload_log() {
   response_file="$(mktemp)"
   curl_rc=0
   http_code="$(curl -4 --http1.1 -sS -o "${response_file}" -w "%{http_code}" --connect-timeout 3 --max-time 10 --retry 2 --retry-delay 1 --retry-all-errors -X POST \
+    -H "x-ks-log-run: ${LOG_RUN_ID}" \
     --data-binary @"${log_path}" \
     "${log_url}" || curl_rc=$?)"
 

@@ -200,7 +200,7 @@ function TurnOnDialog({ lever, open, onClose, onDone }: { lever: Lever; open: bo
           </Flex>
           <Flex gap="3" mt="4" justify="end">
             <Button type="button" variant="soft" color="gray" onClick={onClose}>Cancel</Button>
-            <Button type="submit" color="red" variant="soft" highContrast disabled={busy || confirm !== lever.key}>Turn on</Button>
+            <Button type="submit" color="red" variant="soft" highContrast loading={busy} disabled={confirm !== lever.key}>Turn on</Button>
           </Flex>
         </form>
       </Dialog.Content>

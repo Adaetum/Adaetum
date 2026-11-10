@@ -16,6 +16,8 @@ type API struct {
 	Audit       func(any) error
 	Who         func(*http.Request) string
 	RequireUser func(http.Handler) http.Handler
+	// Policy is the saved channel/mode and the scheduled check; nil leaves only the manual routes.
+	Policy *Policy
 }
 
 func (a API) Register(mux *http.ServeMux) {
@@ -25,6 +27,7 @@ func (a API) Register(mux *http.ServeMux) {
 		}
 		return handler
 	}
+	a.registerPolicy(mux, protect)
 	mux.Handle("GET /api/v1/releases/latest", protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		channel := r.URL.Query().Get("channel")
 		if channel == "" {

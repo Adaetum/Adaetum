@@ -1052,12 +1052,18 @@ step_end 0
 # but destroy them after the node has completed the entire bootstrap flow.
 remove_installed_bootstrap_artifacts() {
   local path=""
+  # The retry timer is only for incomplete first boots. A successful run has
+  # uploaded its final log and must remove this token-bearing delivery path.
+  bootstrap_service_disable adaetum-bootstrap-log-upload.timer 2>/dev/null || true
   for path in \
     "${BOOTSTRAP_RUNTIME_ENV_FILE:-/etc/bootstrap-runtime.env}" \
     /etc/ansible-bundle-bootstrap.env \
     /etc/tailscale-firstboot.env \
+    /usr/local/sbin/adaetum-bootstrap-log-upload.sh \
     /usr/local/sbin/ansible-bundle-bootstrap.sh \
     /usr/local/sbin/tailscale-firstboot.sh \
+    /etc/systemd/system/adaetum-bootstrap-log-upload.service \
+    /etc/systemd/system/adaetum-bootstrap-log-upload.timer \
     /root/*-ks.cfg; do
     if [ ! -e "${path}" ]; then
       continue

@@ -185,3 +185,15 @@ Not built (search the code for `STUB` or `INTENT`):
 The native Turso library has been run on macOS only. It must be run once on a Rocky
 Linux 10 host (glibc, SELinux, `TURSO_GO_CACHE_DIR` writable by the service) before
 the agent is installed anywhere with `-data-dir`.
+
+## Updates
+
+Cluster > "Adaetum updates" sets the release channel (stable or beta) and how updates
+arrive: **manual** (only the Check button), **notify** (the agent checks every six hours
+and shows when an update is available), or **automatic proposals** (as notify, plus it
+opens the GitOps pull request once per release). Every mode stops at a pull request that
+a person reviews and merges; hosts are still updated through the rehearsal-first
+`host-agent` playbook. The choice is the cluster agent's own runtime setting, kept in
+`<data-dir>/update-settings.json` (not in `platform.yaml`, which only renders into
+manifests); changes and proposals are recorded in `release-proposals.log`. Automatic
+proposals need the same GitOps access as the manual button.

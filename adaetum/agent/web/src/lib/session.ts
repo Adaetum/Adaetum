@@ -1,3 +1,4 @@
+import { trackBusy } from "./busy";
 import { useCallback, useEffect, useState } from "react";
 import { authedFetch, tokenStore, useToken } from "./auth";
 
@@ -30,11 +31,11 @@ export type SignInResult = "ok" | "wrong" | "slow-down" | "unavailable";
 
 export async function signInWithAccount(email: string, password: string): Promise<SignInResult> {
   try {
-    const response = await fetch("/api/auth/sign-in/email", {
+    const response = await trackBusy(fetch("/api/auth/sign-in/email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: email.trim(), password }),
-    });
+    }));
     if (response.ok) return "ok";
     if (response.status === 429) return "slow-down";
     if (response.status >= 500) return "unavailable";
@@ -54,7 +55,7 @@ export interface SetupInput {
 // setUpFirstOwner returns an empty string on success, or a sentence to show.
 export async function setUpFirstOwner(input: SetupInput): Promise<string> {
   try {
-    const response = await fetch("/api/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    const response = await trackBusy(fetch("/api/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }));
     if (response.status === 201) return "";
     const body = await response.json().catch(() => ({}));
     switch (body?.error) {

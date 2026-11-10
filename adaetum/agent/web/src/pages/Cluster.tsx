@@ -53,7 +53,7 @@ export function Cluster({ report, location }: { report: Report | null; location:
         title="Cluster"
         description="Which servers are running the Adaetum agent, and which need attention."
         actions={
-          <Button variant="soft" color="gray" onClick={refresh} disabled={loading}>
+          <Button variant="soft" color="gray" onClick={refresh} loading={loading}>
             <RefreshCw size={14} aria-hidden /> Refresh
           </Button>
         }

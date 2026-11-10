@@ -15,6 +15,7 @@ func (s *Step) Simulate(ctx context.Context, _ *engine.Env, ui engine.UI) error 
 		"Break-glass bundle built and published.",
 		"Required secrets synchronized to the private repository.",
 		"ks-worker, ks-publish, and iso-build workflows completed successfully.",
+		"Worker/R2 log delivery verified with a write, list, and readback probe.",
 		"Local installer ISO build completed.",
 		"Setup recovery secrets saved and verified in the example R2 bucket.",
 	} {

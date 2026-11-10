@@ -100,7 +100,7 @@ export async function startRun(request: LaunchRequest): Promise<string> {
 }
 
 export async function fetchRun(id: string, after: number, signal?: AbortSignal): Promise<RunView> {
-  const response = await authedFetch(`/api/v1/ansible/runs/${encodeURIComponent(id)}?after=${after}`, { signal });
+  const response = await authedFetch(`/api/v1/ansible/runs/${encodeURIComponent(id)}?after=${after}`, { signal, quiet: true });
   if (!response.ok) throw await failure(response, "Could not read the run");
   return response.json();
 }

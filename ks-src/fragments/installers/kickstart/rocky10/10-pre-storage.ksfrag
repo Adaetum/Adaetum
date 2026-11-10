@@ -108,6 +108,7 @@ out_dir="${1:-/tmp}"
 bundle_name="storage-diag-${host}-${ts}.tar.gz"
 LOG_UPLOAD_URL="__KS_LOG_URL__"
 BOOTSTRAP_SHARED_TOKEN="__BOOTSTRAP_SHARED_TOKEN__"
+LOG_RUN_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || date +%s)"
 
 if [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
   LOG_UPLOAD_URL=""
@@ -142,6 +143,9 @@ add_file() {
 } > "${manifest}"
 
 add_file "/tmp/ks-pre.log" "installer/tmp/ks-pre.log"
+add_file "/tmp/adaetum-post-growfs.log" "installer/tmp/adaetum-post-growfs.log"
+add_file "/tmp/adaetum-post-storage-diag.log" "installer/tmp/adaetum-post-storage-diag.log"
+add_file "/tmp/adaetum-post-embed-repo.log" "installer/tmp/adaetum-post-embed-repo.log"
 add_file "/tmp/ks-storage-watch.log" "installer/tmp/ks-storage-watch.log"
 add_file "/tmp/ks-install-watchdog.log" "installer/tmp/ks-install-watchdog.log"
 add_file "/tmp/ks-install-watchdog.pid" "installer/tmp/ks-install-watchdog.pid"
@@ -289,6 +293,7 @@ if [ -n "${LOG_UPLOAD_URL}" ] && command -v curl >/dev/null 2>&1; then
   tmp_resp="$(mktemp /tmp/storage-diag-upload.XXXXXX)"
   curl_rc=0
   http_code="$(curl -4 --http1.1 -sS -o "${tmp_resp}" -w "%{http_code}" --connect-timeout 5 --max-time 90 --retry 2 \
+    -H "x-ks-log-run: ${LOG_RUN_ID}" \
     -X POST --data-binary @"${out_path}" "${upload_url}" || curl_rc=$?)"
   if [ "${curl_rc}" = "0" ] && [ -n "${http_code}" ] && [ "${http_code}" != "000" ] && [ "${http_code}" -ge 200 ] && [ "${http_code}" -lt 300 ]; then
     echo "[KS] storage diag upload ok http=${http_code} file=${bundle_name}" >&2

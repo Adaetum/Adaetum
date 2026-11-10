@@ -113,14 +113,25 @@ func runCluster(args []string) {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 	releaseClient := releases.NewClient()
 	updates := releases.API{Current: agentVersion, Latest: releaseClient.Latest, RequireUser: guard, Who: personName}
-	if tokenFile := os.Getenv("ADAETUM_GITOPS_TOKEN_FILE"); tokenFile != "" {
+	// One record for everything about updates: manual and automatic proposals and
+	// changes to the update settings.
+	var releaseAudit func(any) error
+	if audit, err := auditlog.Open(filepath.Join(*dataDir, "release-proposals.log")); err != nil {
+		fmt.Fprintln(os.Stderr, "release proposals and update settings unavailable: cannot open audit log:", err)
+	} else {
+		defer audit.Close()
+		releaseAudit = audit.Record
+	}
+	var propose func(context.Context, releases.Manifest) (releases.Proposal, error)
+	if tokenFile := os.Getenv("ADAETUM_GITOPS_TOKEN_FILE"); tokenFile != "" && releaseAudit != nil {
 		gitops := releases.NewGitOps(os.Getenv("GITEA_REPO_OWNER"), os.Getenv("GITEA_REPO_NAME"), os.Getenv("GITOPS_REPO_BRANCH"), os.Getenv("GITEA_PUBLIC_HOST"), tokenFile)
-		if audit, err := auditlog.Open(filepath.Join(*dataDir, "release-proposals.log")); err != nil {
-			fmt.Fprintln(os.Stderr, "release proposals unavailable: cannot open audit log:", err)
-		} else {
-			defer audit.Close()
-			updates.Propose, updates.Audit = gitops.CreateProposal, audit.Record
-		}
+		propose = gitops.CreateProposal
+		updates.Propose, updates.Audit = propose, releaseAudit
+	}
+	if releaseAudit != nil {
+		updatePolicy := &releases.Policy{Path: filepath.Join(*dataDir, "update-settings.json"), Current: agentVersion, Latest: releaseClient.Latest, Propose: propose, Audit: releaseAudit}
+		updates.Policy = updatePolicy
+		go updatePolicy.Run(context.Background())
 	}
 	updates.Register(mux)
 	registerClusterConnection(mux)

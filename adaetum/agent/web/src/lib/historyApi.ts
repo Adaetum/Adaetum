@@ -68,7 +68,7 @@ export const TRUSTED_HOURS = 48;
 
 async function get<T>(path: string): Promise<T | null> {
   try {
-    const response = await authedFetch(path);
+    const response = await authedFetch(path, { quiet: true });
     if (!response.ok) return null;
     const body = await response.json();
     return body?.enabled ? (body as T) : null;

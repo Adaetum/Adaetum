@@ -1,3 +1,4 @@
+import { Throbber } from "../components/Throbber";
 import { Button, Callout, Flex, IconButton, SegmentedControl, Text, Tooltip } from "@radix-ui/themes";
 import {
   Activity,
@@ -120,6 +121,7 @@ export function Shell({ report, error, refreshing, updatedAt, refresh, location,
 
   return (
     <div className="shell" data-collapsed={collapsed}>
+      <Throbber />
       <aside className="sidebar">
         <Flex align="center" gap="3" className="brand">
           <div className="brand-mark" aria-hidden>

@@ -1,0 +1,88 @@
+name: Adaetum software tests
+
+# The one definition of "the Adaetum agent software passes its tests". Pull
+# requests run it through tests.yml and the release workflow requires it, so a
+# release can never test less than a pull request did. It has no automatic
+# trigger of its own, which is why its jobs do not carry the Actions disable
+# switch: a manual release must still be able to call it.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Actions are pinned to commit SHAs so a moved tag cannot change what CI runs.
+jobs:
+  agent:
+    name: Agent (Go tests, web type-check and build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.3'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.11.1'
+      - name: Go tests
+        working-directory: adaetum/agent
+        run: go test ./...
+      - name: Web type-check and build
+        working-directory: adaetum/agent/web
+        run: |
+          npm ci
+          npm run build
+
+  auth:
+    name: Auth service (Bun tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+      - name: Bun tests
+        working-directory: adaetum/auth
+        run: |
+          bun install --frozen-lockfile
+          bun test
+
+  embed:
+    name: Embedding service (Go tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.3'
+      - name: Go tests
+        working-directory: adaetum/embed
+        run: go test ./...
+
+  installer:
+    name: Installer (Go tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: installer/go.mod
+      - name: Go tests
+        working-directory: installer
+        run: go test ./...
+
+  boundaries:
+    name: Agent boundary and release contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Install validator dependencies
+        run: python3 -m pip install pyyaml
+      - name: Validate the boundary and release contract
+        run: |
+          python3 .validator/validate-agent-boundary.py --self-test
+          python3 .validator/validate-agent-boundary.py
+          python3 .validator/validate-agent-release.py

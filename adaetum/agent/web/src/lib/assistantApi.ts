@@ -145,7 +145,7 @@ export function useConversation(enabled: boolean): ConversationHook {
       }
       try {
         const after = open.current ? 0 : next.current;
-        const response = await authedFetch(`/api/v1/assistant/conversations/${id}?after=${after}`);
+        const response = await authedFetch(`/api/v1/assistant/conversations/${id}?after=${after}`, { quiet: true });
         if (response.status === 404) {
           // The agent restarted or dropped it: start over cleanly.
           storeId(null);

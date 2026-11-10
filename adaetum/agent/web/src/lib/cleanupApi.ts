@@ -2,6 +2,7 @@
 // Previews and reads need no token; anything that changes the server does, and
 // the agent refuses it outright when it cannot make changes.
 
+import { trackBusy } from "./busy";
 import { tokenStore } from "./auth";
 
 export interface Capabilities {
@@ -125,19 +126,20 @@ export class ApiError extends Error {
 
 async function call<T>(
   path: string,
-  options: { method?: string; body?: unknown; token?: string; signal?: AbortSignal } = {},
+  options: { method?: string; body?: unknown; token?: string; signal?: AbortSignal; quiet?: boolean } = {},
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   const token = options.token || tokenStore.get();
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const response = await fetch(`/api/v1/images${path}`, {
+  const sent = fetch(`/api/v1/images${path}`, {
     method: options.method ?? "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     signal: options.signal,
   });
+  const response = await (options.quiet ? sent : trackBusy(sent));
   const text = await response.text();
   let data: unknown = null;
   try {
@@ -156,7 +158,7 @@ export const getCapabilities = (signal?: AbortSignal) => call<Capabilities>("/ca
 export const makePlan = (request: PlanRequest, signal?: AbortSignal) => call<CleanupPlan>("/plan", { method: "POST", body: request, signal });
 export const startApply = (planId: string, maxImages: number, dryRun: boolean, token: string) =>
   call<{ jobId: string }>("/apply", { method: "POST", body: { planId, maxImages, dryRun }, token });
-export const getJob = (id: string, signal?: AbortSignal) => call<Job>(`/jobs/${encodeURIComponent(id)}`, { signal });
+export const getJob = (id: string, signal?: AbortSignal) => call<Job>(`/jobs/${encodeURIComponent(id)}`, { signal, quiet: true });
 export const cancelJob = (token: string) => call<{ ok: boolean }>("/cancel", { method: "POST", body: {}, token });
 export const getHistory = (signal?: AbortSignal) => call<Run[]>("/history", { signal });
 export const getSchedule = (signal?: AbortSignal) => call<ScheduleView>("/schedule", { signal });

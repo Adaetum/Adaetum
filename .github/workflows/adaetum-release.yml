@@ -19,7 +19,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The same suite pull requests run; a release cannot test less than a PR did.
+  tests:
+    uses: ./.github/workflows/adaetum-tests.yml
+
   release:
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -64,16 +69,6 @@ jobs:
           echo "ADAETUM_VERSION=${version}" >> "$GITHUB_ENV"
           echo "ADAETUM_RELEASE_TAG=$tag" >> "$GITHUB_ENV"
           echo "ADAETUM_REGISTRY=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
-      - name: Test the three components
-        shell: bash
-        run: |
-          set -euo pipefail
-          (cd adaetum/auth && bun install --frozen-lockfile && bun test)
-          (cd adaetum/agent && go test ./...)
-          (cd adaetum/embed && go test ./...)
-          python3 .validator/validate-agent-boundary.py --self-test
-          python3 .validator/validate-agent-boundary.py
-          python3 .validator/validate-agent-release.py
       - name: Build the host binaries
         shell: bash
         run: |

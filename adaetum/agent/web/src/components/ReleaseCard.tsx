@@ -1,5 +1,5 @@
 import { AlertDialog, Button, Callout, Card, Checkbox, Code, Flex, Select, Text } from "@radix-ui/themes";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { authedFetch } from "../lib/auth";
 import { ServerStatus } from "../lib/clusterApi";
 
@@ -11,10 +11,50 @@ interface ReleaseCheck {
   release: { version: string; source_commit: string; images: Record<string, string>; binaries: Record<string, Binary> };
 }
 
+interface UpdateSettings {
+  channel: "stable" | "beta";
+  mode: "manual" | "notify" | "auto";
+  checkedAt?: string;
+  updateAvailable?: boolean;
+  latest?: string;
+  error?: string;
+  proposal?: { version: string; url: string };
+}
+
+const modeText = {
+  manual: "Manual: only check when I press the button.",
+  notify: "Notify: check every few hours and tell me when an update is available.",
+  auto: "Automatic: check every few hours and open the update pull request for me. You still review and merge it.",
+};
+
 // Checking upstream is explicit and read-only. The link opens the existing
 // rehearsal-first Ansible form; it never starts a host update itself.
 export function ReleaseCard({ servers, nodesError }: { servers: ServerStatus[]; nodesError?: string }) {
   const [channel, setChannel] = useState(() => localStorage.getItem("adaetum-release-channel") === "beta" ? "beta" : "stable");
+  // The saved choice lives on the cluster agent so every operator sees the same one.
+  // A host agent has no such route; the card then falls back to the manual controls.
+  const [settings, setSettings] = useState<UpdateSettings | null>(null);
+  const [settingsError, setSettingsError] = useState("");
+  useEffect(() => {
+    authedFetch("/api/v1/releases/settings").then(async (response) => {
+      if (!response.ok) return;
+      const loaded = await response.json() as UpdateSettings;
+      setSettings(loaded);
+      setChannel(loaded.channel);
+    }).catch(() => undefined);
+  }, []);
+  async function saveSettings(change: Partial<Pick<UpdateSettings, "channel" | "mode">>) {
+    if (!settings) return;
+    setSettingsError("");
+    try {
+      const response = await authedFetch("/api/v1/releases/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel: settings.channel, mode: settings.mode, ...change }) });
+      if (!response.ok) throw new Error((await response.text()).trim() || `Request failed (${response.status})`);
+      const saved = await response.json() as UpdateSettings;
+      setSettings(saved);
+      setChannel(saved.channel);
+      setRelease(null); setError(""); setProposalURL("");
+    } catch (err) { setSettingsError(err instanceof Error ? err.message : String(err)); }
+  }
   const [release, setRelease] = useState<ReleaseCheck | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,7 +98,20 @@ export function ReleaseCard({ servers, nodesError }: { servers: ServerStatus[]; 
   return (
     <Card size="2"><Flex direction="column" gap="3">
       <Text size="2">Check the published Adaetum agent, auth and embedding release. Checking changes nothing.</Text>
-      <label><Text as="div" size="2" weight="medium">Release channel</Text><Select.Root value={channel} disabled={busy} onValueChange={(value) => { localStorage.setItem("adaetum-release-channel", value); setChannel(value); setRelease(null); setError(""); setProposalURL(""); }}><Select.Trigger /><Select.Content><Select.Item value="stable">Stable</Select.Item><Select.Item value="beta">Beta</Select.Item></Select.Content></Select.Root></label>
+      <label><Text as="div" size="2" weight="medium">Release channel</Text><Select.Root value={channel} disabled={busy} onValueChange={(value) => { if (settings) { void saveSettings({ channel: value as "stable" | "beta" }); return; } localStorage.setItem("adaetum-release-channel", value); setChannel(value); setRelease(null); setError(""); setProposalURL(""); }}><Select.Trigger /><Select.Content><Select.Item value="stable">Stable</Select.Item><Select.Item value="beta">Beta</Select.Item></Select.Content></Select.Root></label>
+      {settings && <label><Text as="div" size="2" weight="medium">Updates</Text>
+        <Select.Root value={settings.mode} onValueChange={(value) => void saveSettings({ mode: value as UpdateSettings["mode"] })}><Select.Trigger /><Select.Content>
+          <Select.Item value="manual">Manual</Select.Item><Select.Item value="notify">Notify me</Select.Item><Select.Item value="auto">Automatic proposals</Select.Item>
+        </Select.Content></Select.Root>
+        <Text as="div" size="1" color="gray" mt="1">{modeText[settings.mode]}</Text>
+      </label>}
+      {settingsError && <Callout.Root color="red" role="alert"><Callout.Text>{settingsError}</Callout.Text></Callout.Root>}
+      {settings && settings.mode !== "manual" && <Text size="2" color="gray">
+        {settings.checkedAt ? `Last automatic check ${new Date(settings.checkedAt).toLocaleString()}. ` : "Not checked yet. "}
+        {settings.updateAvailable ? `Update ${settings.latest} is available. ` : settings.checkedAt && !settings.error ? "You are up to date. " : ""}
+        {settings.proposal && <><a href={settings.proposal.url}>Pull request for {settings.proposal.version}</a>.</>}
+      </Text>}
+      {settings?.error && settings.mode !== "manual" && <Callout.Root color="amber"><Callout.Text>{settings.error}</Callout.Text></Callout.Root>}
       <div><Button variant="soft" onClick={check} disabled={busy}>{busy ? "Checking…" : "Check for updates"}</Button></div>
       {error && <Callout.Root color="red" role="alert"><Callout.Text>{error}</Callout.Text></Callout.Root>}
       {release && <>

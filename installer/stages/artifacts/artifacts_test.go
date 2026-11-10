@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,17 +40,60 @@ type githubServer struct {
 	next        int64
 	fileOf      map[int64]string
 	dispatches  []string
+	logs        map[string][]byte
+	corruptRead bool
 }
 
 func newGitHub(t *testing.T) (*githubServer, githubapi.Client) {
 	pub, _, _ := box.GenerateKey(rand.Reader)
-	g := &githubServer{secrets: map[string]string{}, pushAllowed: true, failing: map[string]bool{}, runs: map[string][]int64{}, fileOf: map[int64]string{}, next: 100}
+	g := &githubServer{secrets: map[string]string{}, pushAllowed: true, failing: map[string]bool{}, runs: map[string][]int64{}, fileOf: map[int64]string{}, logs: map[string][]byte{}, next: 100}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		p := r.URL.Path
 		switch {
+		case p == "/logs" && r.Method == http.MethodPost:
+			if r.Header.Get("x-ks-token") != "ks-shared" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			if len(body) == 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			key := "logs/" + r.URL.Query().Get("host") + "/" + r.URL.Query().Get("file")
+			g.logs[key] = body
+			w.WriteHeader(http.StatusOK)
+		case p == "/logs" && r.Method == http.MethodGet:
+			if r.Header.Get("x-ks-token") != "ks-shared" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			prefix := "logs/" + r.URL.Query().Get("host") + "/" + r.URL.Query().Get("name_prefix")
+			keys := make([]string, 0)
+			for key := range g.logs {
+				if strings.HasPrefix(key, prefix) {
+					keys = append(keys, key)
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"keys": keys})
+		case strings.HasPrefix(p, "/logs/") && r.Method == http.MethodGet:
+			if r.Header.Get("x-ks-token") != "ks-shared" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			key := strings.TrimPrefix(p, "/")
+			body, ok := g.logs[key]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if g.corruptRead {
+				body = []byte("corrupt")
+			}
+			w.Write(body)
 		case r.Method == http.MethodPut && strings.Contains(p, "/environments/") && !strings.Contains(p, "/secrets/"):
 			w.WriteHeader(http.StatusOK)
 		case strings.HasSuffix(p, "/secrets/public-key"):
@@ -101,6 +145,7 @@ func newGitHub(t *testing.T) (*githubServer, githubapi.Client) {
 
 func fixture(t *testing.T) (*Step, *engine.Env, *sys.Fake, *githubServer) {
 	root := t.TempDir()
+	g, client := newGitHub(t)
 	os.WriteFile(filepath.Join(root, "Rocky-10.2-x86_64-minimal.iso"), []byte("iso-bytes"), 0o644)
 	os.MkdirAll(filepath.Join(root, "dist", "ks-templates"), 0o755)
 	os.WriteFile(filepath.Join(root, "dist", "ks-templates", "rocky10.ks"), []byte("# GOLDEN_ISO_KEY=rocky10/Rocky-10.2-x86_64-minimal.iso\n"), 0o644)
@@ -108,6 +153,7 @@ func fixture(t *testing.T) (*Step, *engine.Env, *sys.Fake, *githubServer) {
 		{"R2_ENDPOINT", "https://acct.r2.cloudflarestorage.com"}, {"R2_BUCKET", "iso"},
 		{"R2_ACCESS_KEY_ID", "r2-key-id"}, {"R2_SECRET_ACCESS_KEY", "r2-secret-value"},
 		{"CLOUDFLARE_API_TOKEN", "cfat_x"}, {"GITHUB_SYNC_TOKEN", ghToken}, {"BOOTSTRAP_BACKUP_PASSPHRASE", "pass"},
+		{"KS_BASE_URL", client.Base}, {"KS_SHARED_TOKEN", "ks-shared"},
 		{"ARGOCD_GITHUB_REPO_URL", "https://github.com/" + repo + ".git"}, {"ARGOCD_GITHUB_USERNAME", "alice"},
 	})
 	cache, err := cacheBuster(root)
@@ -121,7 +167,6 @@ func fixture(t *testing.T) (*Step, *engine.Env, *sys.Fake, *githubServer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, client := newGitHub(t)
 	f := &sys.Fake{Rules: []sys.Rule{
 		{Prefix: "git config --get remote.origin.url", Result: sys.Result{Stdout: "https://github.com/" + repo + ".git\n"}},
 		{Prefix: "git rev-parse --abbrev-ref HEAD", Result: sys.Result{Stdout: "main\n"}},
@@ -172,6 +217,17 @@ func TestTheWholeStagePublishesAndAllWorkflowsSucceed(t *testing.T) {
 	}
 	if !f.Ran("rclone copyto "+filepath.Join(s.Root, ".env")+" cluster_r2:iso/recovery/setup-") || !f.Ran("rclone cat cluster_r2:iso/recovery/setup-") {
 		t.Error("setup recovery copy was not uploaded and verified")
+	}
+	if body := g.logs["logs/setup-probe/delivery-probe.log"]; !strings.HasPrefix(string(body), "adaetum log-delivery probe ") {
+		t.Fatalf("Worker/R2 delivery probe was not written: %q", body)
+	}
+}
+
+func TestWorkerLogDeliveryCheckRejectsWrongReadback(t *testing.T) {
+	s, env, _, g := fixture(t)
+	g.corruptRead = true
+	if err := s.Apply(context.Background(), env, engine.Headless{}); err == nil || !strings.Contains(err.Error(), "did not match") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

@@ -3,6 +3,17 @@
 This roadmap is maintained by maintainers and converted into focused issues.
 An item is complete only when its acceptance criteria and required checks pass.
 
+## Needs re-review
+
+- [ ] Re-review every item in the older roadmap below. It was written before
+  2026-11-09 and has not been checked against the current repository, so
+  completed marks, "Current" notes and evidence claims may be stale. For each
+  item: confirm it, update it, or delete it. **Acceptance:** the older roadmap
+  is gone from the collapsed block, with each surviving item restated here.
+
+<details>
+<summary>Older roadmap (unreviewed, may be stale)</summary>
+
 ## P0 — platform contract
 
 - [ ] Finish the shared Phase 50/60 bootstrap library. **Current:** exact
@@ -140,6 +151,147 @@ reference. The scope is the existing setup window and its UI-only preview.
   cadence.
 - [ ] Reconsider pluggable providers only if Adaetum supports and validates a real
   second implementation for a documented external integration.
+
+</details>
+
+## New work (added 2026-11-09)
+
+### Backup and restore
+
+Not started. **Current (2026-11-09 audit):** no Longhorn backup jobs, Velero, or
+etcd snapshot export is configured in `pods/`, `ansible/`, or `platform.yaml`.
+The setup already provisions an R2 bucket, so an off-site target exists. The
+default should be opinionated and on without configuration.
+
+- [ ] Take nightly off-site backups of cluster state and application volumes
+  (Gitea, Authentik, OpenBao, app data) to R2, declared in `platform.yaml` and
+  enforced by the existing Ansible/GitOps path. **Acceptance:** a clean install
+  produces a first backup with no operator input, and the schedule and
+  retention are public, non-secret profile values.
+- [ ] Prove restore, not just backup. **Acceptance:** a documented drill
+  rebuilds a cluster from the off-site copy and shows the data returned.
+- [ ] Decide where OpenBao unseal keys and the root of trust are kept so a
+  rebuilt cluster can open restored secrets. **Acceptance:** the custody and
+  recovery path is documented and exercised in the restore drill.
+- [ ] Show protection in the agent web app: a backups card on Overview with
+  last success, age and size, a warning when stale, and a restore test.
+  **Acceptance:** a missing or failing backup appears in the attention list
+  defined in `agent/web/src/lib/attention.ts`.
+
+### Day-2 operations
+
+Owner: agent maintainers. The agent web app is where an operator sees and decides
+things; changes still reach the cluster through reviewed GitOps or the existing
+Ansible path, never by the agent running commands itself.
+
+- [ ] Updates for RKE2, the host OS, and applications, on the Cluster page next
+  to the existing Adaetum agent updates. Every update class gets the same
+  controls: manual approval, notify, or automatic, with a release channel.
+  Workloads choose either "latest" or a pinned version; the default is a pinned
+  version with a notice when a newer one exists. **Acceptance:** a bad RKE2 or
+  host upgrade can be rehearsed first and rolled back; the choice is saved as
+  agent or `platform.yaml` policy as appropriate and every change is recorded.
+- [ ] Pod-change previews. An optional setting, off by default. When on, the
+  agent may only open a pull request for a pod change, never merge it, and Argo
+  CD (ApplicationSet with the Pull Request generator, against Gitea) deploys the
+  PR branch to a temporary preview environment. The operator tests it and then
+  merges. Scope is pod changes only; host and RKE2 changes are not previewed
+  (host changes already need an explicit toggle). This is a large item and
+  needs its own design before work starts. **Design points to settle:** the
+  setting is public cluster policy that renders an ApplicationSet, so it
+  belongs in `platform.yaml`; "agent cannot merge" is enforced by Gitea (branch
+  protection and a token without merge rights), not by agent code; previews are
+  namespaced only, with a resource quota, a cap on concurrent previews and an
+  automatic expiry; stateful pods start with empty data and previews never
+  receive production credentials; pods that touch cluster-wide resources are
+  marked not previewable and fall back to a plain pull request; preview
+  addresses are private (Tailscale) by default. **Acceptance:** with the
+  setting on, a pod change produces a pull request and a working preview link
+  in the agent web app, with the preview's health shown; with it off, behavior
+  is unchanged; closing the PR removes the preview. Separately, any self-edit
+  gets a diff preview, a validator pass and a one-click revert.
+- [ ] Notifications page. Operators add the identities that should receive
+  alerts (phone, email, chat); the agent configures Alertmanager, Apprise and
+  ntfy behind the scenes so alerts reach a person by default. **Acceptance:** a
+  fresh cluster has no alert that points at nobody, a test notification can be
+  sent from the page, and a stale or failing route appears in the attention
+  list.
+
+- [ ] Observe the cluster agent's own pod. Scrape it with Prometheus (add a
+  metrics endpoint if it has none) and alert when it is down, restarting or
+  failing its health check. Host agents are out of scope: the host is the thing
+  they report on. **Acceptance:** a dead or crash-looping agent pod produces an
+  alert through the Notifications page and shows in the attention list.
+
+### Quality and release
+
+- [ ] Run the full agent test suite on every pull request. **Current:**
+  `.github/workflows/adaetum-tests.yml` is the single suite (agent Go tests and
+  web type-check and build, auth Bun tests, embed and installer Go tests, and the
+  agent boundary and release validators). `tests.yml` runs it on pull requests
+  and main, and the release workflow requires it before building. **Still to do:**
+  confirm a first green run on a real pull request, and make the Tests check
+  required in branch protection. **Acceptance:** a pull request that breaks any
+  of those suites cannot merge, and a release cannot test less than a pull
+  request did.
+- [ ] Add tests for the web UI. Start with the rules operators rely on:
+  `lib/status.ts` and `lib/attention.ts` (what counts as unhealthy), the storage
+  math in `lib/storage.ts`, and the update and sign-in flows. **Acceptance:** a
+  test runner in `agent/web`, run in pull-request CI, with those rules covered.
+- [ ] Protect the supply chain of released artifacts. Hosts and the cluster pull
+  agent binaries and images that update automatically, and the checksum they
+  verify comes from the same release. **Acceptance:** release binaries and
+  images are signed (for example with cosign) and the agent, installer and host
+  playbook verify the signature before use; releases publish an SBOM and a
+  vulnerability scan; the build provenance is recorded. Include a rehearsed
+  failure where a tampered artifact is refused.
+
+### Documentation
+
+- [ ] Document operator-loss recovery in the README. Setup uploads the
+  generated `.env` to R2 under `iso/recovery/` (the artifacts stage reads it back
+  to verify), so a replacement operator can recover it. State what the file
+  contains, how it is protected in R2, who can read it, and the steps to take
+  over from a lost laptop or hand the cluster to a second person.
+- [ ] Write a "what to do when" set of runbooks under `docs/` (failed disk,
+  forgotten password, a node that will not join, a stuck update). Each is
+  tested on a real or rehearsed host so the in-app assistant can link to it
+  instead of improvising.
+
+## Version 3 — roadmap idea (not scheduled)
+
+Direction only: nothing here should be built or designed in detail until the
+production path above is proven. Much of it will be decided later, on the fly.
+Per the scope guard, do not add a mode framework or abstraction ahead of a
+concrete first use.
+
+- [ ] Adaetum as a development platform. Today's opinionated setup is for people
+  who are not technical: stable production workloads with safe defaults. Version
+  3 would add a second opinionated setup for developers, where the cluster
+  serves a development workload and deliberately relaxes some security patterns
+  for speed. For example, preview environments could share test credentials,
+  test secrets and test resources instead of being isolated from them (the
+  production-oriented pod-change previews item keeps previews away from
+  production credentials; development use would point them at shared test ones).
+  **Shape to explore:** one cluster-wide setting in the agent, "this is a
+  development workload cluster", which switches a bundle of defaults together.
+  It stays opinionated: a different default for a different audience, not a
+  pile of individual switches. **Questions to answer first:** whether this is a
+  `platform.yaml` setting or a different installation profile; which
+  protections are relaxed and which are never relaxed (for example, real
+  provider credentials and the recovery repository); how a development cluster
+  is made unmistakable in the web app so it cannot be confused with a production
+  one; and how the shared test credentials are kept apart from real secrets.
+  **Acceptance:** a written design that answers those questions, reviewed before
+  any implementation.
+- [ ] Possible later step (version 3.5 or after): further profiles for other
+  specific workloads, such as a more advanced or more minimal setup. One idea is
+  a single configuration that people turn parts of on or off, similar to how one
+  kickstart file is accepted by many operating systems. If it works, it could
+  make Adaetum a baseline platform that others build on. This is an idea, not a
+  commitment, and `AGENTS.md` rules out a provider or capability layer until a
+  real, tested second implementation exists. **Acceptance:** a design that
+  names the first concrete second profile before any shared mechanism is built.
 
 ## Issue labels
 

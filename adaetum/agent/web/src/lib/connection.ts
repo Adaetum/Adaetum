@@ -29,7 +29,7 @@ export function useConnection(intervalMs = 30_000): ConnectionState {
     const controller = new AbortController();
     inflight.current = controller;
     try {
-      const response = await authedFetch("/api/v1/connection", { signal: controller.signal });
+      const response = await authedFetch("/api/v1/connection", { signal: controller.signal, quiet: true });
       // An older agent has no such route: it answered, so it is not offline.
       if (response.ok) setConnection(await response.json());
       setOffline(false);

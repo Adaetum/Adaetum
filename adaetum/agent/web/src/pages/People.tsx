@@ -1,4 +1,4 @@
-import { Badge, Button, Callout, Card, Dialog, Flex, Select, Text, TextField } from "@radix-ui/themes";
+import { Badge, Button, Callout, Card, Dialog, Flex, Select, Skeleton, Text, TextField } from "@radix-ui/themes";
 import { CircleAlert, Info, UserPlus } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
@@ -57,6 +57,7 @@ export function People() {
           </Callout.Root>
         )}
 
+        {!data && !error && <Skeleton height="160px" aria-busy="true" aria-label="Loading people" />}
         {data && (
           <Card size="2">
             <div className="advanced-scroll">

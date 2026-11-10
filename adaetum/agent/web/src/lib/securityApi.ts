@@ -33,7 +33,7 @@ async function failure(response: Response, fallback: string): Promise<Error> {
 }
 
 export async function fetchLevers(signal?: AbortSignal): Promise<Lever[]> {
-  const response = await authedFetch("/api/v1/security", { signal });
+  const response = await authedFetch("/api/v1/security", { signal, quiet: true });
   if (!response.ok) throw await failure(response, "Could not read the security settings");
   return (await response.json()).levers ?? [];
 }

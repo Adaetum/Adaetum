@@ -211,7 +211,7 @@ export interface Autoscaler {
 export const SUPPORTED_SCHEMA_VERSION = 1;
 
 export async function fetchReport(signal?: AbortSignal): Promise<Report> {
-  const response = await authedFetch("/api/v1/inspect", { signal });
+  const response = await authedFetch("/api/v1/inspect", { signal, quiet: true });
   if (!response.ok) throw new Error(`The agent did not respond correctly (HTTP ${response.status})`);
   return response.json();
 }

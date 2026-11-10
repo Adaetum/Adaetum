@@ -16,6 +16,7 @@ BOOTSTRAP_DEBUG_SSH_KEY="${BOOTSTRAP_DEBUG_SSH_KEY:-}"
 BOOTSTRAP_DEBUG_SUDO="${BOOTSTRAP_DEBUG_SUDO:-__BOOTSTRAP_DEBUG_SUDO__}"
 BOOTSTRAP_DIAGNOSTICS_TAILSCALE="${BOOTSTRAP_DIAGNOSTICS_TAILSCALE:-__BOOTSTRAP_DIAGNOSTICS_TAILSCALE__}"
 LOG_HOST="$(hostname -s 2>/dev/null || echo node-bootstrap)"
+LOG_RUN_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo boot)-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 log_file="/var/log/tailscale-firstboot.log"
 mkdir -p "$(dirname "${log_file}")"
 : > "${log_file}"
@@ -47,8 +48,6 @@ fi
 if [[ "${FIRSTBOOT_NO_POWEROFF}" == __*__ ]] || [ -z "${FIRSTBOOT_NO_POWEROFF}" ]; then
   FIRSTBOOT_NO_POWEROFF="0"
 fi
-
-ensure_bootstrap_runtime_env
 
 if [[ "${BOOTSTRAP_DEBUG_USER}" == __*__ ]]; then
   BOOTSTRAP_DEBUG_USER=""
@@ -95,6 +94,7 @@ upload_log() {
   response_file="$(mktemp)"
   curl_rc=0
   http_code="$(curl -4 --http1.1 -sS -o "${response_file}" -w "%{http_code}" --connect-timeout 3 --max-time 10 --retry 2 --retry-delay 1 --retry-all-errors -X POST \
+    -H "x-ks-log-run: ${LOG_RUN_ID}" \
     --data-binary @"${log_path}" \
     "${log_url}" || curl_rc=$?)"
 
@@ -126,6 +126,24 @@ upload_log() {
   rm -f "${response_file}" 2>/dev/null || true
   return 0
 }
+
+# The runtime payload is the first network-backed dependency. Fetch it only
+# after an EXIT handler exists, otherwise a bad Worker URL or token leaves no
+# remotely retrievable evidence. The handoff also installs a retry timer for
+# a network that is not usable at this first attempt.
+firstboot_early_exit_trap() {
+  local rc="$?"
+  if [ "${rc}" -ne 0 ]; then
+    echo "[BOOTSTRAP] Early first-boot failure (rc=${rc}); uploading retained log"
+    upload_log "${log_file}" first-boot.log || true
+  fi
+  return "${rc}"
+}
+trap firstboot_early_exit_trap EXIT
+
+echo "[BOOTSTRAP] First-boot log initialized; fetching runtime payload next"
+upload_log "${log_file}" first-boot.log || true
+ensure_bootstrap_runtime_env
 
 CURRENT_STEP=""
 STEP_INDEX=0
