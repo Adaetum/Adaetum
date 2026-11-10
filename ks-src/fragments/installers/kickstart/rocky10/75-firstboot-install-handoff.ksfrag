@@ -119,6 +119,13 @@ case "${BOOTSTRAP_SHARED_TOKEN:-}" in
   __*__) BOOTSTRAP_SHARED_TOKEN="" ;;
 esac
 
+# The timer fires every 15 seconds so first boot can be followed live. Once first
+# boot is finished that is more than needed, so only the first run of each minute
+# continues.
+if [ -e /var/lib/tailscale-firstboot.done ] && [ "$(date +%S | sed 's/^0//')" -ge 15 ]; then
+  exit 0
+fi
+
 host="$(hostname -s 2>/dev/null || echo node-bootstrap)"
 log_run_id="retry-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo boot)"
 base_url="${LOG_UPLOAD_URL}"
@@ -139,6 +146,32 @@ upload() {
 upload /root/bootstrap-post.log os-installation.log
 upload /var/log/tailscale-firstboot.log first-boot.log
 upload /var/log/ansible-bundle-bootstrap.log ansible-bundle-bootstrap.log
+
+# While first boot is unfinished, also send everything the system itself says,
+# errors or not. The first-boot script's own log cannot show a unit that never
+# started, a Condition that skipped it, or a failure before the script opened its
+# log; the journal and unit state can. Stable names overwrite the last copy.
+if [ ! -e /var/lib/tailscale-firstboot.done ]; then
+  live="$(mktemp)"
+  {
+    echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) host=${host} ==="
+    echo "=== systemctl --failed ==="
+    systemctl --failed --no-pager --plain 2>&1
+    echo
+    for unit in tailscale-firstboot.service ansible-bundle-bootstrap.service tailscaled.service adaetum-agent.service network-online.target; do
+      echo "=== systemctl status ${unit} ==="
+      systemctl status "${unit}" --no-pager -l 2>&1
+      echo
+    done
+    echo "=== recent SELinux denials ==="
+    ausearch -m avc,user_avc -ts boot 2>&1 | tail -n 100
+    echo
+    echo "=== journalctl -b ==="
+    journalctl -b --no-pager -o short-iso 2>&1
+  } 2>&1 | tail -c 8388608 > "${live}"
+  upload "${live}" first-boot-journal.log
+  rm -f "${live}"
+fi
 SCRIPT
 chmod 0700 /usr/local/sbin/adaetum-bootstrap-log-upload.sh
 
@@ -158,8 +191,10 @@ cat >/etc/systemd/system/adaetum-bootstrap-log-upload.timer <<'UNIT'
 Description=Retry Adaetum bootstrap diagnostic upload
 
 [Timer]
-OnBootSec=30s
-OnUnitActiveSec=1min
+OnBootSec=10s
+OnUnitActiveSec=15s
+# systemd's default accuracy is one minute, which would stretch 15s to 60s.
+AccuracySec=1s
 Persistent=true
 Unit=adaetum-bootstrap-log-upload.service
 
