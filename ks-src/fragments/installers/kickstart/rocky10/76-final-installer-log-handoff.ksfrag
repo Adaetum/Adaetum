@@ -1,0 +1,106 @@
+# This is deliberately a separate, final %post block.  If the main bootstrap
+# %post exits before it creates tailscale-firstboot.service, Anaconda still runs
+# this non-erroronfail handoff and the installed system retains a way to report
+# the failure on its first ordinary boot.
+%post --nochroot --interpreter=/bin/bash
+set -u
+
+target_root="/mnt/sysroot"
+[ -d "${target_root}" ] || exit 0
+
+evidence_dir="${target_root}/root/bootstrap-installer-final"
+mkdir -p "${evidence_dir}" || exit 0
+for source in \
+  /tmp/adaetum-post-growfs.log \
+  /tmp/adaetum-post-storage-diag.log \
+  /tmp/adaetum-post-embed-repo.log \
+  /tmp/ks-pre.log \
+  /tmp/ks-storage-watch.log \
+  /tmp/anaconda.log \
+  /tmp/program.log \
+  /tmp/storage.log
+do
+  [ -f "${source}" ] || continue
+  cp -f "${source}" "${evidence_dir}/$(basename "${source}")" 2>/dev/null || true
+done
+
+install -d -m 0700 "${target_root}/var/lib/adaetum" "${target_root}/usr/local/sbin" "${target_root}/etc/systemd/system" "${target_root}/etc/systemd/system/multi-user.target.wants" || exit 0
+touch "${target_root}/var/lib/adaetum/installer-log-upload.pending"
+
+cat >"${target_root}/usr/local/sbin/adaetum-installer-log-upload.sh" <<'SCRIPT'
+#!/bin/bash
+set -u
+
+pending="/var/lib/adaetum/installer-log-upload.pending"
+[ -e "${pending}" ] || exit 0
+base_url="__KS_LOG_URL__"
+shared_token="__BOOTSTRAP_SHARED_TOKEN__"
+case "${base_url}" in ""|__*__|__KS_LOG_URL_PLACEHOLDER__) exit 1 ;; esac
+case "${shared_token}" in __*__) shared_token="" ;; esac
+[ -n "${shared_token}" ] || exit 1
+
+host="$(hostname -s 2>/dev/null || echo node-bootstrap)"
+run_id="installer-recovery-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo boot)"
+case "${base_url}" in *\?*) base_url="${base_url}&token=${shared_token}" ;; *) base_url="${base_url}?token=${shared_token}" ;; esac
+
+attempt=0
+failed=0
+upload() {
+  local path="$1" name="$2" sep="?"
+  [ -s "${path}" ] || return 0
+  attempt=$((attempt + 1))
+  case "${base_url}" in *\?*) sep="&" ;; esac
+  if ! curl -4 --http1.1 -fsS --connect-timeout 5 --max-time 30 --retry 2 --retry-delay 2 \
+    -H "x-ks-log-run: ${run_id}" \
+    -X POST --data-binary @"${path}" \
+    "${base_url}${sep}host=${host}&file=${name}" >/dev/null; then
+    failed=1
+  fi
+}
+
+upload /root/bootstrap-post.log os-installation.log
+upload /root/firstboot.log anaconda-post.log
+for path in /root/bootstrap-installer-final/*; do
+  [ -f "${path}" ] || continue
+  upload "${path}" "installer-$(basename "${path}")"
+done
+
+# A missing optional file is not a failure.  A present file that cannot reach
+# the Worker is: leave the pending marker for systemd to retry after networking
+# settles, rather than silently losing the only installer-side evidence.
+if [ "${failed}" -ne 0 ]; then
+  exit 1
+fi
+rm -f "${pending}"
+exit 0
+SCRIPT
+chmod 0700 "${target_root}/usr/local/sbin/adaetum-installer-log-upload.sh"
+
+cat >"${target_root}/etc/systemd/system/adaetum-installer-log-upload.service" <<'UNIT'
+[Unit]
+Description=Deliver retained Adaetum installer diagnostics
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/var/lib/adaetum/installer-log-upload.pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/adaetum-installer-log-upload.sh
+Restart=on-failure
+RestartSec=30s
+UNIT
+
+ln -sfn /etc/systemd/system/adaetum-installer-log-upload.service \
+  "${target_root}/etc/systemd/system/multi-user.target.wants/adaetum-installer-log-upload.service" 2>/dev/null || true
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon -R "${target_root}/var/lib/adaetum" "${target_root}/usr/local/sbin/adaetum-installer-log-upload.sh" "${target_root}/etc/systemd/system/adaetum-installer-log-upload.service" 2>/dev/null || true
+fi
+printf '%s\n' '[BOOTSTRAP] Final installer log-recovery handoff installed for first normal boot.' >>"${evidence_dir}/handoff.log"
+
+# Make one final installer-context attempt now, while Anaconda still has its
+# network state. If it cannot reach the Worker, the enabled target-side service
+# above retries from the first normal boot without relying on join first boot.
+if [ -x /tmp/collect-storage-diag.sh ]; then
+  /tmp/collect-storage-diag.sh /tmp >>"${evidence_dir}/handoff.log" 2>&1 || true
+fi
+%end

@@ -192,6 +192,12 @@ add_file "/mnt/sysroot/root/bootstrap-storage-diag/program.log" "sysroot/root/bo
 add_file "/mnt/sysroot/root/bootstrap-storage-diag/syslog" "sysroot/root/bootstrap-storage-diag/syslog"
 add_file "/mnt/sysroot/root/bootstrap-storage-diag/lsblk-post.txt" "sysroot/root/bootstrap-storage-diag/lsblk-post.txt"
 add_file "/mnt/sysroot/root/bootstrap-storage-diag/blkid-post.txt" "sysroot/root/bootstrap-storage-diag/blkid-post.txt"
+add_file "/mnt/sysroot/root/bootstrap-post.log" "sysroot/root/bootstrap-post.log"
+add_file "/mnt/sysroot/root/firstboot.log" "sysroot/root/firstboot.log"
+add_file "/mnt/sysroot/root/bootstrap-installer-final/adaetum-post-growfs.log" "sysroot/root/bootstrap-installer-final/adaetum-post-growfs.log"
+add_file "/mnt/sysroot/root/bootstrap-installer-final/adaetum-post-storage-diag.log" "sysroot/root/bootstrap-installer-final/adaetum-post-storage-diag.log"
+add_file "/mnt/sysroot/root/bootstrap-installer-final/adaetum-post-embed-repo.log" "sysroot/root/bootstrap-installer-final/adaetum-post-embed-repo.log"
+add_file "/mnt/sysroot/root/bootstrap-installer-final/handoff.log" "sysroot/root/bootstrap-installer-final/handoff.log"
 
 {
   echo "=== lsblk ==="

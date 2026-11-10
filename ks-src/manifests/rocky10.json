@@ -170,6 +170,12 @@
       "phase": "firstboot",
       "kind": "installer",
       "path": "fragments/installers/kickstart/rocky10/75-firstboot-install-handoff.ksfrag"
+    },
+    {
+      "id": "final-installer-log-handoff",
+      "phase": "firstboot",
+      "kind": "installer",
+      "path": "fragments/installers/kickstart/rocky10/76-final-installer-log-handoff.ksfrag"
     }
   ]
 }
