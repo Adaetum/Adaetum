@@ -245,7 +245,8 @@ Ansible path, never by the agent running commands itself.
   tailnet owner can connect as `ansible`, and only `ansible`, to any host tagged
   `tag:cluster`, nobody else):
   `{"action": "accept", "src": ["autogroup:owner"], "dst": ["tag:cluster"],
-  "users": ["ansible"]}`. Setup should write this by default, and the page
+  "users": ["ansible"]}`. Setup writes this by default (done: the Tailscale policy step in
+  `bootstrap-tailscale.py`, removed again by `task reset:cloud`), and the page
   builds on it by adding named people and users. Tailscale SSH checks the login
   name too, so each user must be listed ("does not permit you to SSH as user"
   means the host matched but the user did not). `root` is deliberately left out:

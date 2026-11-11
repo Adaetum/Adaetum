@@ -204,3 +204,96 @@ func TestAnEnvWithoutTheOperatorClientIsBlocked(t *testing.T) {
 		t.Fatalf("finding = %+v, err = %v", finding, err)
 	}
 }
+
+// ---- the SSH rule setup adds to the tailnet policy -------------------------------------
+
+const envWithNodeSecret = envText + "TAILSCALE_OAUTH_CLIENT_SECRET=node-secret\n"
+
+const sshTool = "python3 ./tasks/scripts/bootstrap-tailscale.py --oauth-credentials-stdin --tailnet example.ts.net --cluster-tag tag:cluster --reset-ssh-rule"
+
+// sshHarness is harness plus the two answers the SSH-rule tool gives: the listing, and the removal.
+func sshHarness(t *testing.T, env string, listing sys.Result) (*Step, *sys.Fake) {
+	t.Helper()
+	s, f := harness(t, env)
+	f.Rules = append([]sys.Rule{
+		{Prefix: sshTool + " --reset-confirm-ssh", Result: ok(`{"rules":[],"deleted":1}`)},
+		{Prefix: sshTool, Result: listing},
+	}, f.Rules...)
+	return s, f
+}
+
+func indexOfCall(f *sys.Fake, sub string) int {
+	for i, c := range f.Calls {
+		if strings.Contains(c, sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestEverythingAlsoRemovesTheSSHRuleBeforeTheOAuthClientThatCanEditTheTailnetPolicy(t *testing.T) {
+	s, f := sshHarness(t, envWithNodeSecret, ok(`{"rules":[{"action":"accept"}],"deleted":0}`))
+	if err := run(t, s, map[string]string{"reset-what": "everything", "reset-confirm": "yes"}, "ts-token"); err != nil {
+		t.Fatal(err)
+	}
+	rule := indexOfCall(f, "--reset-ssh-rule --reset-confirm-ssh")
+	clients := indexOfCall(f, "--reset-oauth-clients --reset-client-ids node-client,op-client --reset-confirm-ids")
+	if rule < 0 {
+		t.Fatalf("the SSH rule was not removed: %v", f.Calls)
+	}
+	if clients >= 0 && rule > clients {
+		t.Errorf("the SSH rule was removed after the node OAuth client that edits the policy was deleted")
+	}
+	// The node client's secret reaches the tool on standard input, never in the arguments.
+	for i, c := range f.Calls {
+		if strings.Contains(c, "node-secret") {
+			t.Errorf("a secret appeared on the command line: %q", c)
+		}
+		if strings.Contains(c, "--reset-ssh-rule") && !strings.Contains(f.Inputs[i], "node-client\nnode-secret\n") {
+			t.Errorf("the SSH rule tool did not get the node OAuth client on stdin: %q", f.Inputs[i])
+		}
+	}
+}
+
+func TestLookingOnlyNeverTouchesTheSSHRule(t *testing.T) {
+	s, f := sshHarness(t, envWithNodeSecret, ok(`{"rules":[{"action":"accept"}],"deleted":0}`))
+	if err := run(t, s, nil, ""); !errors.Is(err, engine.ErrDeclined) {
+		t.Fatalf("err = %v", err)
+	}
+	if anyCall(f, "--reset-confirm-ssh") {
+		t.Error("a look-only run removed the SSH rule")
+	}
+}
+
+func TestDevicesAndLogsOnlyKeepsTheSSHRule(t *testing.T) {
+	s, f := sshHarness(t, envWithNodeSecret, ok(`{"rules":[{"action":"accept"}],"deleted":0}`))
+	if err := run(t, s, map[string]string{"reset-what": "devices and logs", "reset-confirm": "yes"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if anyCall(f, "--reset-confirm-ssh") {
+		t.Error("removed the cluster-wide SSH rule when only devices and logs were chosen")
+	}
+}
+
+func TestWithoutTheNodeClientSecretTheSSHRuleIsNotLookedFor(t *testing.T) {
+	s, f := sshHarness(t, envText, ok(`{"rules":[{"action":"accept"}],"deleted":0}`))
+	if err := run(t, s, map[string]string{"reset-what": "everything", "reset-confirm": "yes"}, "ts-token"); err != nil {
+		t.Fatal(err)
+	}
+	if anyCall(f, "--reset-ssh-rule") {
+		t.Error("looked for the SSH rule without the credentials that can read the policy")
+	}
+}
+
+func TestAFailedSSHRuleLookupIsReportedAndDoesNotBlockTheRest(t *testing.T) {
+	s, f := sshHarness(t, envWithNodeSecret, sys.Result{ExitCode: 1, Stderr: "policy_file scope missing"})
+	if err := run(t, s, map[string]string{"reset-what": "everything", "reset-confirm": "yes"}, "ts-token"); err != nil {
+		t.Fatalf("a failed rule lookup stopped the reset: %v", err)
+	}
+	if anyCall(f, "--reset-confirm-ssh") {
+		t.Error("tried to remove a rule it could not see")
+	}
+	if !anyCall(f, "--reset-devices --reset-confirm-ids 1,2") {
+		t.Error("devices were not removed after the rule lookup failed")
+	}
+}

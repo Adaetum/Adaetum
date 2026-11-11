@@ -96,7 +96,7 @@ func (s *Step) Plan(ctx context.Context, env *engine.Env) ([]string, error) {
 	return []string{
 		"Use a Cloudflare account token (saved one if still valid) and choose your public DNS zone and its owning account.",
 		"Use a one-day Tailscale access token and choose your tailnet.",
-		"Prepare Tailscale tag ownership, then create the scoped node and Kubernetes operator OAuth clients.",
+		"Prepare Tailscale tag ownership and the owner's SSH rule for cluster hosts, then create the scoped node and Kubernetes operator OAuth clients.",
 		"Keep provider credentials in memory for the remaining setup stages.",
 		"Right now: " + finding.Detail + ".",
 	}, nil
@@ -492,7 +492,7 @@ func (f *flow) tailscale(ctx context.Context, existing platform.Profile) (string
 			return "", errors.New("unable to prepare Tailscale tag ownership; check that the access token can write the policy file")
 		}
 	}
-	f.say("Tailscale tag ownership is ready.")
+	f.say("Tailscale tag ownership and the SSH rule for cluster hosts are ready.")
 	return tailnet, nil
 }
 

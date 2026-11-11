@@ -9,6 +9,7 @@ This loads the real scripts and exercises their selection and delete functions
 against fake data; it makes no network calls.
 """
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -74,6 +75,88 @@ def main() -> int:
     ts.delete_reset_devices("token", current, [])
     check(not calls, "an empty confirmation list must delete nothing")
 
+    # The SSH rule: only setup's exact rule is selected or removed; an operator's own SSH
+    # rules, even similar ones, and every other part of the policy are left alone.
+    ours = ts.default_ssh_rule("tag:cluster")
+    check(ours == {"action": "accept", "src": ["autogroup:owner"], "dst": ["tag:cluster"], "users": ["ansible"]}, f"setup's SSH rule is not what the docs promise: {ours}")
+    theirs = [
+        {"action": "accept", "src": ["autogroup:owner"], "dst": ["tag:cluster"], "users": ["root"]},
+        {"action": "accept", "src": ["autogroup:owner"], "dst": ["tag:cluster"], "users": ["ansible"], "checkPeriod": "12h"},
+        {"action": "check", "src": ["autogroup:owner"], "dst": ["tag:cluster"], "users": ["ansible"]},
+        {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:cluster"], "users": ["ansible"]},
+        {"action": "accept", "src": ["autogroup:owner"], "dst": ["tag:other"], "users": ["ansible"]},
+        "not-a-rule",
+    ]
+    policy = {"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}], "tagOwners": {"tag:cluster": ["autogroup:admin"]}, "ssh": theirs + [dict(ours)]}
+    check(ts.select_ssh_rules(policy, "tag:cluster") == [ours], "selected an SSH rule that is not exactly setup's")
+    check(ts.select_ssh_rules({"ssh": theirs}, "tag:cluster") == [], "an operator's own SSH rules were selected")
+    check(ts.select_ssh_rules({}, "tag:cluster") == [] and ts.select_ssh_rules({"ssh": "x"}, "tag:cluster") == [], "a policy with no ssh list selected something")
+
+    import copy
+    posted: list = []
+
+    def fake_policy_api(method, url, **kw):
+        if method == "GET":
+            return 200, {"acl": json.dumps(copy.deepcopy(policy))}, ""
+        posted.append(kw.get("payload"))
+        return 200, {}, ""
+
+    ts._request = fake_policy_api
+    check(len(ts.list_reset_ssh_rule("t", "example.ts.net", "tag:cluster")) == 1, "listing did not find setup's rule")
+    check(not posted, "listing changed the policy")
+    removed = ts.delete_reset_ssh_rule("t", "example.ts.net", "tag:cluster")
+    check(len(removed) == 1 and len(posted) == 1, "removing did not write the policy exactly once")
+    if posted:
+        check(posted[0]["ssh"] == theirs, "removing setup's rule changed other SSH rules")
+        check(posted[0]["acls"] == policy["acls"] and posted[0]["tagOwners"] == policy["tagOwners"], "removing the SSH rule changed the rest of the policy")
+
+    posted.clear()
+    only_ours = {"acls": [], "ssh": [dict(ours)]}
+    ts._request = lambda method, url, **kw: (200, {"acl": json.dumps(only_ours)}, "") if method == "GET" else posted.append(kw.get("payload")) or (200, {}, "")
+    ts.delete_reset_ssh_rule("t", "example.ts.net", "tag:cluster")
+    check(posted and "ssh" not in posted[0], "an emptied ssh list should be dropped, not left as []")
+
+    posted.clear()
+    ts._request = lambda method, url, **kw: (200, {"acl": json.dumps({"ssh": theirs})}, "") if method == "GET" else posted.append(kw.get("payload")) or (200, {}, "")
+    check(ts.delete_reset_ssh_rule("t", "example.ts.net", "tag:cluster") == [] and not posted, "wrote the policy back when there was nothing of setup's to remove")
+
+    # Setup adds the same rule (add-only), so reset can remove exactly what setup put there.
+    added = {"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}], "tagOwners": {}}
+    check(ts._merge_ssh_rule(added, "tag:cluster") is True and added["ssh"] == [ours], "setup did not add its SSH rule to a policy without an ssh section")
+    check(ts._merge_ssh_rule(added, "tag:cluster") is False and added["ssh"] == [ours], "setup added its SSH rule twice")
+    default_rule = {"action": "check", "src": ["autogroup:member"], "dst": ["autogroup:self"], "users": ["autogroup:nonroot", "root"]}
+    existing = {"ssh": [dict(default_rule), dict(theirs[0])]}
+    check(ts._merge_ssh_rule(existing, "tag:cluster") is True, "setup did not add its SSH rule next to existing ones")
+    check(existing["ssh"][:2] == [default_rule, theirs[0]] and existing["ssh"][2] == ours, "adding the SSH rule changed or reordered the operator's own rules")
+    check(ts._merge_ssh_rule({"ssh": []}, "tag:cluster") is True, "setup did not add its SSH rule to an empty ssh list")
+    custom_tag_policy: dict = {}
+    ts._merge_ssh_rule(custom_tag_policy, "lab")
+    check(custom_tag_policy["ssh"][0]["dst"] == ["tag:lab"], "the SSH rule did not follow a custom cluster tag")
+    try:
+        ts._merge_ssh_rule({"ssh": "oops"}, "tag:cluster")
+        failures.append("an ssh section that is not a list was overwritten")
+    except RuntimeError:
+        pass
+
+    # Through the real ensure function: one POST carrying the rule, and nothing posted when
+    # the policy already has everything setup needs (so a rerun does not rewrite the policy).
+    base = {"tagOwners": {}, "acls": [], "grants": [], "autoApprovers": {}}
+    state = {"policy": copy.deepcopy(base)}
+    writes: list = []
+
+    def fake_ensure_api(method, url, **kw):
+        if method == "GET":
+            return 200, {"acl": json.dumps(copy.deepcopy(state["policy"]))}, ""
+        writes.append(kw.get("payload"))
+        state["policy"] = copy.deepcopy(kw.get("payload"))
+        return 200, {}, ""
+
+    ts._request = fake_ensure_api
+    ts.ensure_required_tag_owners("example.ts.net", user_token="tok", cluster_tag="tag:cluster")
+    check(len(writes) == 1 and ours in writes[0].get("ssh", []), "preparing the policy did not write the SSH rule")
+    ts.ensure_required_tag_owners("example.ts.net", user_token="tok", cluster_tag="tag:cluster")
+    check(len(writes) == 1, "a second run rewrote a policy that already had everything")
+
     cf = load(CLOUDFLARE, "bootstrap_cloudflare")
     check(cf.host_log_prefix("node-42187") == "logs/node-42187/", "host log prefix is not the exact host folder")
     for bad in ("", " ", "../x", "a/b", "node 1", "-x", "x" * 80, "node-1/", "*"):
@@ -105,7 +188,7 @@ def main() -> int:
         print(failure, file=sys.stderr)
     if failures:
         return 1
-    print("Cloud reset selection check passed: only tagged devices, recorded OAuth clients and one host's exact log prefix; nothing unconfirmed.")
+    print("Cloud reset selection check passed: only tagged devices, recorded OAuth clients, setup's exact SSH rule and one host's exact log prefix; nothing unconfirmed.")
     return 0
 
 

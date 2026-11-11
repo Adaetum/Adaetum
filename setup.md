@@ -174,10 +174,15 @@ provider values.
 
 Between test installs, `task reset:cloud` removes what setup created so the next
 install starts clean: the cluster's Tailscale devices (hosts, the operator and its
-proxies), the two Adaetum OAuth clients, and the install logs in R2 of every host it
-removed. It reads a `.env` or the downloaded recovery file, which has the same format,
-and only touches devices carrying the tags setup applies and OAuth clients whose IDs
-that file records. It does not edit your tailnet policy.
+proxies), the two Adaetum OAuth clients, the SSH rule that lets the tailnet owner SSH
+to cluster hosts as `ansible`, and the install logs in R2 of every host it removed. It
+reads a `.env` or the downloaded recovery file, which has the same format, and only
+touches devices carrying the tags setup applies and OAuth clients whose IDs that file
+records. The rest of your tailnet policy is never edited: the only change is deleting
+that one SSH rule, and only if it matches setup's rule exactly (accept, from the owner,
+to the cluster tag, as `ansible`). A rule you wrote any other way is left alone. Choosing
+"Everything" removes it, before the node OAuth client that is allowed to edit the policy
+is deleted.
 
 ```bash
 task reset:cloud
@@ -406,6 +411,14 @@ must exist in the tailnet policy. After the tailnet DNS name is known,
 `task init` uses the API token to merge the missing Adaetum tag ownership into
 the existing policy. The OAuth screen can then offer `tag:rocky10`,
 `tag:server`, and `tag:cluster`. Existing policy entries are preserved.
+
+The same step adds one SSH rule to the policy's `ssh` section, so the tailnet owner can
+connect to the cluster's hosts as `ansible` (for example to read a host's agent token
+from `/etc/adaetum/agent-token` on a fresh install): accept, from `autogroup:owner`, to
+`tag:cluster`, as `ansible`. Tailscale SSH checks the login name as well as the host, so
+without a rule naming `ansible` the connection is refused. The rule is only ever added,
+never changed, and `task reset:cloud` removes it again if it still matches exactly.
+Someone who also needs `root` or other people should add their own rule beside it.
 
 <details>
 <summary>Tailscale token guidance</summary>

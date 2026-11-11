@@ -75,9 +75,12 @@ func python() string {
 type inputs struct {
 	tailnet, clusterTag     string
 	operatorID, operatorKey string
-	clientIDs               []string
-	cfToken, cfAccount      string
-	bucket                  string
+	// nodeID and nodeKey are the node OAuth client; it alone can read and write the tailnet
+	// policy, where setup's SSH rule lives. Optional: without them the rule is not looked for.
+	nodeID, nodeKey    string
+	clientIDs          []string
+	cfToken, cfAccount string
+	bucket             string
 }
 
 func load(path string) (inputs, error) {
@@ -88,6 +91,8 @@ func load(path string) (inputs, error) {
 		clusterTag:  clean("TAILSCALE_CLUSTER_TAG"),
 		operatorID:  clean("TAILSCALE_OPERATOR_OAUTH_CLIENT_ID"),
 		operatorKey: clean("TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET"),
+		nodeID:      clean("TAILSCALE_OAUTH_CLIENT_ID"),
+		nodeKey:     clean("TAILSCALE_OAUTH_CLIENT_SECRET"),
 		cfToken:     clean("CLOUDFLARE_API_TOKEN"),
 		cfAccount:   clean("CLOUDFLARE_ACCOUNT_ID"),
 		bucket:      clean("R2_BUCKET"),
@@ -119,7 +124,7 @@ func (s *Step) Check(_ context.Context, _ *engine.Env) (engine.Finding, error) {
 func (s *Step) Plan(_ context.Context, _ *engine.Env) ([]string, error) {
 	return []string{
 		"Read the Tailscale and Cloudflare details recorded in " + s.envPath() + ".",
-		"List the cluster's Tailscale devices, the two Adaetum OAuth clients, and the install logs of those hosts.",
+		"List the cluster's Tailscale devices, the two Adaetum OAuth clients, setup's SSH rule in the tailnet policy, and the install logs of those hosts.",
 		"Ask before removing anything, then remove exactly what was listed.",
 	}, nil
 }
@@ -171,6 +176,28 @@ func (s *Step) devices(ctx context.Context, in inputs, confirm []string) (found 
 		return nil, nil, fmt.Errorf("Tailscale devices: unreadable answer: %w", err)
 	}
 	return parsed.Devices, parsed.Deleted, nil
+}
+
+// sshRule counts (or, with remove, deletes) the SSH rule setup adds to the tailnet policy,
+// the exact rule that lets the tailnet owner SSH to cluster hosts as ansible. A policy rule
+// the operator wrote any other way is never touched (see bootstrap-tailscale.py).
+func (s *Step) sshRule(ctx context.Context, in inputs, remove bool) (found, deleted int, err error) {
+	args := []string{tailscaleTool, "--oauth-credentials-stdin", "--tailnet", in.tailnet, "--cluster-tag", in.clusterTag, "--reset-ssh-rule"}
+	if remove {
+		args = append(args, "--reset-confirm-ssh")
+	}
+	out, err := s.tool(ctx, in.nodeID+"\n"+in.nodeKey+"\n", args...)
+	if err != nil {
+		return 0, 0, fmt.Errorf("Tailscale SSH rule: %w", err)
+	}
+	var parsed struct {
+		Rules   []json.RawMessage `json:"rules"`
+		Deleted int               `json:"deleted"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		return 0, 0, fmt.Errorf("Tailscale SSH rule: unreadable answer: %w", err)
+	}
+	return len(parsed.Rules), parsed.Deleted, nil
 }
 
 func (s *Step) clients(ctx context.Context, in inputs, token string, confirm []string) (found []client, deleted []string, err error) {
@@ -251,14 +278,24 @@ func (s *Step) Apply(ctx context.Context, _ *engine.Env, ui engine.UI) error {
 		}
 	}
 
-	say(summary(devs, nil, logCounts))
-	if len(devs) == 0 && totalLogs(logCounts) == 0 && len(in.clientIDs) == 0 {
+	// The SSH rule is checked with the node OAuth client; if that cannot be done, say so
+	// rather than report a clean reset while the rule is still there.
+	sshRules := 0
+	if in.nodeID != "" && in.nodeKey != "" {
+		if sshRules, _, err = s.sshRule(ctx, in, false); err != nil {
+			say("Could not check the tailnet policy for the SSH rule: " + err.Error())
+			sshRules, err = 0, nil
+		}
+	}
+
+	say(summary(devs, nil, logCounts, sshRules))
+	if len(devs) == 0 && totalLogs(logCounts) == 0 && len(in.clientIDs) == 0 && sshRules == 0 {
 		say("Nothing to remove: no cluster devices, recorded OAuth clients or host logs were found.")
 		return nil
 	}
 
 	var options []string
-	if len(devs) > 0 || len(in.clientIDs) > 0 {
+	if len(devs) > 0 || len(in.clientIDs) > 0 || sshRules > 0 {
 		options = append(options, optEverything)
 	}
 	if len(devs) > 1 {
@@ -338,11 +375,17 @@ func (s *Step) Apply(ctx context.Context, _ *engine.Env, ui engine.UI) error {
 	}
 	sort.Strings(cleanHosts)
 
-	if len(chosen) == 0 && len(clients) == 0 {
+	// The rule is about the whole cluster tag, not one host, so it goes only with "Everything".
+	removeRule := what == optEverything && sshRules > 0
+	ruleCount := 0
+	if removeRule {
+		ruleCount = sshRules
+	}
+	if len(chosen) == 0 && len(clients) == 0 && !removeRule {
 		say("Nothing selected, so nothing was removed.")
 		return nil
 	}
-	list := summary(chosen, clients, selected)
+	list := summary(chosen, clients, selected, ruleCount)
 	for _, line := range strings.Split(list, "\n") {
 		say(line)
 	}
@@ -358,6 +401,14 @@ func (s *Step) Apply(ctx context.Context, _ *engine.Env, ui engine.UI) error {
 		return err
 	}
 
+	// First, while the node OAuth client still exists (it is removed with the clients below).
+	if removeRule {
+		_, gone, err := s.sshRule(ctx, in, true)
+		if err != nil {
+			return err
+		}
+		say(fmt.Sprintf("Removed %d SSH rule(s) from the tailnet policy.", gone))
+	}
 	if len(chosen) > 0 {
 		ids := make([]string, 0, len(chosen))
 		for _, d := range chosen {
@@ -413,7 +464,7 @@ func totalLogs(m map[string]int) int {
 }
 
 // summary is the plain-words list the operator confirms.
-func summary(devs []device, clients []client, logs map[string]int) string {
+func summary(devs []device, clients []client, logs map[string]int, sshRules int) string {
 	var b strings.Builder
 	if len(devs) > 0 {
 		b.WriteString(fmt.Sprintf("Tailscale devices (%d):\n", len(devs)))
@@ -434,6 +485,9 @@ func summary(devs []device, clients []client, logs map[string]int) string {
 		for _, c := range clients {
 			b.WriteString(fmt.Sprintf("  • %s (%s)\n", c.Description, c.ID))
 		}
+	}
+	if sshRules > 0 {
+		b.WriteString("Tailnet SSH rule: the owner may SSH to the cluster's hosts as ansible.\n")
 	}
 	if n := totalLogs(logs); n > 0 {
 		b.WriteString(fmt.Sprintf("Install logs in R2: %d file(s) for %d host(s).\n", n, len(logs)))

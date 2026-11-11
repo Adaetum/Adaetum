@@ -206,11 +206,33 @@ def _merge_operator_access(policy_obj: dict):
   return changed
 
 
+def _merge_ssh_rule(policy_obj: dict, cluster_tag: str):
+  """Add setup's SSH rule if it is not already there. Add-only: nothing else is touched.
+
+  The rule lets the tailnet owner SSH to cluster hosts as ansible, so a person can read a
+  host's agent token on a fresh install. Tailscale checks the login name as well as the
+  host, so without a rule naming ansible the connection is refused. An existing ssh list
+  (including Tailscale's default rule) is kept and ours is appended.
+  """
+  rule = default_ssh_rule(cluster_tag)
+  ssh = policy_obj.get("ssh")
+  if ssh is None:
+    policy_obj["ssh"] = [rule]
+    return True
+  if not isinstance(ssh, list):
+    raise RuntimeError("The tailnet policy's ssh section is not a list, so the SSH rule was not added.")
+  if rule in ssh:
+    return False
+  ssh.append(rule)
+  return True
+
+
 def ensure_required_tag_owners(
   tailnet: str,
   oauth_client_id: str = "",
   oauth_client_secret: str = "",
   user_token: str = "",
+  cluster_tag: str = "",
 ):
   tailnet_clean = (tailnet or "").strip()
   if not tailnet_clean:
@@ -239,6 +261,7 @@ def ensure_required_tag_owners(
 
   changed = _merge_tag_owners(policy_obj)
   changed = _merge_operator_access(policy_obj) or changed
+  changed = _merge_ssh_rule(policy_obj, cluster_tag) or changed
   if not changed:
     return
 
@@ -465,6 +488,67 @@ def delete_reset_clients(bearer_token: str, tailnet: str, current, confirmed_ids
   return deleted
 
 
+SSH_RULE_USER = "ansible"
+
+
+def default_ssh_rule(cluster_tag: str):
+  """The one SSH rule setup owns: the tailnet owner may SSH to cluster hosts as ansible."""
+  return {
+    "action": "accept",
+    "src": ["autogroup:owner"],
+    "dst": [normalize_tag(cluster_tag or DEFAULT_CLUSTER_TAG)],
+    "users": [SSH_RULE_USER],
+  }
+
+
+def select_ssh_rules(policy_obj, cluster_tag: str):
+  """Return the policy's ssh entries that are exactly setup's rule, and nothing else.
+
+  A rule counts only if it has the same four fields and values and no others. One the
+  operator wrote differently (another user, another source, an extra field such as
+  checkPeriod) is theirs and is never selected, even if it looks similar.
+  """
+  wanted = default_ssh_rule(cluster_tag)
+  ssh = policy_obj.get("ssh") if isinstance(policy_obj, dict) else None
+  if not isinstance(ssh, list):
+    return []
+  return [rule for rule in ssh if isinstance(rule, dict) and rule == wanted]
+
+
+def _read_policy(bearer_token: str, tailnet: str):
+  acl_url = f"{TS_API_BASE}/api/v2/tailnet/{tailnet}/acl"
+  _, parsed, body = _request("GET", acl_url, bearer_token=bearer_token)
+  policy_obj = _extract_policy_obj(parsed if isinstance(parsed, dict) else {}, body)
+  if not isinstance(policy_obj, dict):
+    raise RuntimeError("Tailscale ACL policy did not parse as a JSON object.")
+  return acl_url, policy_obj
+
+
+def list_reset_ssh_rule(bearer_token: str, tailnet: str, cluster_tag: str):
+  _, policy_obj = _read_policy(bearer_token, tailnet)
+  return select_ssh_rules(policy_obj, cluster_tag)
+
+
+def delete_reset_ssh_rule(bearer_token: str, tailnet: str, cluster_tag: str):
+  """Remove setup's SSH rule from the policy and write the policy back; return what was removed.
+
+  The policy is read again here, so only a rule still present now is removed, and every
+  other part of the policy is written back unchanged.
+  """
+  acl_url, policy_obj = _read_policy(bearer_token, tailnet)
+  doomed = select_ssh_rules(policy_obj, cluster_tag)
+  if not doomed:
+    return []
+  wanted = default_ssh_rule(cluster_tag)
+  remaining = [rule for rule in policy_obj["ssh"] if not (isinstance(rule, dict) and rule == wanted)]
+  if remaining:
+    policy_obj["ssh"] = remaining
+  else:
+    del policy_obj["ssh"]
+  _request("POST", acl_url, bearer_token=bearer_token, payload=policy_obj)
+  return doomed
+
+
 def main():
   p = argparse.ArgumentParser()
   p.add_argument("--user-token", default="")
@@ -483,6 +567,8 @@ def main():
   p.add_argument("--reset-devices", action="store_true")
   p.add_argument("--reset-oauth-clients", action="store_true")
   p.add_argument("--reset-client-ids", default="", help="comma-separated OAuth client IDs recorded in .env")
+  p.add_argument("--reset-ssh-rule", action="store_true", help="list (or with --reset-confirm-ssh, remove) the SSH rule setup adds to the tailnet policy")
+  p.add_argument("--reset-confirm-ssh", action="store_true")
   p.add_argument("--reset-confirm-ids", default="", help="comma-separated IDs to delete; empty means list only")
   args = p.parse_args()
 
@@ -511,6 +597,19 @@ def main():
       raise RuntimeError("Operator OAuth client ID and secret are required for validation.")
     oauth_access_token(client_id, client_secret, ["auth_keys", "devices:core", "services"])
     print(f"TAILSCALE_OPERATOR_OAUTH_CLIENT_ID={client_id}")
+    return
+
+  if args.reset_ssh_rule:
+    if not args.tailnet:
+      raise RuntimeError("--tailnet is required for reset.")
+    # Editing the policy needs the node OAuth client (it holds policy_file); the operator's
+    # client does not.
+    if not client_id or not client_secret:
+      raise RuntimeError("The node OAuth client ID and secret are required to read the tailnet policy.")
+    bearer = oauth_access_token(client_id, client_secret, ["policy_file"])
+    found = list_reset_ssh_rule(bearer, args.tailnet, args.cluster_tag)
+    removed = delete_reset_ssh_rule(bearer, args.tailnet, args.cluster_tag) if args.reset_confirm_ssh else []
+    print(json.dumps({"rules": found, "deleted": len(removed)}))
     return
 
   if args.reset_devices or args.reset_oauth_clients:
@@ -542,6 +641,7 @@ def main():
     oauth_client_id=client_id,
     oauth_client_secret=client_secret,
     user_token=user_token,
+    cluster_tag=args.cluster_tag,
   )
 
   if args.prepare_policy_only:
