@@ -9,7 +9,7 @@ source_target_revision: "1.40.3"
 source_helm_values: |
   # Keep the operator pinned to a known chart release. Kubescape's own docs
   # recommend Helm/Argo CD for installation, and the operator is the supported
-  # path for continuous scan results and UI integrations such as Headlamp.
+  # path for continuous scan results and UI integrations.
   clusterName: cluster
 
   capabilities:

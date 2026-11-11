@@ -13,13 +13,11 @@
     ["__GITEA_PUBLIC_HOST__", "__GITEA_LOCAL_HOST__"],
     ["__OPENBAO_PUBLIC_HOST__", "__OPENBAO_LOCAL_HOST__"],
     ["__AUTHENTIK_PUBLIC_HOST__", "__AUTHENTIK_LOCAL_HOST__"],
-    ["__HEADLAMP_PUBLIC_HOST__", "__HEADLAMP_LOCAL_HOST__"],
     ["__ALERTMANAGER_PUBLIC_HOST__", "__ALERTMANAGER_LOCAL_HOST__"],
     ["__GRAFANA_PUBLIC_HOST__", "__GRAFANA_LOCAL_HOST__"],
     ["__PROMETHEUS_PUBLIC_HOST__", "__PROMETHEUS_LOCAL_HOST__"],
     ["__REGISTRY_PUBLIC_HOST__", "__REGISTRY_LOCAL_HOST__"],
     ["__RANCHER_PUBLIC_HOST__", "__RANCHER_LOCAL_HOST__"],
-    ["__CRAFTY_PUBLIC_HOST__", "__CRAFTY_LOCAL_HOST__"],
   ].map(([publicHost, localHost]) => [publicHost.toLowerCase(), localHost.toLowerCase()]);
 
   const hostMap = new Map(

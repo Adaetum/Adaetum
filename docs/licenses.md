@@ -26,12 +26,10 @@ shipped with the exact version before relying on it.
 - **Authentik has one proprietary carve-out.** Its core is MIT, but the
   `authentik/enterprise/` directory is under a separate commercial license.
   Adaetum deploys the standard chart and image; the enterprise features need that separate license.
-- **GPL software runs as separate programs.** Homepage, Crafty Controller and
-  Ansible are GPL-3.0. Adaetum runs them rather than linking them into its own
+- **GPL software runs as separate programs.** Homepage and Ansible are
+  GPL-3.0. Adaetum runs them rather than linking them into its own
   code, so they do not change Adaetum's MIT license. Redistributing their
   source or binaries brings that license's obligations with it.
-- **Optional apps.** Crafty Controller (a game server manager) is deployed as an
-  example workload, not part of the platform.
 
 ## By license
 
@@ -52,7 +50,6 @@ shipped with the exact version before relying on it.
 | Reloader | Restart on secret change |
 | Kubewarden | Admission policy |
 | Kubescape | Security scanning |
-| Headlamp | Kubernetes web UI |
 | Prometheus, Alertmanager, kube-prometheus-stack | Monitoring and alerts |
 | ntfy | Push notifications (dual-licensed Apache-2.0 or GPL-2.0) |
 | Kured | Coordinated reboots |
@@ -105,7 +102,6 @@ your code is unaffected.
 | Component | License | Role |
 | --- | --- | --- |
 | Homepage | GPL-3.0 | Portal dashboard |
-| Crafty Controller | GPL-3.0 | Game server manager (example workload) |
 | Ansible (ansible-core) | GPL-3.0 | Host configuration |
 | Rocky Linux | A mix: mostly GPL and LGPL, plus others | Host operating system |
 | BusyBox, Alpine Linux base layers | GPL-2.0 and others | Helper container images |

@@ -45,7 +45,7 @@ Ask only what you cannot read from the source; propose defaults.
 | Source | Shape | Precedent |
 | --- | --- | --- |
 | A maintained Helm chart | `source_type: helm`, pinned chart version, **inline, commented** `source_helm_values`. Extras the chart cannot hold go in a companion `git` app. | `observability/alertmanager.app.yaml`, `gitea/gitea.app.yaml` + `gitea-secret-sync` |
-| A container image only | `source_type: git`: explicit manifests under `pods/<category>/<app>/`, one file per resource, listed in `kustomization.yaml`. | `portal/homepage/`, `games/crafty/` |
+| A container image only | `source_type: git`: explicit manifests under `pods/<category>/<app>/`, one file per resource, listed in `kustomization.yaml`. | `portal/homepage/` |
 
 Prefer the chart when one exists and is maintained. If the chart is hosted in an OCI
 registry, note in the report that the registry may need adding to Argo CD (unverified
@@ -72,7 +72,7 @@ Files (category `<c>`, app `<a>`):
 - `pods/<c>/<a>/README.md` (git shape) or a header comment block (helm shape) with
   **What it does**, **Notes** (routes, data, first login, anything surprising).
 
-Workload rules (from `homepage` and `crafty`):
+Workload rules (from `homepage`):
 
 - Labels `app.kubernetes.io/name: <a>` on workload, pods and service.
 - Explicit `resources` requests and limits. Probes where the app has a health
@@ -85,8 +85,8 @@ Workload rules (from `homepage` and `crafty`):
   later but not shrunk. So start small and say how to grow it. Defaults:
   **1Gi** for config, small SQLite databases and state kept for a handful of items;
   **2Gi** for a small database or bounded history; anything larger needs a named
-  reason (what fills it and how fast). Precedent: `argocd-audit` 1Gi, `ntfy` 2Gi,
-  while Crafty's 50Gi is justified by game worlds. Chart defaults are often 8-10Gi:
+  reason (what fills it and how fast). Precedent: `argocd-audit` 1Gi, `ntfy` 2Gi.
+  Chart defaults are often 8-10Gi:
   always override and comment why the smaller number is enough. Cap what fills the
   volume where the app allows it (retention days, log rotation) so a lean volume
   doesn't simply fill. In the README say what lives on the volume, the size, and how
@@ -102,7 +102,7 @@ Workload rules (from `homepage` and `crafty`):
   autoscaled apps, so adding one means editing that validator. Propose it, don't add it.
 - Stateful single-writer (SQLite, game servers): `replicas: 1`, `strategy: Recreate`,
   a Longhorn `ReadWriteOnce` volume with an explicit size, and a README line saying
-  why it isn't autoscaled (see `games/crafty/README.md`).
+  why it isn't autoscaled.
 - Hostnames are never typed into Tier 0 files.
 
 ## Beyond Tier 0: the extra tiers
@@ -151,9 +151,9 @@ file: change its template or source and re-render.
   `networkPolicy.allowExternal: true`. Both were found only by rendering.
   Optional per-app assertions exist (`validate-pods-consistency`,
   `validate-ingress-contract`, `validate-setup-pods-roundtrip`) and a Homepage card;
-  Crafty has them, they are not needed for the suite to pass, and each is another
+  Homepage has them, they are not needed for the suite to pass, and each is another
   list to keep in step. Offer, don't add.
-- **Tier 2b, public web route** (**not exercised**). Crafty's commit adds, on top of 2a:
+- **Tier 2b, public web route** (**not exercised**). A public route adds, on top of 2a:
   a `-public-` ingress behind Authentik forward-auth, a positional entry in the
   `authentik-outpost-hosts` ingress rules in `pods/ingress/kustomization.yaml`
   (`spec.rules.<n>.host`, an index that shifts when rules are added), an Authentik
@@ -164,7 +164,7 @@ file: change its template or source and re-render.
   annotation `tailscale.com/proxy-group: adaetum-ingress`, `tls.hosts: [<label>]`,
   `defaultBackend` to the Service and port. The existing grant already allows
   `tcp:443`. A non-HTTP port needs a policy-grant change in
-  `tasks/scripts/bootstrap-tailscale.py` (Crafty's UDP did): stop and ask. A headless
+  `tasks/scripts/bootstrap-tailscale.py`: stop and ask. A headless
   Service needs a ClusterIP companion first (see `gitea-tailnet-backend.yaml`).
 - **Tier 4, autoscaling** (tried on a stateless app). The repository already has the
   pieces: a CPU-only HorizontalPodAutoscaler per app, a memory-only

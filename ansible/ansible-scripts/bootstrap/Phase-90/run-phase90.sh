@@ -303,14 +303,6 @@ validate_gitea_widget_auth_phase90() {
   return 0
 }
 
-validate_headlamp_admin_token_phase90() {
-  local token="${1:-}"
-  if [[ -z "${token}" || -z "${kubectl_bin}" || -z "${KUBECONFIG:-}" ]]; then
-    return 1
-  fi
-  "${kubectl_bin}" --token="${token}" auth can-i get pods --all-namespaces >/dev/null 2>&1
-}
-
 mint_argocd_widget_key_phase90() {
   local admin_password=""
   local token=""
@@ -451,69 +443,6 @@ ensure_grafana_admin_password_phase90() {
   fi
 
   echo "[phase90] reconciled Grafana admin password to bootstrap/OpenBao value"
-}
-
-ensure_headlamp_admin_token_phase90() {
-  local openbao_token="${1:-}"
-  local sa_name="headlamp"
-  local secret_name="headlamp-admin-token"
-  local token=""
-  local existing_secret_token=""
-  local attempt=0
-
-  if [[ -z "${kubectl_bin}" ]]; then
-    echo "[phase90] kubectl not available; cannot reconcile Headlamp admin token" >&2
-    return 1
-  fi
-
-  token="$(read_phase90_bootstrap_field headlamp_admin_token "${openbao_token}")"
-  if validate_headlamp_admin_token_phase90 "${token}"; then
-    write_phase90_bootstrap_field headlamp_admin_username "${sa_name}" "${openbao_token}"
-    write_phase90_bootstrap_field headlamp_admin_token "${token}" "${openbao_token}"
-    echo "[phase90] reconciled Headlamp admin token from OpenBao/bootstrap backup"
-    return 0
-  fi
-
-  "${kubectl_bin}" create namespace headlamp --dry-run=client -o yaml | "${kubectl_bin}" apply -f - >/dev/null
-  for attempt in $(seq 1 90); do
-    if "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 2
-  done
-
-  if ! "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
-    echo "[phase90] Headlamp service account not ready in time" >&2
-    return 1
-  fi
-
-  existing_secret_token="$(read_k8s_secret_key headlamp "${secret_name}" token)"
-  if ! validate_headlamp_admin_token_phase90 "${existing_secret_token}"; then
-    cat <<EOF | "${kubectl_bin}" -n headlamp apply -f - >/dev/null
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ${secret_name}
-  namespace: headlamp
-  annotations:
-    kubernetes.io/service-account.name: ${sa_name}
-type: kubernetes.io/service-account-token
-EOF
-  fi
-
-  for attempt in $(seq 1 45); do
-    token="$(read_k8s_secret_key headlamp "${secret_name}" token)"
-    if validate_headlamp_admin_token_phase90 "${token}"; then
-      write_phase90_bootstrap_field headlamp_admin_username "${sa_name}" "${openbao_token}"
-      write_phase90_bootstrap_field headlamp_admin_token "${token}" "${openbao_token}"
-      echo "[phase90] reconciled Headlamp admin token from live service-account token"
-      return 0
-    fi
-    sleep 2
-  done
-
-  echo "[phase90] Headlamp admin token did not become valid in time" >&2
-  return 1
 }
 
 ensure_homepage_widget_secrets_phase90() {
@@ -748,7 +677,6 @@ fi
 
 run_phase90_step "reconcile Authentik admin password" critical ensure_authentik_admin_password_phase90
 run_phase90_step "reconcile Grafana admin password" warning ensure_grafana_admin_password_phase90
-run_phase90_step "reconcile Headlamp admin token" critical ensure_headlamp_admin_token_phase90
 run_phase90_step "reconcile Homepage widget secrets" critical ensure_homepage_widget_secrets_phase90
 
 if (( phase90_failures > 0 )); then

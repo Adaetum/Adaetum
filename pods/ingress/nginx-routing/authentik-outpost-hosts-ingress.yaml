@@ -86,26 +86,6 @@ spec:
                 name: authentik-server
                 port:
                   number: 9000
-    - host: headlamp.adaetum.local
-      http:
-        paths:
-          - path: /outpost.goauthentik.io
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 9000
-    - host: headlamp.adaetum.invalid
-      http:
-        paths:
-          - path: /outpost.goauthentik.io
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 9000
     - host: home.adaetum.local
       http:
         paths:
@@ -177,16 +157,6 @@ spec:
                 port:
                   number: 9000
     - host: prometheus.adaetum.invalid
-      http:
-        paths:
-          - path: /outpost.goauthentik.io
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 9000
-    - host: crafty.adaetum.invalid
       http:
         paths:
           - path: /outpost.goauthentik.io

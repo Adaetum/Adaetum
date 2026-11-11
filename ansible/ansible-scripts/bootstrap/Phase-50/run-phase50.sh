@@ -296,46 +296,6 @@ ensure_authentik_secret() {
   fi
 }
 
-ensure_headlamp_admin_token() {
-  local sa_name="headlamp"
-  local secret_name="headlamp-admin-token"
-  local token=""
-  local attempt=0
-
-  # Headlamp is created only after the private ApplicationSet handoff. Phase 90
-  # owns final token reconciliation, so waiting three minutes here cannot make
-  # progress during a clean install.
-  if ! "${kubectl_bin}" -n headlamp get serviceaccount "${sa_name}" >/dev/null 2>&1; then
-    echo "[phase50] Headlamp is not installed yet; deferring admin token reconciliation to Phase 90"
-    return 1
-  fi
-
-  cat <<EOF | "${kubectl_bin}" -n headlamp apply -f - >/dev/null
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ${secret_name}
-  namespace: headlamp
-  annotations:
-    kubernetes.io/service-account.name: ${sa_name}
-type: kubernetes.io/service-account-token
-EOF
-
-  for attempt in $(seq 1 30); do
-    token="$(read_k8s_secret_key headlamp "${secret_name}" token)"
-    if [[ -n "${token}" ]]; then
-      write_secret_file headlamp_admin_username "${sa_name}"
-      write_secret_file headlamp_admin_token "${token}"
-      printf '%s' "${token}"
-      return 0
-    fi
-    sleep 2
-  done
-
-  echo "[phase50] failed waiting for Headlamp admin service-account token" >&2
-  return 1
-}
-
 
 
 
@@ -2621,7 +2581,6 @@ fi
 if [[ -z "${authentik_bootstrap_token_effective}" ]]; then
   authentik_bootstrap_token_effective="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_bootstrap_token")"
 fi
-headlamp_admin_token_effective=""
 authentik_admin_source="local-backup"
 
 if [[ -z "${authentik_admin_username_effective:-}" ]]; then
@@ -2682,7 +2641,6 @@ if [[ -n "${authentik_secret_key_effective:-}" || -n "${authentik_admin_password
     "${authentik_bootstrap_token_effective}" || true
 fi
 
-headlamp_admin_token_effective="$(ensure_headlamp_admin_token || true)"
 
 if [[ -n "${authentik_admin_username_effective:-}" ]]; then
   write_secret_file authentik_admin_username "${authentik_admin_username_effective}"
@@ -2737,13 +2695,6 @@ if [[ -n "${openbao_token}" ]]; then
         "authentik_admin_username=${authentik_admin_username_effective}" \
         "authentik_admin_password=${authentik_admin_password_effective}" \
         "authentik_bootstrap_token=${authentik_bootstrap_token_effective}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${headlamp_admin_token_effective}" ]]; then
-    retry_cmd 6 5 "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" exec -i "${OPENBAO_POD}" -- \
-      env BAO_ADDR="http://127.0.0.1:8200" BAO_TOKEN="${openbao_token}" \
-      bao kv patch secret/bootstrap/platform \
-        "headlamp_admin_username=${headlamp_admin_username:-headlamp}" \
-        "headlamp_admin_token=${headlamp_admin_token_effective}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${authentik_admin_username_effective:-}" ]]; then
     write_secret_file authentik_admin_username "${authentik_admin_username_effective}"
@@ -3227,7 +3178,6 @@ argocd_external_host=""
 registry_external_host=""
 homepage_external_host=""
 authentik_external_host=""
-headlamp_external_host=""
 alertmanager_external_host=""
 grafana_external_host=""
 prometheus_external_host=""
@@ -3248,12 +3198,11 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
   argocd_local_host="argocd.${CLUSTER_LOCAL_DOMAIN}"
   authentik_external_host="authentik.${CLUSTER_DOMAIN}"
   authentik_local_host="authentik.${CLUSTER_LOCAL_DOMAIN}"
-  headlamp_external_host="headlamp.${CLUSTER_DOMAIN}"
   alertmanager_external_host="alertmanager.${CLUSTER_DOMAIN}"
   grafana_external_host="grafana.${CLUSTER_DOMAIN}"
   prometheus_external_host="prometheus.${CLUSTER_DOMAIN}"
 
-  external_dns_bootstrap_hosts="${gitea_external_host},${argocd_external_host},${registry_external_host},${authentik_external_host},${headlamp_external_host},${homepage_external_host},${alertmanager_external_host},${grafana_external_host},${prometheus_external_host}"
+  external_dns_bootstrap_hosts="${gitea_external_host},${argocd_external_host},${registry_external_host},${authentik_external_host},${homepage_external_host},${alertmanager_external_host},${grafana_external_host},${prometheus_external_host}"
 
   echo "[phase50] ingress hostnames: external=${external_dns_bootstrap_hosts} local=${gitea_local_host},${argocd_local_host}"
   echo "[phase50] applying early-safe ingress resources"
@@ -3265,7 +3214,7 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
       -f "${repo_root}/pods/ingress/nginx-routing/gitea-ingress.yaml" \
       -f "${repo_root}/pods/ingress/nginx-routing/argocd-ingress.yaml" \
       -f "${repo_root}/pods/ingress/nginx-routing/registry-ingress.yaml"
-  for optional_ns in authentik headlamp homepage; do
+  for optional_ns in authentik homepage; do
     if "${kubectl_bin}" get namespace "${optional_ns}" >/dev/null 2>&1; then
       echo "[phase50] applying optional ingress for namespace ${optional_ns}"
       case "${optional_ns}" in
@@ -3273,12 +3222,6 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
           run_or_fail \
             "failed applying pods/ingress/nginx-routing/authentik-ingress.yaml" \
             "${kubectl_bin}" apply -f "${repo_root}/pods/ingress/nginx-routing/authentik-ingress.yaml"
-          ;;
-        headlamp)
-          run_or_fail \
-            "failed applying pods/ingress/nginx-routing/headlamp-ingress.yaml" \
-            "${kubectl_bin}" apply -f "${repo_root}/pods/ingress/nginx-routing/headlamp-ingress.yaml" \
-              -f "${repo_root}/pods/ingress/nginx-routing/headlamp-public-ingress.yaml"
           ;;
         homepage)
           run_or_fail \

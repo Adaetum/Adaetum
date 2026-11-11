@@ -4,11 +4,6 @@
         href: https://__RANCHER_PUBLIC_HOST__/
         description: Cluster lifecycle and workload management
         siteMonitor: http://rancher.cattle-system.svc.cluster.local/healthz
-    - Headlamp:
-        icon: mdi-kubernetes
-        href: https://__HEADLAMP_PUBLIC_HOST__/
-        description: Kubernetes resources, workloads, and security posture
-        siteMonitor: http://headlamp.headlamp.svc.cluster.local/
 - GitOps and Source:
     - Argo CD:
         icon: si-argo
@@ -107,8 +102,3 @@
         icon: github.png
         href: https://github.com/Adaetum/Adaetum
         description: Upstream project, releases, and documentation
-- Game Services:
-    - Crafty Controller:
-        icon: minecraft.png
-        href: https://__CRAFTY_PUBLIC_HOST__/
-        description: Fixed-size Minecraft Bedrock server management

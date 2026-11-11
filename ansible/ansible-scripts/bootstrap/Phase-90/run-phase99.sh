@@ -508,14 +508,6 @@ TXT
     fi
   fi
 
-  # Capture Headlamp admin token when it exists.
-  headlamp_token="$("${kubectl_bin}" -n headlamp get secret headlamp-admin-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
-  if [[ -n "${headlamp_token}" ]]; then
-    printf '%s\n' "headlamp" >"${kit_dir}/cluster/headlamp-admin-username"
-    printf '%s\n' "${headlamp_token}" >"${kit_dir}/cluster/headlamp-admin-token"
-    chmod 0600 "${kit_dir}/cluster/headlamp-admin-username" "${kit_dir}/cluster/headlamp-admin-token" 2>/dev/null || true
-  fi
-
   # Capture ingress VIP configuration and current Service state.
   write_ingress_vip_backup_configmap "${kit_dir}/cluster/ingress-vip-config.yaml"
   # Authoritative public front door: nginx ingress controller Service state.
@@ -679,16 +671,7 @@ for item in value:
     exit 12
   fi
 
-  headlamp_admin_username="$(read_local_secret_file "${BOOTSTRAP_SECRET_DIR}/headlamp_admin_username")"
-  headlamp_admin_token="$(read_local_secret_file "${BOOTSTRAP_SECRET_DIR}/headlamp_admin_token")"
-  if [[ -z "${headlamp_admin_username}" && -f "${kit_dir}/cluster/headlamp-admin-username" ]]; then
-    headlamp_admin_username="$(read_local_secret_file "${kit_dir}/cluster/headlamp-admin-username")"
-  fi
-  if [[ -z "${headlamp_admin_token}" && -f "${kit_dir}/cluster/headlamp-admin-token" ]]; then
-    headlamp_admin_token="$(read_local_secret_file "${kit_dir}/cluster/headlamp-admin-token")"
-  fi
-
-  python3 - <<'PY' "${openbao_backup_json}" "${kit_dir}" "${HOSTNAME:-$(hostname -s 2>/dev/null || echo node-bootstrap)}" "${OPENBAO_NAMESPACE}" "${OPENBAO_POD}" "${openbao_token}" "${openbao_root_token}" "${headlamp_admin_username}" "${headlamp_admin_token}" "${exported_openbao_paths[@]}"
+  python3 - <<'PY' "${openbao_backup_json}" "${kit_dir}" "${HOSTNAME:-$(hostname -s 2>/dev/null || echo node-bootstrap)}" "${OPENBAO_NAMESPACE}" "${OPENBAO_POD}" "${openbao_token}" "${openbao_root_token}" "${exported_openbao_paths[@]}"
 import json
 import os
 import socket
@@ -702,9 +685,7 @@ namespace = sys.argv[4]
 pod = sys.argv[5]
 token = sys.argv[6]
 root_token = sys.argv[7]
-headlamp_admin_username = sys.argv[8]
-headlamp_admin_token = sys.argv[9]
-exported_paths = sys.argv[10:]
+exported_paths = sys.argv[8:]
 
 doc = {
     "kind": "bootstrap-openbao-backup",
@@ -720,10 +701,6 @@ doc = {
     "root_login_token_present": bool(root_token),
     "root_login_token": root_token,
     "paths": {},
-    "recovery_credentials": {
-        "headlamp_admin_username": headlamp_admin_username,
-        "headlamp_admin_token": headlamp_admin_token,
-    },
 }
 
 for path_name in exported_paths:

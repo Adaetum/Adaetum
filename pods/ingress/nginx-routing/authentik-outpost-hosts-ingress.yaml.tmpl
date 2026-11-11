@@ -86,26 +86,6 @@ spec:
                 name: authentik-server
                 port:
                   number: 9000
-    - host: headlamp.example.local
-      http:
-        paths:
-          - path: /outpost.goauthentik.io
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 9000
-    - host: headlamp.example.services
-      http:
-        paths:
-          - path: /outpost.goauthentik.io
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 9000
     - host: home.example.local
       http:
         paths:
@@ -177,16 +157,6 @@ spec:
                 port:
                   number: 9000
     - host: prometheus.example.services
-      http:
-        paths:
-          - path: /outpost.goauthentik.io
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 9000
-    - host: crafty.example.services
       http:
         paths:
           - path: /outpost.goauthentik.io

@@ -134,8 +134,6 @@ def main() -> int:
             "GITEA_LOCAL_HOST",
             "REGISTRY_PUBLIC_HOST",
             "REGISTRY_LOCAL_HOST",
-            "HEADLAMP_PUBLIC_HOST",
-            "HEADLAMP_LOCAL_HOST",
             "HOMEPAGE_PUBLIC_HOST",
             "HOMEPAGE_LOCAL_HOST",
             "ALERTMANAGER_PUBLIC_HOST",
@@ -144,7 +142,6 @@ def main() -> int:
             "GRAFANA_LOCAL_HOST",
             "PROMETHEUS_PUBLIC_HOST",
             "PROMETHEUS_LOCAL_HOST",
-            "CRAFTY_PUBLIC_HOST",
             "AUTHENTIK_PUBLIC_HOST",
         )
     }
@@ -207,8 +204,6 @@ def main() -> int:
         "ARGOCD_LOCAL_HOST",
         "HOMEPAGE_PUBLIC_HOST",
         "HOMEPAGE_LOCAL_HOST",
-        "HEADLAMP_PUBLIC_HOST",
-        "HEADLAMP_LOCAL_HOST",
         "ALERTMANAGER_PUBLIC_HOST",
         "ALERTMANAGER_LOCAL_HOST",
         "GRAFANA_PUBLIC_HOST",
@@ -217,8 +212,6 @@ def main() -> int:
         "NTFY_LOCAL_HOST",
         "PROMETHEUS_PUBLIC_HOST",
         "PROMETHEUS_LOCAL_HOST",
-        "CRAFTY_PUBLIC_HOST",
-        "CRAFTY_LOCAL_HOST",
         "AUTHENTIK_PUBLIC_HOST",
         "AUTHENTIK_LOCAL_HOST",
     ):

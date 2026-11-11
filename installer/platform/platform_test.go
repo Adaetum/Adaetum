@@ -73,7 +73,7 @@ func TestTheRealRendererOutputsIncludeFilesTheOldBashListMissed(t *testing.T) {
 	for _, p := range out {
 		have[p] = true
 	}
-	for _, want := range []string{"platform.yaml", "pods/cluster-config/cluster-config.env", "pods/operations/kured.app.yaml", "pods/ingress/nginx-routing/crafty-ingress.yaml"} {
+	for _, want := range []string{"platform.yaml", "pods/cluster-config/cluster-config.env", "pods/operations/kured.app.yaml", "pods/ingress/nginx-routing/gitea-ingress.yaml"} {
 		if !have[want] {
 			t.Errorf("the renderer's output list lacks %s", want)
 		}

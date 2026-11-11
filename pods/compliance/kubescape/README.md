@@ -13,7 +13,7 @@ What it does
 
 Notes
 - The Argo CD app definition lives in [`kubescape.app.yaml`](../kubescape.app.yaml).
-- Kubescape's recommended UI path is Headlamp with the Kubescape plugin.
-- This repo installs that UI separately via [`../headlamp.app.yaml`](../headlamp.app.yaml).
+- No Kubescape UI is installed. Findings are read from the cluster and from its
+  Prometheus metrics; the Adaetum agent is the operator-facing surface.
 - Grafana is not the primary Kubescape findings UI; its Prometheus metrics are
   still collected for cluster dashboards and alerts.

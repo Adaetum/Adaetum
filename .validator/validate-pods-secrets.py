@@ -13,30 +13,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCAN_PATHS = [REPO_ROOT / "pods", REPO_ROOT / "setup.md"]
 
 ROTATION_CONTRACTS = {
-    "pods/games/crafty/crafty.yaml": (
-        "serviceAccountName: crafty-credential-sync",
-        "secretProviderClass: crafty-openbao",
-        "/api/v2",
-        '"${api}/users/@me"',
-        "Crafty administrator credential matches OpenBao.",
-    ),
-    "pods/games/crafty/csi.yaml": (
-        "roleName: crafty-credential-sync",
-        "secretPath: secret/data/apps/games/crafty/admin",
-        "secretKey: username",
-        "secretKey: password",
-    ),
-    "pods/secrets/openbao/policies/crafty-credential-sync.hcl": (
-        'path "secret/data/apps/games/crafty/admin"',
-        'capabilities = ["read"]',
-    ),
-    "pods/secrets/openbao/config/job.yaml": (
-        "bao policy write crafty-credential-sync /policies/crafty-credential-sync.hcl",
-        "auth/kubernetes/role/crafty-credential-sync",
-        "bound_service_account_names=crafty-credential-sync",
-        "bound_service_account_namespaces=games",
-        "token_policies=crafty-credential-sync",
-    ),
     "ansible/playbooks/day2.yml": (
         "tailscale-user-sync",
         "healthcheck",
@@ -589,9 +565,8 @@ FORBIDDEN_SECRET_LOG_FRAGMENTS = {
 def validate_post_handoff_secret_writers() -> list[str]:
     """Keep Phase 50+ from recreating workload credentials from bootstrap.
 
-    The normal native Secret path in these phases is Headlamp's Kubernetes-owned
-    service-account token request. Three named structural bridges are permitted
-    only before their ESO resources exist, breaking the initial GitOps/ESO
+    Three named structural bridges are permitted only before their ESO
+    resources exist, breaking the initial GitOps/ESO
     cycle; every later run waits for CSI or the explicitly allowed ESO adapter.
     """
     failures: list[str] = []

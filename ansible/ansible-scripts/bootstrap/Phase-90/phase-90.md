@@ -35,7 +35,6 @@ Phase 90 should own:
 Examples that belong here:
 
 - Homepage widget tokens
-- Headlamp admin token reconciliation
 - post-burn app admin password reconciliation
 - late app API tokens that require the application to be fully up
 - runtime secret refreshes derived from authoritative OpenBao state

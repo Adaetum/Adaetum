@@ -36,7 +36,6 @@ Typical outcomes include:
 - exported recovery artifact
 - exported `bootstrap-openbao-backup` artifact
 - exported OpenBao login token in an obvious recovery path
-- exported Headlamp admin token when it exists
 - removed local bootstrap secret directory contents
 - a system that now expects OpenBao and normal GitOps operation to carry on
   without bootstrap-local authority

@@ -2,4 +2,3 @@ resources:
   - proxy-group.yaml
   - tailnet-ingresses.yaml
   - gitea-tailnet-backend.yaml
-  - crafty-bedrock-service.yaml

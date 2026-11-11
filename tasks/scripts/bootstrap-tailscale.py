@@ -34,9 +34,9 @@ REQUIRED_SERVICE_APPROVERS = {"tag:k8s": ["tag:k8s"]}
 REQUIRED_OPERATOR_GRANT = {
   "src": ["*"],
   "dst": ["tag:k8s"],
-  # HTTPS serves the private web routes; Bedrock is the intentionally narrow
-  # non-HTTP example exposed by a Tailscale L3 service.
-  "ip": ["tcp:443", "udp:19132", "icmp:*"],
+  # HTTPS serves the private web routes. This grant is additive: setup only appends
+  # missing protocols and never removes ones an existing tailnet already allows.
+  "ip": ["tcp:443", "icmp:*"],
 }
 
 

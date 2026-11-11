@@ -1307,12 +1307,9 @@ def validate_secret_foundation_handoff() -> list[str]:
             "Phase 40 must not wait for the Argo CRD before the phase that installs Argo CD"
         )
     for phase_name, source in (("Phase 50", phase_50), ("Phase 60", phase_60)):
-        for required in (
-            "get crd externalsecrets.external-secrets.io",
-            "deferring admin token reconciliation to Phase 90",
-        ):
-            if required not in source:
-                failures.append(f"{phase_name} clean-install deferral missing: {required}")
+        required = "get crd externalsecrets.external-secrets.io"
+        if required not in source:
+            failures.append(f"{phase_name} clean-install deferral missing: {required}")
     return failures
 
 
