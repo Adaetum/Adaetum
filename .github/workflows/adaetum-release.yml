@@ -2,11 +2,17 @@ name: Release Adaetum agent software
 
 # A release is an explicit operator decision; ordinary commits never update
 # clusters. The manifest records immutable image and binary hashes.
+#
+# To release: open this workflow, choose the branch to build under "Use workflow
+# from", and give the tag. The release is built from the tip of that branch as it
+# is when you press Run. A tag containing -beta. (adaetum-v1.2.3-beta.1) is a beta
+# release: marked pre-release and never "latest". Any other tag (adaetum-v1.2.3)
+# is a stable release.
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'New tag, e.g. adaetum-v0.1.2-beta.1 or adaetum-v0.1.2'
+        description: 'New tag, e.g. adaetum-v0.1.2-beta.1 (beta) or adaetum-v0.1.2 (stable)'
         required: true
         type: string
 
@@ -15,17 +21,75 @@ permissions:
   packages: write
 
 concurrency:
-  group: adaetum-release-${{ github.ref }}
+  # One release per tag at a time, whichever branch it is built from.
+  group: adaetum-release-${{ inputs.release_tag }}
   cancel-in-progress: false
 
 jobs:
+  # Fast fail: everything that can be known from the request alone is checked first,
+  # in seconds, so a mistyped or already-used tag never waits for the test suite or
+  # the image builds. No checkout and no build tools are needed.
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      channel: ${{ steps.check.outputs.channel }}
+    steps:
+      - name: Validate the branch and the release tag
+        id: check
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The branch is the one chosen under "Use workflow from". A tag or a pull request
+          # ref is not a branch, so there is nothing sensible to build and release.
+          if [[ "$REF_TYPE" != branch ]]; then
+            echo "Run this workflow from a branch ('Use workflow from'), not from ${REF_TYPE} ${REF_NAME}." >&2
+            exit 1
+          fi
+          tag="$REQUESTED_TAG"
+          if [[ ! "$tag" =~ ^adaetum-v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.(0|[1-9][0-9]*))?)$ ]]; then
+            echo "Expected a tag like adaetum-v1.2.3 (stable) or adaetum-v1.2.3-beta.1 (beta); got '${tag}'." >&2
+            if [[ "${tag,,}" == *beta* ]]; then
+              echo "A beta tag must end in -beta.N, with N a number, for example adaetum-v1.2.3-beta.1." >&2
+            fi
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          channel=stable
+          if [[ "$version" == *-beta.* ]]; then channel=beta; fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --silent 2>/dev/null; then
+            echo "The tag ${tag} already exists; choose a new version." >&2
+            exit 1
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A release for ${tag} already exists; choose a new version." >&2
+            exit 1
+          fi
+          echo "Releasing branch ${REF_NAME} as ${tag} (${channel})."
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "channel=${channel}"
+          } >> "$GITHUB_OUTPUT"
+
   # The same suite pull requests run; a release cannot test less than a PR did.
   tests:
+    needs: validate
     uses: ./.github/workflows/adaetum-tests.yml
 
   release:
-    needs: tests
+    needs: [validate, tests]
     runs-on: ubuntu-latest
+    env:
+      ADAETUM_RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      ADAETUM_VERSION: ${{ needs.validate.outputs.version }}
+      ADAETUM_CHANNEL: ${{ needs.validate.outputs.channel }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-go@v6
@@ -37,44 +101,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.2'
-      - name: Validate release tag
+      - name: Name the image registry
         shell: bash
-        env:
-          REQUESTED_TAG: ${{ inputs.release_tag }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="${REQUESTED_TAG}"
-          if [[ ! "$tag" =~ ^adaetum-v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.(0|[1-9][0-9]*))?)$ ]]; then
-            echo "Expected a tag like adaetum-v1.2.3 or adaetum-v1.2.3-beta.1." >&2
-            exit 1
-          fi
-          version="${BASH_REMATCH[1]}"
-          # Two channels, two branches: stable releases come from the tip of main, beta
-          # releases from the tip of beta. Run this workflow from the branch you mean to
-          # release; an old or unmerged commit can never be released by accident.
-          channel=stable
-          branch=main
-          if [[ "$version" == *-beta.* ]]; then
-            channel=beta
-            branch=beta
-          fi
-          if ! git fetch --no-tags origin "+refs/heads/${branch}:refs/remotes/origin/${branch}" 2>/dev/null; then
-            echo "The ${branch} branch does not exist in this repository, so a ${channel} release cannot be made." >&2
-            exit 1
-          fi
-          if [[ "$(git rev-parse "origin/${branch}")" != "$GITHUB_SHA" ]]; then
-            echo "A ${channel} release must be built from the current tip of ${branch}. Run this workflow on ${branch}." >&2
-            exit 1
-          fi
-          echo "ADAETUM_CHANNEL=$channel" >> "$GITHUB_ENV"
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --silent 2>/dev/null; then
-            echo "The tag $tag already exists; choose a new version." >&2
-            exit 1
-          fi
-          echo "ADAETUM_VERSION=${version}" >> "$GITHUB_ENV"
-          echo "ADAETUM_RELEASE_TAG=$tag" >> "$GITHUB_ENV"
-          echo "ADAETUM_REGISTRY=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+        run: echo "ADAETUM_REGISTRY=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
       - name: Build the host binaries
         shell: bash
         run: |
@@ -147,4 +176,4 @@ jobs:
           gh release create "$ADAETUM_RELEASE_TAG" release/adaetum-* release/SHA256SUMS release/release.json "${release_flags[@]}" \
             --target "$GITHUB_SHA" \
             --title "Adaetum agent ${ADAETUM_VERSION}" \
-            --notes "Versioned agent, auth, and embedding artifacts. See release.json for image digests and host binary checksums. Updating a cluster or host remains an operator decision."
+            --notes "Versioned agent, auth, and embedding artifacts. See release.json for image digests and host binary checksums. Updating a cluster or host remains an operator decision. Built from branch ${GITHUB_REF_NAME} at commit ${GITHUB_SHA}."
