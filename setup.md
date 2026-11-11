@@ -76,6 +76,13 @@ included. Existing recovery profiles are preserved and re-rendered in the isolat
 checkout. If a reused recovery repository has no locally available backup passphrase,
 setup asks for the existing passphrase instead of silently replacing it.
 
+Setup reuses what it already has: provider sign-ins from the OS credential store, or from the
+`.env` of an earlier run when the store is empty, plus the saved Cloudflare zone and Tailscale
+name from `platform.yaml`. Each reused token is checked against the provider first, so a revoked
+one only costs a question. To ignore all of it, use **Start fresh** on the window's first screen,
+or `task init:clean`. The recovery password is the one thing a fresh start keeps, because older
+recovery kits are encrypted with it.
+
 On a first run setup asks you to choose the recovery password (at least 16 characters and hard to guess: setup
 scores it with zxcvbn, which refuses common words, keyboard runs, repeats and dates, so
 "correct Horse battery 7" is fine and "Password123456789!" is not) and type it twice, then asks you to confirm you have saved

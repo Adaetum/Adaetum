@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -395,5 +397,41 @@ func TestInstructionsAndTheTokenBoxAreOneScreen(t *testing.T) {
 		if sc.ID == "cloudflare-token-ready" {
 			t.Fatal("there is still a separate 'I made the token' screen")
 		}
+	}
+}
+
+func TestAnEarlierEnvIsReusedWhenTheCredentialStoreIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	envText := "CLOUDFLARE_API_TOKEN=\"cfat_from_env\"\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(envText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := runner(sys.Rule{Prefix: "python3 ./tasks/scripts/configure-platform-profile.py --show",
+		Result: ok("domain=example.com\noverlay_domain=tail1234.ts.net\n")})
+	s := step(f, &secrets.Memory{}, apis(t, []string{"cfat_from_env"}, []string{"tskey-good"}, devices))
+	s.Dir = dir
+	env := &engine.Env{}
+	// No cloudflare-token answer: asking for it would fail with ErrNoAnswer.
+	if err := apply(t, s, env, map[string]string{"tailscale-token": "tskey-good", "tailscale-tailnet": "tail1234.ts.net"}); err != nil {
+		t.Fatal(err)
+	}
+	if env.Secret("cloudflare_token") != "cfat_from_env" {
+		t.Fatalf("the .env token was not reused: %v", env.Secrets)
+	}
+}
+
+func TestStartingFreshIgnoresAnEarlierEnv(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CLOUDFLARE_API_TOKEN=cfat_from_env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := step(runner(), &secrets.Memory{}, apis(t, []string{"cfat_good"}, []string{"tskey-good"}, devices))
+	s.Dir = dir
+	env := &engine.Env{Clean: true}
+	if err := apply(t, s, env, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if env.Secret("cloudflare_token") != "cfat_good" {
+		t.Fatalf("a clean run used the old .env: %v", env.Secrets)
 	}
 }

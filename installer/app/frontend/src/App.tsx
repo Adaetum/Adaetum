@@ -1,7 +1,7 @@
 import { Badge, Button, Callout, TextField } from "@radix-ui/themes";
-import { ArrowLeft, Check, Copy, ExternalLink, LoaderCircle, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Check, Copy, ExternalLink, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Answer, Cancel, DryRun, DryRunMode, Stages, Start } from "../wailsjs/go/main/App";
+import { Answer, Cancel, DryRun, DryRunMode, SetFresh, Stages, Start } from "../wailsjs/go/main/App";
 import { main } from "../wailsjs/go/models";
 import { BrowserOpenURL, EventsOn } from "../wailsjs/runtime/runtime";
 import "./App.css";
@@ -378,7 +378,16 @@ function Welcome({ stages, stopped, resume, onStart }: {
   onStart: () => Promise<boolean>;
 }) {
   const [unlockStage, setUnlockStage] = useState<"idle" | "shake" | "unlocking">("idle");
+  const [fresh, setFresh] = useState(false);
   const startedFromCover = useRef(false);
+
+  // Setup reuses earlier sign-ins and values it finds. This switch makes the next run
+  // ignore them and ask for everything again, like `task init:clean`.
+  function toggleFresh() {
+    const next = !fresh;
+    setFresh(next);
+    void SetFresh(next);
+  }
 
   function releaseLock() {
     if (startedFromCover.current) return;
@@ -394,7 +403,16 @@ function Welcome({ stages, stopped, resume, onStart }: {
   return (
     <div className="closed-welcome book-desk" data-resume={resume}>
       <div className="drag" />
-      <div className="book-toolbar"><span>ADAETUM <i> / </i> FIRST SERVER SETUP</span></div>
+      <div className="book-toolbar">
+        <span>ADAETUM <i> / </i> FIRST SERVER SETUP</span>
+        {unlockStage === "idle" && (
+          <button type="button" onClick={toggleFresh} aria-pressed={fresh}
+            title="Setup reuses sign-ins and values it already has. Turn this on to ignore them and ask for everything again.">
+            {fresh ? <Check size={12} /> : <RotateCcw size={12} />}
+            {fresh ? "Starting fresh: saved sign-ins ignored" : "Start fresh"}
+          </button>
+        )}
+      </div>
       <div className="closed-stage">
       <div
         className="closed-grimoire"

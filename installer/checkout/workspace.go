@@ -19,6 +19,21 @@ type Workspace struct{ Root, dir string }
 
 func (w *Workspace) Close() error { return os.RemoveAll(w.dir) }
 
+// Carry copies the named values from the launch checkout's .env into the private
+// checkout's, skipping any that are absent. Only values the caller names are copied, so
+// the short-lived checkout never receives more of the operator's .env than a stage needs.
+func (w *Workspace) Carry(source string, keys ...string) error {
+	old := envfile.Read(filepath.Join(source, ".env"))
+	for _, key := range keys {
+		if value := old[key]; value != "" {
+			if err := envfile.Upsert(filepath.Join(w.Root, ".env"), key, value); err != nil {
+				return fmt.Errorf("carry %s into the setup checkout: %w", key, err)
+			}
+		}
+	}
+	return nil
+}
+
 func Prepare(ctx context.Context, source string) (_ *Workspace, err error) {
 	dir, err := os.MkdirTemp("", "adaetum-setup-")
 	if err != nil {
@@ -31,15 +46,8 @@ func Prepare(ctx context.Context, source string) (_ *Workspace, err error) {
 		if err != nil {
 			return
 		}
-		old := envfile.Read(filepath.Join(source, ".env"))
-		for _, key := range []string{"BOOTSTRAP_BACKUP_PASSPHRASE", "BOOTSTRAP_BACKUP_PASSPHRASE_B64"} {
-			if value := old[key]; value != "" {
-				if e := envfile.Upsert(filepath.Join(w.Root, ".env"), key, value); e != nil {
-					err = fmt.Errorf("preserve backup passphrase: %w", e)
-					_ = w.Close()
-					return
-				}
-			}
+		if err = w.Carry(source, "BOOTSTRAP_BACKUP_PASSPHRASE", "BOOTSTRAP_BACKUP_PASSPHRASE_B64"); err != nil {
+			_ = w.Close()
 		}
 	}()
 	defer func() {

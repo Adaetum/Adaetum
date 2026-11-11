@@ -10,6 +10,7 @@ import (
 	"github.com/Adaetum/Adaetum/installer/diagnostics"
 	"github.com/Adaetum/Adaetum/installer/engine"
 	"github.com/Adaetum/Adaetum/installer/stages"
+	"github.com/Adaetum/Adaetum/installer/stages/providers"
 	"github.com/Adaetum/Adaetum/installer/sys"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -25,9 +26,18 @@ type App struct {
 	running bool
 	cancel  context.CancelFunc
 	answers chan string
+	fresh   bool // set from the first screen: ignore everything saved on this run
 }
 
 func NewApp() *App { return &App{answers: make(chan string, 1)} }
+
+// SetFresh is the first screen's "start fresh" switch. It makes the next run behave like
+// `task init:clean`: saved credentials and values are ignored and asked for again.
+func (a *App) SetFresh(on bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.fresh = on
+}
 
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
@@ -159,12 +169,20 @@ func (a *App) Start() string {
 		log.Record("setup window started")
 	}
 	root, err := checkout.Find()
+	clean := a.fresh || os.Getenv("ADAETUM_CLEAN") == "1" // Start already holds a.mu
 	var workspace *checkout.Workspace
 	workRoot := root
 	if err == nil && !dryRun {
 		workspace, err = checkout.Prepare(a.ctx, root)
 		if err == nil {
 			workRoot = workspace.Root
+			// Reuse earlier sign-ins from .env unless the operator asked to start fresh.
+			// They are validated before use, so a stale one only costs a question.
+			if !clean {
+				if err = workspace.Carry(root, providers.ReusableEnvVars()...); err != nil {
+					_ = workspace.Close()
+				}
+			}
 		}
 	}
 	var steps []engine.Step
@@ -190,9 +208,10 @@ func (a *App) Start() string {
 		if dryRun {
 			ui = rehearsalUI{UI: ui, ctx: ctx}
 		}
-		// ADAETUM_CLEAN=1 (set by `task init:clean`) ignores saved credentials and values.
+		// ADAETUM_CLEAN=1 (set by `task init:clean`) or the first screen's "start fresh"
+		// ignores saved credentials and values.
 		runEnv := &engine.Env{
-			Clean: os.Getenv("ADAETUM_CLEAN") == "1", DryRun: dryRun, UIOnly: dryRun,
+			Clean: clean, DryRun: dryRun, UIOnly: dryRun,
 		}
 		results, runErr := engine.Run(ctx, steps, runEnv, ui)
 		if workspace != nil && runEnv.Value("installer_iso") == "" {

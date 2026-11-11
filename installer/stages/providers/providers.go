@@ -20,11 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 
 	"github.com/Adaetum/Adaetum/installer/engine"
+	"github.com/Adaetum/Adaetum/installer/envfile"
 	"github.com/Adaetum/Adaetum/installer/platform"
 	"github.com/Adaetum/Adaetum/installer/provider"
 	"github.com/Adaetum/Adaetum/installer/secrets"
@@ -81,7 +83,7 @@ func (s *Step) Check(ctx context.Context, _ *engine.Env) (engine.Finding, error)
 		return engine.Finding{Status: engine.Blocked, Detail: "python3 is required: Cloudflare and Tailscale access is validated by the existing bootstrap scripts."}, nil
 	}
 	if s.Store.Available() {
-		return engine.Finding{Status: engine.Needed, Detail: "tokens will be reused from " + s.Store.Name() + " when they are still valid"}, nil
+		return engine.Finding{Status: engine.Needed, Detail: "tokens will be reused from " + s.Store.Name() + " or an earlier .env when they are still valid"}, nil
 	}
 	return engine.Finding{Status: engine.Needed, Detail: "this machine has no credential store, so tokens are asked for again on every run and never saved"}, nil
 }
@@ -138,17 +140,45 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 
 // ---- credential store helpers ----------------------------------------------
 
-// saved returns a stored credential, or "" when there is none, the store is
-// unavailable, or the operator asked to start clean.
+// envVarFor names the .env variable that holds the same credential as a credential-store
+// key. A machine whose store is empty or unavailable (a new laptop, a declined prompt,
+// a headless box) can still carry a previous run's .env, so setup tries it before asking.
+// The one-day Tailscale API token is left out: it will have expired.
+var envVarFor = map[string]string{
+	keyCloudflare:  "CLOUDFLARE_API_TOKEN",
+	keyOAuthID:     "TAILSCALE_OAUTH_CLIENT_ID",
+	keyOAuthSecret: "TAILSCALE_OAUTH_CLIENT_SECRET",
+	keyOperatorID:  "TAILSCALE_OPERATOR_OAUTH_CLIENT_ID",
+	keyOperatorSec: "TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET",
+}
+
+// ReusableEnvVars lists the .env variables setup may reuse, so the caller can carry them
+// into the private setup checkout. Whatever is reused is still validated before use.
+func ReusableEnvVars() []string {
+	vars := make([]string, 0, len(envVarFor))
+	for _, v := range envVarFor {
+		vars = append(vars, v)
+	}
+	return vars
+}
+
+// saved returns a remembered credential, or "" when there is none or the operator asked
+// to start clean. The credential store is tried first, then the .env of an earlier run.
+// Callers validate the value before trusting it, so a stale one costs a question, not a
+// failure.
 func (f *flow) saved(key string) string {
-	if f.env.Clean || !f.store.Available() {
+	if f.env.Clean {
 		return ""
 	}
-	v, err := f.store.Get(f.ns, key)
-	if err != nil {
-		return ""
+	if f.store.Available() {
+		if v, err := f.store.Get(f.ns, key); err == nil && v != "" {
+			return v
+		}
 	}
-	return v
+	if name := envVarFor[key]; name != "" {
+		return strings.Trim(envfile.Read(filepath.Join(f.s.Dir, ".env"))[name], "\"' ")
+	}
+	return ""
 }
 
 func (f *flow) forget(keys ...string) {
@@ -193,7 +223,7 @@ func (f *flow) cloudflare(ctx context.Context, existing platform.Profile) error 
 	var token string
 	var zones []provider.Zone
 	if tok := f.saved(keyCloudflare); tok != "" {
-		f.say("Found a saved Cloudflare setup token in " + f.store.Name() + "; validating it before reuse.")
+		f.say("Found a saved Cloudflare setup token (credential store or .env); validating it before reuse.")
 		if z, err := f.s.API.Zones(ctx, tok); err == nil {
 			token, zones = tok, z
 			f.say("Reusing the validated Cloudflare account token.")
@@ -377,7 +407,7 @@ func (f *flow) oauthPair(ctx context.Context, idKey, secretKey, flag, what strin
 	if id == "" || secret == "" {
 		return "", ""
 	}
-	f.say("Found a saved " + what + " in " + f.store.Name() + "; validating it before reuse.")
+	f.say("Found a saved " + what + " (credential store or .env); validating it before reuse.")
 	res, err := f.s.Run.RunInput(ctx, f.s.Dir, id+"\n"+secret+"\n", python(), tailscaleTool, "--oauth-credentials-stdin", flag)
 	if err == nil && res.OK() {
 		f.say("Reusing the validated " + what + ".")
