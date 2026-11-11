@@ -26,6 +26,10 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        # Without this the kubelet rewrites every file on the volume as group
+        # read/write at each pod start, and the agent refuses an access token that
+        # is anything but mode 600.
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       initContainers:
@@ -36,6 +40,12 @@ spec:
             - |
               test -s /data/access-token || adaetum-agent token create -file /data/access-token
               test -s /data/auth/internal-secret || adaetum-agent token create -file /data/auth/internal-secret
+              # The agent requires mode 600 on both secrets; volumes mounted with an
+              # fsGroup can leave them group-writable.
+              chmod 600 /data/access-token /data/auth/internal-secret
+              # A socket left by a crashed auth container makes the next one fail with
+              # EADDRINUSE. Nothing else may be listening yet: this pod has not started.
+              rm -f /data/auth/auth.sock
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -8,7 +8,7 @@ services, and disabling swap.
 - Installs core tools and prerequisites (curl, jq, git, chrony, iSCSI).
 - Installs Longhorn prerequisites (nfs-utils, cryptsetup) and loads dm_crypt.
 - Ensures Kubernetes kernel modules are loaded at boot (br_netfilter, overlay).
-- Applies Kubernetes networking sysctls via `/etc/sysctl.d/99-k8s.conf` and `sysctl -w`.
+- Applies Kubernetes networking and inotify sysctls via `/etc/sysctl.d/99-k8s.conf` and `sysctl -w`.
 - Disables firewalld to avoid pod network isolation on single-node bootstrap.
 - Starts and enables required services (chronyd, iscsid).
 - Ensures physical wired interfaces are managed by NetworkManager with persistent

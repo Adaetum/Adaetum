@@ -27,7 +27,11 @@ os_bootstrap_kernel_modules:
   - overlay
   - dm_crypt
 
-# Sysctl defaults needed for pod networking on RHEL/Rocky.
+# Sysctl defaults needed for pod networking on RHEL/Rocky, plus inotify limits.
+# Every container and kubelet watch runs as root and shares one per-user inotify
+# pool; the default of 128 instances runs out on a single-node cluster, after
+# which systemd cannot start a root user manager ("Failed to allocate manager
+# object: Too many open files") and new root sessions misbehave.
 os_bootstrap_sysctl:
   - name: net.ipv4.ip_forward
     value: "1"
@@ -39,3 +43,7 @@ os_bootstrap_sysctl:
     value: "0"
   - name: net.ipv4.conf.default.rp_filter
     value: "0"
+  - name: fs.inotify.max_user_instances
+    value: "8192"
+  - name: fs.inotify.max_user_watches
+    value: "524288"

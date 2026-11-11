@@ -7,7 +7,9 @@ import { AuthState, fetchAuthState, setUpFirstOwner, signInWithAccount } from ".
 interface LoginProps {
   // True when a token was already tried and the agent turned it down.
   rejected: boolean;
-  onSignedIn: () => void;
+  // May return a promise; the token form waits for it so it can tell "still checking"
+  // apart from "turned down".
+  onSignedIn: () => void | Promise<void>;
 }
 
 // Login is the one screen before anything else. It asks the agent what it offers:
@@ -167,16 +169,25 @@ function FirstOwner({ onDone }: { onDone: () => void }) {
   );
 }
 
-function TokenSignIn({ rejected, onSignedIn }: { rejected: boolean; onSignedIn: () => void }) {
+function TokenSignIn({ rejected, onSignedIn }: { rejected: boolean; onSignedIn: () => void | Promise<void> }) {
   const [value, setValue] = useState("");
+  // `rejected` only means "a token is stored and this screen is still up". While the
+  // agent is still answering the token just entered that is not a rejection, so the
+  // warning waits until the check has finished.
+  const [checking, setChecking] = useState(false);
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     const token = value.trim();
-    if (!token) return;
+    if (!token || checking) return;
     tokenStore.set(token);
     setValue("");
-    onSignedIn();
+    setChecking(true);
+    try {
+      await onSignedIn();
+    } finally {
+      setChecking(false);
+    }
   };
 
   return (
@@ -186,12 +197,13 @@ function TokenSignIn({ rejected, onSignedIn }: { rejected: boolean; onSignedIn: 
           This server's access token works here even when nothing else does. You can read it on the server with{" "}
           <Code variant="ghost">sudo cat /etc/adaetum/agent-token</Code>.
         </Text>
-        {rejected && <Problem>That token wasn't accepted. Check it and try again.</Problem>}
+        {checking && <Text color="gray" size="2">Checking the token…</Text>}
+        {rejected && !checking && <Problem>That token wasn't accepted. Check it and try again.</Problem>}
         <label>
           <Text as="div" size="2" weight="medium" mb="1">Access token</Text>
           <TextField.Root type="password" autoComplete="off" spellCheck={false} value={value} onChange={(event) => setValue(event.target.value)} placeholder="Paste the token" />
         </label>
-        <Button type="submit" disabled={!value.trim()}>Sign in with the token</Button>
+        <Button type="submit" disabled={!value.trim() || checking}>Sign in with the token</Button>
       </Flex>
     </form>
   );
