@@ -861,7 +861,10 @@ elif ! "${kubectl_bin}" -n argocd get application platform-pre-openbao >/dev/nul
   echo "[phase40] platform-pre-openbao application not found; using direct OpenBao manifests." >&2
 fi
 
-if ! "${kubectl_bin}" get ns "${OPENBAO_NAMESPACE}" >/dev/null 2>&1; then
+# OpenBao is "not deployed" when its StatefulSet is missing, not only when its namespace
+# is. The platform playbook creates the namespace early to hold the static seal key, so an
+# existing, otherwise empty namespace must still get the manifests applied.
+if ! "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get statefulset openbao >/dev/null 2>&1; then
   if [[ "${phase40_mode}" == "openbao" ]]; then
     echo "openbao namespace not found; OpenBao-only mode requires a preflight run." >&2
     echo "Run: BOOTSTRAP_PHASE40_MODE=pre ${0}" >&2
