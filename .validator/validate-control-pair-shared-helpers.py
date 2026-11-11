@@ -810,11 +810,14 @@ def validate_phase70_realization_gate() -> list[str]:
 
     phase_60_functions = functions(PHASE_60)
     gitops_settle_helper = phase_60_functions.get("wait_for_gitea_gitops_settle")
+    gitops_fingerprint_helper = phase_60_functions.get("gitops_progress_fingerprint")
     registry_wait_helper = phase_60_functions.get(
         "wait_for_gitea_registry_bootstrap_path"
     )
-    if gitops_settle_helper:
-        script = gitops_settle_helper + r'''
+    if gitops_settle_helper and not gitops_fingerprint_helper:
+        failures.append("Phase 60 GitOps wait must define gitops_progress_fingerprint")
+    if gitops_settle_helper and gitops_fingerprint_helper:
+        script = gitops_fingerprint_helper + "\n" + gitops_settle_helper + r'''
 set -euo pipefail
 kubectl_bin=mock_kubectl
 PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS=30
@@ -824,6 +827,11 @@ printf '%s' 0 >"${STATE_FILE}"
 
 mock_kubectl() {
   local field="${*: -1}"
+  # Progress-fingerprint calls (applications list, pod list) are not observations.
+  if [[ "$*" == *"applications.argoproj.io"* || "$*" == *"get pods"* ]]; then
+    printf 'steady'
+    return 0
+  fi
   local call_count=""
   local observation=""
   local state=""
@@ -868,6 +876,67 @@ rm -f "${STATE_FILE}"
             detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
             failures.append(f"Gitea GitOps settle behavior failed: {detail}")
 
+        # A slow install that keeps changing must outlast the stall window; a stuck one must
+        # fail with the stall message once nothing has changed for the whole window.
+        stuck = gitops_fingerprint_helper + "\n" + gitops_settle_helper + r'''
+set -euo pipefail
+kubectl_bin=mock_kubectl
+PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS=20
+PHASE60_GITEA_GITOPS_MAX_SECONDS=1000
+DEBUG_REASON=""
+mock_kubectl() {
+  case "$*" in
+    *applications.argoproj.io*|*"get pods"*) printf 'steady' ;;
+    *sync.status*) printf Synced ;;
+    *health.status*) printf Progressing ;;
+    *operationState.phase*) printf Succeeded ;;
+    *) printf 'steady' ;;
+  esac
+}
+sleep() { :; }
+gitea_debug_dump() { DEBUG_REASON="$1"; }
+if wait_for_gitea_gitops_settle 2>/dev/null; then exit 1; fi
+[[ "${DEBUG_REASON}" == "gitops-application-stalled" ]]
+'''
+        moving = gitops_fingerprint_helper + "\n" + gitops_settle_helper + r'''
+set -euo pipefail
+kubectl_bin=mock_kubectl
+PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS=20
+PHASE60_GITEA_GITOPS_MAX_SECONDS=1000
+DEBUG_REASON=""
+COUNTER="$(mktemp)"
+printf 0 >"${COUNTER}"
+bump() { printf '%s' $(( $(cat "${COUNTER}") + 1 )) >"${COUNTER}"; cat "${COUNTER}"; }
+mock_kubectl() {
+  # State lives in a file because the wait calls kubectl inside command substitutions.
+  case "$*" in
+    *applications.argoproj.io*|*"get pods"*) bump ;;
+    *sync.status*) printf Synced ;;
+    *health.status*)
+      # Still Progressing for far longer than the stall window, then Healthy.
+      if (( $(cat "${COUNTER}") > 200 )); then printf Healthy; else printf Progressing; fi ;;
+    *operationState.phase*) printf Succeeded ;;
+    *) printf steady ;;
+  esac
+}
+sleep() { :; }
+gitea_debug_dump() { DEBUG_REASON="$1"; }
+wait_for_gitea_gitops_settle >/dev/null
+[[ -z "${DEBUG_REASON}" ]]
+'''
+        for name, case_script in (("stuck", stuck), ("moving", moving)):
+            case_result = subprocess.run(
+                ["bash", "-c", case_script],
+                cwd=REPOSITORY_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            if case_result.returncode != 0:
+                detail = case_result.stderr.strip() or case_result.stdout.strip() or "assertion failed"
+                failures.append(f"Gitea GitOps wait ({name} install) behaved wrongly: {detail}")
+
     if registry_wait_helper:
         script = registry_wait_helper + r'''
 set -euo pipefail
@@ -902,7 +971,7 @@ wait_for_gitea_registry_bootstrap_path
     for required in (
         "PHASE60_WARNING_ONLY=0",
         'PHASE60_GITEA_ROLLOUT_TIMEOUT="${PHASE70_GITEA_ROLLOUT_TIMEOUT:-120s}"',
-        'PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS="${PHASE70_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS:-180}"',
+        'PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS="${PHASE70_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS:-600}"',
         "PHASE60_GITEA_ROLLOUT_ATTEMPTS=1",
         "PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL=0",
         "GitOps handoff verification failed; stopping before realization checks",

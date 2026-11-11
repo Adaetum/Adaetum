@@ -33,7 +33,7 @@ PHASE60_GITEA_ROLLOUT_TIMEOUT="${PHASE60_GITEA_ROLLOUT_TIMEOUT:-600s}"
 PHASE60_GITEA_PROGRESS_DEADLINE_SECONDS="${PHASE60_GITEA_PROGRESS_DEADLINE_SECONDS:-1800}"
 PHASE60_GITEA_ROLLOUT_ATTEMPTS="${PHASE60_GITEA_ROLLOUT_ATTEMPTS:-2}"
 PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL="${PHASE60_GITEA_ROLLOUT_RESTART_ON_FAIL:-1}"
-PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS="${PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS:-180}"
+PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS="${PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS:-600}"
 PHASE60_GITEA_REGISTRY_ATTEMPTS="${PHASE60_GITEA_REGISTRY_ATTEMPTS:-12}"
 PHASE60_GITEA_REGISTRY_RETRY_DELAY="${PHASE60_GITEA_REGISTRY_RETRY_DELAY:-5}"
 PHASE60_GITEA_DEBUG_LOG="${PHASE60_GITEA_DEBUG_LOG:-${PHASE60_LOG_FILE}}"
@@ -2229,21 +2229,40 @@ wait_for_gitea_rollout() {
 }
 
 
+# A fresh node pulls images and starts dozens of apps after the Gitea takeover, and that
+# takes as long as the network and disk allow. So this does not give up on a clock: it
+# gives up when nothing has changed for PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS (a
+# stall), or after PHASE60_GITEA_GITOPS_MAX_SECONDS as a last-resort ceiling.
+# "Progress" is any change in the Argo CD applications' sync/health or in how many pods are
+# in each phase, so a slow-but-moving install keeps going and a stuck one still fails.
+gitops_progress_fingerprint() {
+  {
+    "${kubectl_bin}" -n argocd get applications.argoproj.io \
+      -o jsonpath='{range .items[*]}{.metadata.name}={.status.sync.status}/{.status.health.status}/{.status.operationState.phase};{end}' 2>/dev/null || true
+    "${kubectl_bin}" get pods -A --no-headers 2>/dev/null | awk '{print $4}' | sort | uniq -c || true
+  } | cksum
+}
+
 wait_for_gitea_gitops_settle() {
-  local timeout_seconds="${PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS}"
+  local stall_seconds="${PHASE60_GITEA_GITOPS_SETTLE_TIMEOUT_SECONDS}"
+  local max_seconds="${PHASE60_GITEA_GITOPS_MAX_SECONDS:-3600}"
   local poll_seconds=5
   local elapsed=0
+  local stalled=0
   local stable_observations=0
   local sync_status=""
   local health_status=""
   local operation_phase=""
+  local fingerprint=""
+  local last_fingerprint=""
 
-  [[ "${timeout_seconds}" =~ ^[0-9]+$ ]] && (( timeout_seconds > 0 )) || timeout_seconds=180
+  [[ "${stall_seconds}" =~ ^[0-9]+$ ]] && (( stall_seconds > 0 )) || stall_seconds=600
+  [[ "${max_seconds}" =~ ^[0-9]+$ ]] && (( max_seconds > 0 )) || max_seconds=3600
 
   # Argo can briefly retain the previous Healthy status while it observes the
   # ApplicationSet takeover. Require two consecutive settled observations so
   # deployment readiness is checked against the adopted desired state.
-  while (( elapsed < timeout_seconds )); do
+  while (( elapsed < max_seconds )); do
     sync_status="$("${kubectl_bin}" -n argocd get application gitea -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
     health_status="$("${kubectl_bin}" -n argocd get application gitea -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
     operation_phase="$("${kubectl_bin}" -n argocd get application gitea -o jsonpath='{.status.operationState.phase}' 2>/dev/null || true)"
@@ -2256,14 +2275,25 @@ wait_for_gitea_gitops_settle() {
       fi
     else
       stable_observations=0
-      echo "[phase60] waiting for Gitea GitOps takeover (sync=${sync_status:-missing}, health=${health_status:-missing}, operation=${operation_phase:-none})"
+      fingerprint="$(gitops_progress_fingerprint)"
+      if [[ "${fingerprint}" != "${last_fingerprint}" ]]; then
+        last_fingerprint="${fingerprint}"
+        stalled=0
+      fi
+      echo "[phase60] waiting for Gitea GitOps takeover (sync=${sync_status:-missing}, health=${health_status:-missing}, operation=${operation_phase:-none}, no change for ${stalled}s of ${stall_seconds}s)"
+      if (( stalled >= stall_seconds )); then
+        echo "[phase60] Gitea GitOps application made no progress for ${stall_seconds}s (sync=${sync_status:-missing}, health=${health_status:-missing}, operation=${operation_phase:-none})" >&2
+        gitea_debug_dump "gitops-application-stalled"
+        return 1
+      fi
     fi
 
     sleep "${poll_seconds}"
     elapsed=$((elapsed + poll_seconds))
+    stalled=$((stalled + poll_seconds))
   done
 
-  echo "[phase60] Gitea GitOps application did not settle within ${timeout_seconds}s (sync=${sync_status:-missing}, health=${health_status:-missing}, operation=${operation_phase:-none})" >&2
+  echo "[phase60] Gitea GitOps application did not settle within ${max_seconds}s (sync=${sync_status:-missing}, health=${health_status:-missing}, operation=${operation_phase:-none})" >&2
   gitea_debug_dump "gitops-application-not-settled"
   return 1
 }
