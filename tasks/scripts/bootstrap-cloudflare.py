@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -477,6 +478,46 @@ def create_r2_token(token: str, account_id: str, bucket: str):
   raise RuntimeError(msg)
 
 
+# ---- reset: remove a removed host's install logs ----------------------------------
+#
+# Hosts upload install and first-boot logs to R2 under logs/<hostname>/. When reset
+# removes a host from the tailnet, its logs go with it. The hostname becomes part of
+# a key prefix, so it is validated strictly: an empty or odd name must never turn
+# into a prefix like "logs/" that would match every host's logs.
+
+HOST_LOG_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+def host_log_prefix(hostname: str) -> str:
+  name = (hostname or "").strip().lower()
+  if not HOST_LOG_NAME.match(name):
+    raise RuntimeError(f"Refusing to clean logs for unusual host name {hostname!r}.")
+  return f"logs/{name}/"
+
+
+def list_host_log_keys(token: str, account_id: str, bucket: str, hostname: str):
+  prefix = host_log_prefix(hostname)
+  query = urllib.parse.urlencode({"prefix": prefix, "per_page": 1000})
+  result = cf_api("GET", f"/accounts/{account_id}/r2/buckets/{bucket}/objects?{query}", token)
+  items = result if isinstance(result, list) else (result or {}).get("objects", [])
+  # Keep only keys under the exact prefix, whatever the API returned.
+  return [i["key"] for i in items if isinstance(i, dict) and str(i.get("key", "")).startswith(prefix)]
+
+
+def delete_host_logs(token: str, account_id: str, bucket: str, hostname: str):
+  """Delete every log object for one host and return how many were removed."""
+  removed = 0
+  for _ in range(500):  # bounded: each pass lists up to 1000 objects
+    keys = list_host_log_keys(token, account_id, bucket, hostname)
+    if not keys:
+      return removed
+    for key in keys:
+      encoded = urllib.parse.quote(key, safe="")
+      cf_api("DELETE", f"/accounts/{account_id}/r2/buckets/{bucket}/objects/{encoded}", token)
+      removed += 1
+  raise RuntimeError(f"Stopped cleaning logs for {hostname}: more objects than expected.")
+
+
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument("--token", default="")
@@ -498,6 +539,9 @@ def main():
   parser.add_argument("--existing-r2-access-key-id", default="")
   parser.add_argument("--existing-r2-secret-access-key", default="")
   parser.add_argument("--existing-r2-endpoint", default="")
+  # Reset: lists a host's log objects, and deletes them only with --delete-host-logs-confirm.
+  parser.add_argument("--delete-host-logs", default="", help="comma-separated host names whose R2 logs to remove")
+  parser.add_argument("--delete-host-logs-confirm", action="store_true")
   args = parser.parse_args()
 
   if args.token_stdin:
@@ -511,6 +555,12 @@ def main():
     if args.existing_r2_endpoint.startswith("https://") and args.existing_r2_endpoint.endswith(prefix):
       account_id = args.existing_r2_endpoint[len("https://") : -len(prefix)]
   account_id = get_account_id(args.token, account_id)
+  if args.delete_host_logs:
+    hosts = [h.strip() for h in args.delete_host_logs.split(",") if h.strip()]
+    found = {h: len(list_host_log_keys(args.token, account_id, args.bucket, h)) for h in hosts}
+    removed = {h: delete_host_logs(args.token, account_id, args.bucket, h) for h in hosts} if args.delete_host_logs_confirm else {}
+    print(json.dumps({"found": found, "deleted": removed}))
+    return
   if args.validate_access_only:
     validate_bootstrap_access(args.token, account_id, args.zone_domain)
     print("Cloudflare bootstrap access validated.")

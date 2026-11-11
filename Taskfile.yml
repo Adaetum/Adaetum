@@ -62,6 +62,7 @@ tasks:
         printf '  %stask initialize%s    Run setup with no window (answers via -- --answer id=value)\n' "${c_task}" "${c_reset}"
         printf '  %stask clean%s         Reset tracked public-safe config and remove derived installer artifacts\n' "${c_task}" "${c_reset}"
         printf '  %stask reset%s         Clean generated state and return the checkout to public main\n' "${c_task}" "${c_reset}"
+        printf '  %stask reset:cloud%s Interactively remove the Tailscale devices, OAuth clients and R2 host logs setup created\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-on%s Enable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-off%s Disable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
         printf '  %stask build-iso%s     Build the local kickstart-enabled ISO\n' "${c_task}" "${c_reset}"
@@ -137,6 +138,16 @@ tasks:
     dir: installer
     cmds:
       - go run ./cmd/adaetum-setup --apply --replay {{.CLI_ARGS}}
+
+  reset:cloud:
+    desc: Interactively remove the Tailscale devices, OAuth clients and R2 host logs setup created
+    dir: installer
+    cmds:
+      # Asks what to remove when run in a terminal, and always asks before deleting. ENV_FILE
+      # (optional) names the .env or recovery file to read; without it the checkout's .env
+      # and any downloaded recovery files are offered. Under a script with no terminal,
+      # every question takes its safe default and nothing is deleted unless answered.
+      - go run ./cmd/adaetum-setup --reset --apply {{if .ENV_FILE}}--env '{{.ENV_FILE}}'{{end}} {{.CLI_ARGS}}
 
   iso:download:
     desc: Download and verify Rocky installer media (set ROCKY_ARCH, ROCKY_IMAGE_TYPE, ROCKY_RELEASE)

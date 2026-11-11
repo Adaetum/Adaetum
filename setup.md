@@ -170,6 +170,33 @@ retains the GitHub CLI login, private recovery repository, and verified Rocky
 installer media because those are setup infrastructure rather than saved
 provider values.
 
+### Reset Tailscale and host logs (`task reset:cloud`)
+
+Between test installs, `task reset:cloud` removes what setup created so the next
+install starts clean: the cluster's Tailscale devices (hosts, the operator and its
+proxies), the two Adaetum OAuth clients, and the install logs in R2 of every host it
+removed. It reads a `.env` or the downloaded recovery file, which has the same format,
+and only touches devices carrying the tags setup applies and OAuth clients whose IDs
+that file records. It does not edit your tailnet policy.
+
+```bash
+task reset:cloud
+```
+
+In a terminal it offers the files it found, lists what exists, and asks what to remove:
+everything, devices one by one, devices and logs only, only the OAuth clients, or
+nothing. It then asks once more before deleting, and the default answer is always "no".
+Removing the OAuth clients needs a temporary Tailscale access token (a one-day API
+token from the Tailscale admin console), which is asked for only if you chose them. A
+host that is still online is removed from the tailnet too, so reset after you are done
+with it. Tailscale Services the operator created are not removed by reset.
+
+To name the file yourself, pass `ENV_FILE=~/Downloads/recovery_setup-<date>`. Under a
+script with no terminal, every question takes its safe default and nothing is deleted
+unless you answer it, for example
+`task reset:cloud -- --answer reset-what=everything --answer reset-confirm=yes`
+with the token in `ADAETUM_SECRET_RESET_TAILSCALE_TOKEN`.
+
 ### Replay saved setup state
 
 After completing `task init` once, `task init:silent` reruns setup with no window and no

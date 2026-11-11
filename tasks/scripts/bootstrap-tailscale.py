@@ -371,6 +371,100 @@ def create_auth_key_with_bearer(bearer_token: str, tags):
   return key
 
 
+# ---- reset ------------------------------------------------------------------
+#
+# Reset removes what setup created in the tailnet so the next install starts clean:
+# the cluster's devices and the two Adaetum OAuth clients. Selection is deliberately
+# narrow and lives in pure functions so a test can pin it down: a device is only
+# selected when it carries one of the tags setup applies, and an OAuth client only
+# when its ID is one the operator's .env recorded. Nothing is deleted without an
+# explicit list of IDs, and every ID is re-checked against a fresh listing first.
+
+# Tags setup puts on hosts (enrollment) and on the operator and its proxies.
+HOST_TAGS = {"tag:rocky10", "tag:server"}
+OPERATOR_TAGS = {"tag:k8s-operator", "tag:k8s"}
+
+
+def reset_device_tags(cluster_tag: str):
+  return HOST_TAGS | OPERATOR_TAGS | {normalize_tag(cluster_tag or DEFAULT_CLUSTER_TAG)}
+
+
+def select_reset_devices(devices, cluster_tag: str):
+  """Return the devices setup created, as small records, and nothing else."""
+  wanted = reset_device_tags(cluster_tag)
+  chosen = []
+  for device in devices or []:
+    if not isinstance(device, dict):
+      continue
+    tags = {t for t in (device.get("tags") or []) if isinstance(t, str)}
+    if not tags & wanted or not device.get("id"):
+      continue
+    chosen.append({
+      "id": str(device["id"]),
+      "hostname": str(device.get("hostname") or ""),
+      "name": str(device.get("name") or ""),
+      "tags": sorted(tags),
+      "lastSeen": str(device.get("lastSeen") or ""),
+      # Only hosts (not the operator's proxies) have install logs to clean up.
+      "isHost": bool(tags & HOST_TAGS),
+    })
+  return chosen
+
+
+def select_reset_clients(keys, client_ids):
+  """Return OAuth clients whose ID the operator recorded. Names alone never match."""
+  recorded = {c.strip() for c in client_ids if c and c.strip()}
+  chosen = []
+  for key in keys or []:
+    if not isinstance(key, dict):
+      continue
+    key_id = str(key.get("id") or "")
+    if key_id in recorded and key.get("keyType") == "client":
+      chosen.append({"id": key_id, "description": str(key.get("description") or "")})
+  return chosen
+
+
+def list_reset_devices(bearer_token: str, tailnet: str, cluster_tag: str):
+  _, parsed, _ = _request(
+    "GET",
+    f"{TS_API_BASE}/api/v2/tailnet/{tailnet}/devices?fields=all",
+    bearer_token=bearer_token,
+  )
+  return select_reset_devices(parsed.get("devices", []), cluster_tag)
+
+
+def list_reset_clients(bearer_token: str, tailnet: str, client_ids):
+  _, parsed, _ = _request(
+    "GET",
+    f"{TS_API_BASE}/api/v2/tailnet/{tailnet}/keys?all=true",
+    bearer_token=bearer_token,
+  )
+  return select_reset_clients(parsed.get("keys", []), client_ids)
+
+
+def delete_reset_devices(bearer_token: str, current, confirmed_ids):
+  """Delete only devices that are both confirmed by the operator and still selected."""
+  still_selected = {d["id"]: d for d in current}
+  deleted = []
+  for device_id in confirmed_ids:
+    if device_id not in still_selected:
+      continue
+    _request("DELETE", f"{TS_API_BASE}/api/v2/device/{device_id}", bearer_token=bearer_token)
+    deleted.append(still_selected[device_id])
+  return deleted
+
+
+def delete_reset_clients(bearer_token: str, tailnet: str, current, confirmed_ids):
+  still_selected = {c["id"]: c for c in current}
+  deleted = []
+  for key_id in confirmed_ids:
+    if key_id not in still_selected:
+      continue
+    _request("DELETE", f"{TS_API_BASE}/api/v2/tailnet/{tailnet}/keys/{key_id}", bearer_token=bearer_token)
+    deleted.append(still_selected[key_id])
+  return deleted
+
+
 def main():
   p = argparse.ArgumentParser()
   p.add_argument("--user-token", default="")
@@ -385,6 +479,11 @@ def main():
   p.add_argument("--create-operator-oauth-client", action="store_true")
   p.add_argument("--validate-oauth-only", action="store_true")
   p.add_argument("--validate-operator-oauth-only", action="store_true")
+  # Reset: each mode prints JSON. Without --reset-confirm-ids it only lists.
+  p.add_argument("--reset-devices", action="store_true")
+  p.add_argument("--reset-oauth-clients", action="store_true")
+  p.add_argument("--reset-client-ids", default="", help="comma-separated OAuth client IDs recorded in .env")
+  p.add_argument("--reset-confirm-ids", default="", help="comma-separated IDs to delete; empty means list only")
   args = p.parse_args()
 
   tags = build_default_tags(args.cluster_tag)
@@ -412,6 +511,30 @@ def main():
       raise RuntimeError("Operator OAuth client ID and secret are required for validation.")
     oauth_access_token(client_id, client_secret, ["auth_keys", "devices:core", "services"])
     print(f"TAILSCALE_OPERATOR_OAUTH_CLIENT_ID={client_id}")
+    return
+
+  if args.reset_devices or args.reset_oauth_clients:
+    if not args.tailnet:
+      raise RuntimeError("--tailnet is required for reset.")
+    confirmed = [i.strip() for i in args.reset_confirm_ids.split(",") if i.strip()]
+    if args.reset_devices:
+      # Devices are listed and deleted with the operator's own OAuth client, which
+      # already holds devices:core, so no extra credential is needed.
+      if not client_id or not client_secret:
+        raise RuntimeError("The operator OAuth client ID and secret are required to reset devices.")
+      bearer = oauth_access_token(client_id, client_secret, ["devices:core"])
+      current = list_reset_devices(bearer, args.tailnet, args.cluster_tag)
+      deleted = delete_reset_devices(bearer, current, confirmed) if confirmed else []
+      print(json.dumps({"devices": current, "deleted": [d["id"] for d in deleted]}))
+    else:
+      # Deleting OAuth clients needs the temporary full-access token; the operator's
+      # client cannot delete itself.
+      if not user_token:
+        raise RuntimeError("The temporary Tailscale API access token is required to remove OAuth clients.")
+      ids = [i.strip() for i in args.reset_client_ids.split(",") if i.strip()]
+      current = list_reset_clients(user_token, args.tailnet, ids)
+      deleted = delete_reset_clients(user_token, args.tailnet, current, confirmed) if confirmed else []
+      print(json.dumps({"clients": current, "deleted": [c["id"] for c in deleted]}))
     return
 
   ensure_required_tag_owners(

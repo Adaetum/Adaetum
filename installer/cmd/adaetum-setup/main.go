@@ -15,10 +15,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,7 +30,9 @@ import (
 	"github.com/Adaetum/Adaetum/installer/engine"
 	"github.com/Adaetum/Adaetum/installer/stages"
 	"github.com/Adaetum/Adaetum/installer/stages/media"
+	"github.com/Adaetum/Adaetum/installer/stages/reset"
 	"github.com/Adaetum/Adaetum/installer/sys"
+	"github.com/Adaetum/Adaetum/installer/terminal"
 )
 
 type answers map[string]string
@@ -52,6 +57,8 @@ func main() {
 	arch := flag.String("arch", "x86_64", "with --download-iso: x86_64 or aarch64")
 	imageType := flag.String("type", "minimal", "with --download-iso: minimal or dvd")
 	release := flag.String("release", media.Release, "with --download-iso: the Rocky Linux release")
+	reset := flag.Bool("reset", false, "list what setup created in Tailscale and R2 (devices, OAuth clients, host logs); with --apply and --answer reset-confirm=yes, remove it")
+	envPath := flag.String("env", "", "with --reset: the .env or recovery file naming what to reset (default: .env in the checkout)")
 	given := answers{}
 	flag.Var(given, "answer", "answer a question: id=value (repeatable)")
 	flag.Parse()
@@ -67,6 +74,9 @@ func main() {
 	}
 	if *downloadISO {
 		os.Exit(downloadInstaller(root, *arch, *imageType, *release))
+	}
+	if *reset {
+		os.Exit(runReset(root, *envPath, given, *apply))
 	}
 	env := &engine.Env{DryRun: !*apply, Clean: *clean}
 	var ui engine.UI = engine.Headless{Answers: given, Replay: *replay, Log: func(e engine.Event) {
@@ -154,6 +164,110 @@ func main() {
 	if blocked {
 		os.Exit(1)
 	}
+}
+
+// runReset lists, and with --apply and an explicit reset-confirm=yes answer removes, what
+// setup created in Tailscale and R2. It uses a plain runner and no installer log: the log
+// records command lines and this command's inputs are credentials.
+func runReset(root, envPath string, given answers, apply bool) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	// In a terminal, ask. Under a script, or when answers were given on the command
+	// line, run headless: every question takes its safe default unless answered.
+	interactive := terminal.IsInteractive() && len(given) == 0
+	var ui engine.UI = engine.Headless{Answers: given, Log: func(e engine.Event) {
+		if e.Message != "" {
+			fmt.Printf("  %s: %s\n", e.StepID, e.Message)
+		}
+	}}
+	if interactive {
+		ui = terminal.New()
+	}
+	if envPath == "" {
+		home, _ := os.UserHomeDir()
+		found := envCandidates(root, home)
+		switch {
+		case interactive:
+			def := ""
+			if len(found) > 0 {
+				def = found[0]
+			}
+			choice, err := askEnvFile(ctx, ui, found, def)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "reset stopped:", err)
+				return 1
+			}
+			envPath = choice
+		case len(found) > 0:
+			envPath = found[0]
+		}
+	}
+	env := &engine.Env{DryRun: !apply}
+	results, err := engine.Run(ctx, []engine.Step{reset.New(sys.Exec{}, root, envPath)}, env, ui)
+	for _, r := range results {
+		fmt.Printf("%-18s %s\n", r.StepID, r.Finding.Status)
+		if r.Finding.Detail != "" {
+			fmt.Printf("    %s\n", r.Finding.Detail)
+		}
+		for _, line := range r.Plan {
+			fmt.Printf("    - %s\n", line)
+		}
+		if r.Finding.Status == engine.Blocked {
+			return 1
+		}
+	}
+	if errors.Is(err, engine.ErrDeclined) {
+		// Declining (the default for a headless run) is how a look-only run ends;
+		// nothing was removed and that is not a failure.
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "reset stopped:", err)
+		return 1
+	}
+	return 0
+}
+
+// envCandidates lists the files that could name what to reset, best first: the
+// checkout's own .env, then recovery files downloaded by setup, newest first.
+func envCandidates(root, home string) []string {
+	var out []string
+	if info, err := os.Stat(filepath.Join(root, ".env")); err == nil && !info.IsDir() {
+		out = append(out, filepath.Join(root, ".env"))
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, "Downloads", "recovery_setup-*"))
+	type file struct {
+		path string
+		mod  time.Time
+	}
+	var files []file
+	for _, m := range matches {
+		if info, err := os.Stat(m); err == nil && !info.IsDir() {
+			files = append(files, file{m, info.ModTime()})
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
+	for _, f := range files {
+		out = append(out, f.path)
+	}
+	return out
+}
+
+// askEnvFile lets the operator pick one of the files found, or type another path.
+func askEnvFile(ctx context.Context, ui engine.UI, found []string, def string) (string, error) {
+	if len(found) == 0 {
+		return ui.Ask(ctx, engine.Screen{ID: "reset-env", Kind: engine.Text, Title: "Which file names what to reset?",
+			Intro: "No .env or downloaded recovery file was found. Give the path to one.", Prompt: "Path to the .env or recovery file"})
+	}
+	const other = "Another file..."
+	pick, err := engine.Choose(ctx, ui, "reset-env", "Which file names what to reset?", append(append([]string{}, found...), other), def)
+	if err != nil {
+		return "", err
+	}
+	if pick != other {
+		return pick, nil
+	}
+	return ui.Ask(ctx, engine.Screen{ID: "reset-env-path", Kind: engine.Text, Prompt: "Path to the .env or recovery file"})
 }
 
 // downloadInstaller is what `task iso:download` runs: fetch an installer into the
