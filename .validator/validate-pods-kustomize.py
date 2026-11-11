@@ -2,6 +2,8 @@
 """Build each pod Kustomization when kubectl is available, without a cluster."""
 from __future__ import annotations
 
+import toolpath  # noqa: F401  (PATH for GUI git clients)
+
 import os
 import shutil
 import subprocess

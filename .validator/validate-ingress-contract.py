@@ -2,6 +2,8 @@
 """Check that ingress rendering stays aligned with profile-derived host values."""
 from __future__ import annotations
 
+import toolpath  # noqa: F401  (PATH for GUI git clients)
+
 import subprocess
 import sys
 import re
@@ -106,6 +108,7 @@ def main() -> int:
         "grafana-tailnet": ("grafana", "grafana", "80"),
         "ntfy-tailnet": ("ntfy", "ntfy", "80"),
         "prometheus-tailnet": ("prometheus", "prometheus-operated", "9090"),
+        "agent-tailnet": ("agent", "adaetum-cluster-agent", "https"),
     }
     for name, (hostname, service, port) in expected_tailnet_routes.items():
         document = next(
@@ -125,7 +128,7 @@ def main() -> int:
             ("tailscale.com/proxy-group: adaetum-ingress", "shared ProxyGroup annotation"),
             (f"- {hostname}", f"MagicDNS label {hostname}"),
             (f"name: {service}", f"backend Service {service}"),
-            (f"number: {port}", f"backend port {port}"),
+            (f"number: {port}" if port.isdigit() else f"name: {port}", f"backend port {port}"),
         ):
             if required not in document:
                 failures.append(f"tailnet Ingress {name} is missing {label}")

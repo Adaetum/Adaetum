@@ -189,3 +189,24 @@ spec:
       name: prometheus-operated
       port:
         number: 9090
+---
+# The cluster agent is the private front door: sign-in, first-owner setup and
+# host enrolment all happen here. It serves HTTPS itself (own certificate) and
+# keeps its own sign-in, so it still works when Authentik is down. The Service
+# port is named "https", which tells the Tailscale proxy to speak TLS to it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-tailnet
+  namespace: adaetum
+  annotations:
+    tailscale.com/proxy-group: adaetum-ingress
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts: [agent]
+  defaultBackend:
+    service:
+      name: adaetum-cluster-agent
+      port:
+        name: https

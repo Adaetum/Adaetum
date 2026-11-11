@@ -223,6 +223,30 @@ Ansible path, never by the agent running commands itself.
   they report on. **Acceptance:** a dead or crash-looping agent pod produces an
   alert through the Notifications page and shows in the attention list.
 
+- [ ] SSH access to hosts over Tailscale, set up from an agent page. Today
+  `ssh ansible@<host>` is refused by Tailscale SSH ("tailnet policy does not
+  permit you to SSH to this node"), so even the operator cannot read a host's
+  `/etc/adaetum/agent-token` to first sign in. The page lets an owner choose who
+  may SSH to which hosts and as which user (for example `ansible`), shows the
+  rule that results, and applies it through the existing Tailscale bootstrap
+  tooling rather than by agent code editing the tailnet policy on its own.
+  **Starting rule** (an SSH entry in the tailnet policy: the
+  tailnet owner can connect as `ansible`, and only `ansible`, to any host tagged
+  `tag:cluster`, nobody else):
+  `{"action": "accept", "src": ["autogroup:owner"], "dst": ["tag:cluster"],
+  "users": ["ansible"]}`. Setup should write this by default, and the page
+  builds on it by adding named people and users. Tailscale SSH checks the login
+  name too, so each user must be listed ("does not permit you to SSH as user"
+  means the host matched but the user did not). `root` is deliberately left out:
+  `ansible` is the account the automation already uses.
+  **Design points to settle:** whether the `ansible` user is reached through
+  Tailscale SSH or the host's own sshd over the tailnet; that the rule is
+  narrow (named people, tagged hosts, `check` mode) and never a wildcard; that
+  recovery does not depend on it (the console and the agent token still work).
+  **Acceptance:** an owner grants one person SSH to the hosts from the page, that
+  person can connect and read the token, revoking removes access, and every
+  change is recorded with who made it.
+
 ### Quality and release
 
 - [ ] Run the full agent test suite on every pull request. **Current:**

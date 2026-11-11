@@ -2,6 +2,8 @@
 """Reject example placeholders from install artifacts unless a maintainer opts in."""
 from __future__ import annotations
 
+import toolpath  # noqa: F401  (PATH for GUI git clients)
+
 import os
 import re
 import shutil

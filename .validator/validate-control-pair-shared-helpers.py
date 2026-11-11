@@ -9,6 +9,8 @@ byte-for-byte duplicates.
 
 from __future__ import annotations
 
+import toolpath  # noqa: F401  (PATH for GUI git clients)
+
 import re
 import shlex
 import subprocess

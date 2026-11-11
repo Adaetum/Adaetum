@@ -2,6 +2,8 @@
 """Cross-check rendered pod files so related routing/config values cannot drift."""
 from __future__ import annotations
 
+import toolpath  # noqa: F401  (PATH for GUI git clients)
+
 import re
 import shutil
 import subprocess
