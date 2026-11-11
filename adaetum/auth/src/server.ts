@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { seedDemo } from "./demo";
+import { reconcileBreakGlass } from "./breakglass";
 import { createService } from "./service";
 import type { Mode } from "./accounts";
 
@@ -42,8 +42,22 @@ const service = await createService({
   setupCodeFile: join(stateDir, "setup-code"),
 });
 
-if ((await seedDemo(service, process.env)) === "created") {
-  console.error("DEVELOPMENT ONLY: made the demo owner account (see auth/README.md). Never enable AUTH_DEMO on a real machine.");
+// The break-glass owner comes from OpenBao as files (see breakglass.ts). It is checked now and
+// every minute, since the mounted files change in place when the password is rotated. Only
+// the machine that owns the accounts does this: a replica receives them from the cluster.
+const breakGlassDir = process.env.AUTH_BREAKGLASS_DIR;
+if (breakGlassDir) {
+  const reconcile = async () => {
+    if (service.mode() !== "primary") return;
+    try {
+      const result = await reconcileBreakGlass(service, breakGlassDir);
+      if (result === "created" || result === "updated") console.error(`break-glass owner ${result}`);
+    } catch (error) {
+      console.error("cannot reconcile the break-glass owner:", error instanceof Error ? error.message : error);
+    }
+  };
+  await reconcile();
+  setInterval(reconcile, 60_000);
 }
 
 const socket = process.env.AUTH_SOCKET;

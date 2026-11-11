@@ -161,3 +161,49 @@ func parseBytes(quantity string) (int64, bool) {
 	}
 	return int64(value*factor + 0.5), true
 }
+
+// parseNodeUsage reads the metrics API's node list (`kubectl get --raw
+// /apis/metrics.k8s.io/v1beta1/nodes`), keyed by node name.
+func parseNodeUsage(data []byte) (map[string]podUsage, error) {
+	var list struct {
+		Items []struct {
+			Metadata objectMeta `json:"metadata"`
+			Usage    struct {
+				CPU    string `json:"cpu"`
+				Memory string `json:"memory"`
+			} `json:"usage"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, err
+	}
+	usage := make(map[string]podUsage, len(list.Items))
+	for _, item := range list.Items {
+		cpu, _ := parseCPUMillis(item.Usage.CPU)
+		memory, _ := parseBytes(item.Usage.Memory)
+		usage[item.Metadata.Name] = podUsage{cpuMillis: cpu, memoryBytes: memory}
+	}
+	return usage, nil
+}
+
+// collectNodeUsage merges each machine's current CPU and memory use, as Kubernetes
+// already measures it, into the nodes. Without a metrics server the nodes simply carry
+// no usage, and the failure is reported.
+func (i *Inspector) collectNodeUsage(ctx context.Context, rke2 *RKE2, fail func(string, error)) {
+	data, err := i.kubectlRaw(ctx, "/apis/metrics.k8s.io/v1beta1/nodes")
+	if err != nil {
+		fail("node usage", err)
+		return
+	}
+	usage, err := parseNodeUsage(data)
+	if err != nil {
+		fail("node usage", err)
+		return
+	}
+	for index := range rke2.Nodes {
+		node := &rke2.Nodes[index]
+		if found, ok := usage[node.Name]; ok {
+			node.HasUsage, node.UsageCPUMillis, node.UsageMemoryBytes = true, found.cpuMillis, found.memoryBytes
+		}
+	}
+}

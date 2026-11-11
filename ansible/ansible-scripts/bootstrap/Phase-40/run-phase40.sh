@@ -1339,6 +1339,8 @@ grafana_secret_key_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/grafana_secr
 if [[ -n "${grafana_secret_key_val}" ]]; then
   platform_kv_args+=("grafana_secret_key=${grafana_secret_key_val}")
 fi
+adaetum_owner_email_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/adaetum_owner_email")"
+adaetum_owner_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/adaetum_owner_password")"
 ntfy_admin_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/ntfy_admin_password")"
 if [[ -n "${ntfy_admin_password_val}" ]]; then
   platform_kv_args+=("ntfy_admin_password=${ntfy_admin_password_val}")
@@ -1490,6 +1492,13 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
       "admin_password=${grafana_admin_password_val}" \
       "secret_key=${grafana_secret_key_val}"
   fi
+  # The agent's break-glass owner: its login lives here, in OpenBao, and the auth sidecar
+  # follows it (see adaetum/auth/src/breakglass.ts).
+  if [[ -n "${adaetum_owner_email_val}" && -n "${adaetum_owner_password_val}" ]]; then
+    seed_openbao_app_fields adaetum/break-glass "${root_token}" \
+      "email=${adaetum_owner_email_val}" \
+      "password=${adaetum_owner_password_val}"
+  fi
   if [[ -n "${ntfy_admin_password_val}" && -n "${ntfy_apprise_password_val}" ]]; then
     seed_openbao_app_fields observability/ntfy "${root_token}" \
       "admin_password=${ntfy_admin_password_val}" \
@@ -1555,6 +1564,7 @@ fi
   --from-file=gitea.hcl="${policy_dir}/gitea.hcl" \
   --from-file=crafty-credential-sync.hcl="${policy_dir}/crafty-credential-sync.hcl" \
   --from-file=adaetum-agent-gitops.hcl="${policy_dir}/adaetum-agent-gitops.hcl" \
+  --from-file=adaetum-agent-owner.hcl="${policy_dir}/adaetum-agent-owner.hcl" \
   --from-file=mcp-credentials.hcl="${policy_dir}/mcp-credentials.hcl" \
   --from-file=mcp-argocd.hcl="${policy_dir}/mcp-argocd.hcl" \
   --from-file=mcp-grafana.hcl="${policy_dir}/mcp-grafana.hcl" \

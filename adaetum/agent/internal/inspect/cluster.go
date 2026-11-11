@@ -85,6 +85,7 @@ func (i *Inspector) collectCluster(ctx context.Context, rke2 *RKE2, fail func(st
 	)
 	// Usage is merged into the pods, so it waits for the pod query to finish.
 	i.collectUsage(ctx, rke2, fail)
+	i.collectNodeUsage(ctx, rke2, fail)
 	// Services are linked to pods, so they wait for the pod query too.
 	i.collectTopology(ctx, rke2, fail)
 }

@@ -93,7 +93,7 @@ export function LaunchCard({ capabilities, initialPlaybook, initialLimit, initia
             <TextField.Root
               value={limit}
               onChange={(event) => setLimit(event.target.value)}
-              placeholder="node-50449, node-56843"
+              placeholder="Server names, separated by commas"
               spellCheck={false}
               autoComplete="off"
               required={playbook.limitRequired}

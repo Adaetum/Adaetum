@@ -309,7 +309,7 @@ func (f *flow) fixCloudflareAccess(ctx context.Context, token string, z provider
 		ID: "cloudflare-permissions-updated", Title: "One more permission needed",
 		Intro: "The token can't do everything setup needs.",
 		Steps: []engine.Instruction{
-			{Text: "Open the token and edit it (or create a replacement)", Link: "https://dash.cloudflare.com/" + z.AccountID + "/api-tokens/create"},
+			{Text: "Open the token and edit it (or create a replacement)", Link: cloudflareTokenTemplateURL()},
 			{Text: "Check the account and domain permissions, including Cloudflare Tunnel → Write for the whole account"},
 			{Text: "Save it, then check again"},
 		},

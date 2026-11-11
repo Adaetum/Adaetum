@@ -92,6 +92,8 @@ func g(t *testing.T, dir string, args ...string) string {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	// A headless first run takes the recovery password the operator would have chosen.
+	t.Setenv("ADAETUM_SECRET_RECOVERY_PASSWORD", "My-chosen-Recovery-9")
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
@@ -253,14 +255,105 @@ func TestAnExistingBackupPassphraseIsKept(t *testing.T) {
 	}
 }
 
-func TestAFirstRunGeneratesAPassphrase(t *testing.T) {
+func TestAFirstRunUsesThePasswordTheOperatorChose(t *testing.T) {
 	h := newHarness(t)
 	if err := h.step().Apply(context.Background(), h.env(), engine.Headless{}); err != nil {
 		t.Fatal(err)
 	}
-	got := envfile.Read(filepath.Join(h.root, ".env"))["BOOTSTRAP_BACKUP_PASSPHRASE"]
-	if len(got) != 24 {
-		t.Fatalf("generated passphrase %q has length %d, want 24", got, len(got))
+	if got := envfile.Read(filepath.Join(h.root, ".env"))["BOOTSTRAP_BACKUP_PASSPHRASE"]; got != "My-chosen-Recovery-9" {
+		t.Fatalf("the recovery password was %q, want the one the operator chose", got)
+	}
+}
+
+// Setup never makes a recovery password up: one that only setup's own files know is the one
+// the operator cannot find on the day the cluster is gone.
+func TestAFirstRunWithoutAChosenPasswordStopsInsteadOfGeneratingOne(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ADAETUM_SECRET_RECOVERY_PASSWORD", "")
+	err := h.step().Apply(context.Background(), h.env(), engine.Headless{})
+	if err == nil || !strings.Contains(err.Error(), "recovery password is required") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(h.root, ".env")); statErr == nil && envfile.Read(filepath.Join(h.root, ".env"))["BOOTSTRAP_BACKUP_PASSPHRASE"] != "" {
+		t.Fatal("a recovery password was written anyway")
+	}
+}
+
+func TestAShortRecoveryPasswordIsRefused(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ADAETUM_SECRET_RECOVERY_PASSWORD", "Too-short9")
+	err := h.step().Apply(context.Background(), h.env(), engine.Headless{})
+	if err == nil || !strings.Contains(err.Error(), "at least 16") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTheRecoveryPasswordMustBeHardToGuessAsWellAsLong(t *testing.T) {
+	for password, want := range map[string]string{
+		"Password123456789!":        "too easy to guess", // common word with a tacked-on tail
+		"qwertyuiopasdfghjkl":       "too easy to guess", // keyboard run
+		"aaaaaaaaaaaaaaaaaaaa":      "too easy to guess", // repeat
+		"1234567890123456":          "too easy to guess", // sequence
+		"Short1!":                   "at least 16",
+		"Plausible-Passphrase-2026": "",
+		"correct Horse battery 7":   "",
+	} {
+		got := recoveryPasswordProblem(password)
+		if want == "" && got != "" || want != "" && !strings.Contains(got, want) {
+			t.Errorf("%q: problem = %q, want %q", password, got, want)
+		}
+	}
+}
+
+// retryingUI answers each screen by ID and says it can ask again, like the window.
+type retryingUI struct {
+	engine.Headless
+	answers map[string][]string
+	asked   []string
+}
+
+func (u *retryingUI) CanRetry() bool { return true }
+func (u *retryingUI) Ask(_ context.Context, s engine.Screen) (string, error) {
+	u.asked = append(u.asked, s.ID)
+	queue := u.answers[s.ID]
+	if len(queue) == 0 {
+		return "", engine.ErrNoAnswer
+	}
+	u.answers[s.ID] = queue[1:]
+	return queue[0], nil
+}
+
+func TestInTheWindowThePasswordIsTypedTwiceAndTheOperatorConfirmsTheyKeptACopy(t *testing.T) {
+	h := newHarness(t)
+	ui := &retryingUI{answers: map[string][]string{
+		"recovery-password":       {"A long enough Phrase 7"},
+		"recovery-password-again": {"A long enough Phrasx 7", "A long enough Phrase 7"}, // a slip, then right
+		"recovery-password-saved": {"yes"},
+	}}
+	if err := h.step().Apply(context.Background(), h.env(), ui); err != nil {
+		t.Fatal(err)
+	}
+	if got := envfile.Read(filepath.Join(h.root, ".env"))["BOOTSTRAP_BACKUP_PASSPHRASE"]; got != "A long enough Phrase 7" {
+		t.Fatalf("password = %q", got)
+	}
+	if len(ui.answers["recovery-password-again"]) != 0 {
+		t.Fatal("the mismatch was not asked again")
+	}
+}
+
+func TestSetupStopsIfTheOperatorHasNotSavedTheirPassword(t *testing.T) {
+	h := newHarness(t)
+	ui := &retryingUI{answers: map[string][]string{
+		"recovery-password":       {"A long enough Phrase 7"},
+		"recovery-password-again": {"A long enough Phrase 7"},
+		"recovery-password-saved": {"no"},
+	}}
+	err := h.step().Apply(context.Background(), h.env(), ui)
+	if err == nil || !strings.Contains(err.Error(), "save your recovery password first") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := envfile.Read(filepath.Join(h.root, ".env"))["BOOTSTRAP_BACKUP_PASSPHRASE"]; got != "" {
+		t.Fatalf("a password was kept although the operator had not saved it: %q", got)
 	}
 }
 

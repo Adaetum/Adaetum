@@ -239,6 +239,67 @@ if command -v restorecon >/dev/null 2>&1; then
 fi
 systemctl enable adaetum-agent.service
 
+# Console login banner: always tell whoever is at the keyboard where the agent
+# is. agetty prints every /etc/issue.d/*.issue above the login prompt, so a file
+# we own there never fights with the distro's /etc/issue. The addresses change
+# (DHCP, Tailscale joining later), so a timer rewrites the file; the port is read
+# from the agent's own unit so the banner cannot drift from what is served.
+cat >/usr/local/sbin/adaetum-agent-banner.sh <<'BANNER'
+#!/bin/bash
+# Writes /etc/issue.d/adaetum.issue with the URLs the agent answers on.
+# The agent serves HTTPS with a sign-in, so the banner says https and nothing
+# secret (no token) is ever printed here: the console is not a private place.
+set -u
+issue=/etc/issue.d/adaetum.issue
+port="$(sed -n 's/.*-listen [^ ]*:\([0-9][0-9]*\).*/\1/p' /etc/systemd/system/adaetum-agent.service 2>/dev/null | head -n1)"
+port="${port:-8443}"
+
+# LAN address: the source address of the default route.
+lan="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)"
+# Tailscale address, once the node has joined the tailnet.
+ts="$(ip -4 -o addr show dev tailscale0 2>/dev/null | sed -n 's/.* inet \([0-9.]*\)\/.*/\1/p' | head -n1)"
+
+tmp="$(mktemp)"
+{
+  echo "Adaetum host agent"
+  if [ -n "${lan}" ]; then echo "  On this network:  https://${lan}:${port}"; fi
+  if [ -n "${ts}" ]; then echo "  Over Tailscale:   https://${ts}:${port}"; fi
+  if [ -z "${lan}" ] && [ -z "${ts}" ]; then echo "  No network address yet; this updates every 30 seconds."; fi
+  echo
+} > "${tmp}"
+install -d -m 0755 /etc/issue.d
+install -m 0644 "${tmp}" "${issue}"
+rm -f "${tmp}"
+BANNER
+chmod 0755 /usr/local/sbin/adaetum-agent-banner.sh
+cat >/etc/systemd/system/adaetum-agent-banner.service <<'UNIT'
+[Unit]
+Description=Write the agent address into the console login banner
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/adaetum-agent-banner.sh
+UNIT
+cat >/etc/systemd/system/adaetum-agent-banner.timer <<'UNIT'
+[Unit]
+Description=Keep the console login banner's agent address current
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=30s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+UNIT
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon /usr/local/sbin/adaetum-agent-banner.sh \
+    /etc/systemd/system/adaetum-agent-banner.service \
+    /etc/systemd/system/adaetum-agent-banner.timer || true
+fi
+systemctl enable adaetum-agent-banner.timer || true
+
 section_begin "git-install"
 echo "[BOOTSTRAP] Ensuring git is installed"
 if ! command -v git >/dev/null 2>&1; then

@@ -61,7 +61,7 @@ export async function createAuth({ db, secret, baseURL }: AuthOptions) {
 }
 
 export class PeopleError extends Error {
-  constructor(readonly code: "invalid" | "duplicate" | "not_found" | "last_owner", message: string) {
+  constructor(readonly code: "invalid" | "duplicate" | "not_found" | "last_owner" | "break_glass", message: string) {
     super(message);
   }
 }
@@ -109,6 +109,7 @@ function requireUser(db: Database, id: string): { role: Role } {
 // one is refused by every machine).
 export function deletePerson(db: Database, store: AccountStore, id: string): void {
   const person = requireUser(db, id);
+  if (store.isBreakGlass(id)) throw new PeopleError("break_glass", "the break-glass owner cannot be removed; its password is changed in OpenBao");
   if (person.role === "owner" && store.countOwners() <= 1) throw new PeopleError("last_owner", "the last owner cannot be removed");
   db.transaction(() => {
     db.run("DELETE FROM session WHERE userId = ?", [id]);
@@ -120,6 +121,7 @@ export function deletePerson(db: Database, store: AccountStore, id: string): voi
 export function setRole(db: Database, store: AccountStore, id: string, role: Role): void {
   if (!ROLES.includes(role)) throw new PeopleError("invalid", "that role does not exist");
   const person = requireUser(db, id);
+  if (role !== "owner" && store.isBreakGlass(id)) throw new PeopleError("break_glass", "the break-glass owner always stays an owner");
   if (person.role === "owner" && role !== "owner" && store.countOwners() <= 1) throw new PeopleError("last_owner", "the last owner cannot be demoted");
   db.run('UPDATE "user" SET role = ?, updatedAt = ? WHERE id = ?', [role, new Date().toISOString(), id]);
 }

@@ -98,6 +98,20 @@ type Node struct {
 	Cordoned bool `json:"cordoned,omitempty"`
 	// Pressure lists active MemoryPressure, DiskPressure, or PIDPressure.
 	Pressure []string `json:"pressure,omitempty"`
+	// What Kubernetes already says about the machine, so nothing has to be measured
+	// twice. Allocatable is what pods may use; Usage is the metrics API's current
+	// reading and is absent (HasUsage false) without a metrics server.
+	AllocatableCPUMillis   int64  `json:"allocatableCpuMillis,omitempty"`
+	AllocatableMemoryBytes int64  `json:"allocatableMemoryBytes,omitempty"`
+	HasUsage               bool   `json:"hasUsage,omitempty"`
+	UsageCPUMillis         int64  `json:"usageCpuMillis,omitempty"`
+	UsageMemoryBytes       int64  `json:"usageMemoryBytes,omitempty"`
+	OSImage                string `json:"osImage,omitempty"`
+	Kernel                 string `json:"kernel,omitempty"`
+	ContainerRuntime       string `json:"containerRuntime,omitempty"`
+	// ReadySince is when the Ready condition last changed, so a flapping or recently
+	// restarted machine can be told from a steady one.
+	ReadySince string `json:"readySince,omitempty"`
 }
 
 // Runner executes a command and returns its standard output. Output is
@@ -288,15 +302,23 @@ func parseNodes(data []byte) ([]Node, error) {
 			} `json:"spec"`
 			Status struct {
 				Conditions []struct {
-					Type   string `json:"type"`
-					Status string `json:"status"`
+					Type               string `json:"type"`
+					Status             string `json:"status"`
+					LastTransitionTime string `json:"lastTransitionTime"`
 				} `json:"conditions"`
+				Allocatable struct {
+					CPU    string `json:"cpu"`
+					Memory string `json:"memory"`
+				} `json:"allocatable"`
 				Addresses []struct {
 					Type    string `json:"type"`
 					Address string `json:"address"`
 				} `json:"addresses"`
 				NodeInfo struct {
-					KubeletVersion string `json:"kubeletVersion"`
+					KubeletVersion          string `json:"kubeletVersion"`
+					OSImage                 string `json:"osImage"`
+					KernelVersion           string `json:"kernelVersion"`
+					ContainerRuntimeVersion string `json:"containerRuntimeVersion"`
 				} `json:"nodeInfo"`
 			} `json:"status"`
 		} `json:"items"`
@@ -312,7 +334,13 @@ func parseNodes(data []byte) ([]Node, error) {
 			Name:     item.Metadata.Name,
 			Version:  item.Status.NodeInfo.KubeletVersion,
 			Cordoned: item.Spec.Unschedulable,
+
+			OSImage:          item.Status.NodeInfo.OSImage,
+			Kernel:           item.Status.NodeInfo.KernelVersion,
+			ContainerRuntime: item.Status.NodeInfo.ContainerRuntimeVersion,
 		}
+		node.AllocatableCPUMillis, _ = parseCPUMillis(item.Status.Allocatable.CPU)
+		node.AllocatableMemoryBytes, _ = parseBytes(item.Status.Allocatable.Memory)
 		for label := range item.Metadata.Labels {
 			if role, ok := strings.CutPrefix(label, rolePrefix); ok && role != "" {
 				node.Roles = append(node.Roles, role)
@@ -328,6 +356,7 @@ func parseNodes(data []byte) ([]Node, error) {
 			switch condition.Type {
 			case "Ready":
 				node.Ready = condition.Status == "True"
+				node.ReadySince = condition.LastTransitionTime
 			case "MemoryPressure", "DiskPressure", "PIDPressure":
 				if condition.Status == "True" {
 					node.Pressure = append(node.Pressure, condition.Type)

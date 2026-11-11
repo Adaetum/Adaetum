@@ -333,6 +333,10 @@ You will need:
   connecting them
 - Internet access to download and verify Rocky Linux media if you do not
   already have a supported image
+- **An internet connection on the target machine for the whole install and first
+  boot.** Installation does not work offline. The machine joins your Tailscale
+  network on first boot and must not finish booting without that protection,
+  and the install reports its progress and logs to your own Cloudflare storage.
 
 Useful setup paths:
 
@@ -355,6 +359,8 @@ operations, follow the [Bootstrap and recovery guide](setup.md).
 - Ubuntu 24.04 support is experimental and disabled by default.
 - The supported external integrations are GitHub, Cloudflare, and Tailscale;
   Adaetum does not claim an untested provider-plugin abstraction.
+- Installation requires an active internet connection on the target machine;
+  there is no offline install.
 - Bootstrap is optimized for one node at install time. Additional nodes and
   higher availability come afterward.
 - Major design changes may require deliberate adoption in the private recovery

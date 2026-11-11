@@ -298,6 +298,7 @@
         - { name: "authentik_secret_key", length: 48 }
         - { name: "authentik_postgresql_password", length: 24 }
         - { name: "authentik_admin_password", length: 24 }
+        - { name: "adaetum_owner_password", length: 24 }
         - { name: "authentik_bootstrap_token", length: 32 }
 
     - name: Generate missing or empty bootstrap secrets
@@ -364,6 +365,7 @@
         - authentik_secret_key
         - authentik_postgresql_password
         - authentik_admin_password
+        - adaetum_owner_password
         - authentik_bootstrap_token
 
     - name: Abort when bootstrap secret files are empty
@@ -381,6 +383,15 @@
       ansible.builtin.copy:
         content: "{{ ansible_facts['hostname'] }}"
         dest: "{{ bootstrap_secret_dir }}/hostname"
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
+
+    - name: Capture the Adaetum break-glass owner email when missing
+      ansible.builtin.copy:
+        content: "break-glass@adaetum.local"
+        dest: "{{ bootstrap_secret_dir }}/adaetum_owner_email"
         owner: root
         group: root
         mode: "0600"

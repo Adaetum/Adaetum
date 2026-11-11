@@ -40,7 +40,7 @@ export interface DrawerProps {
 
 const EXAMPLES = [
   "Which servers don't have the agent yet?",
-  "Rehearse installing the agent on node-50449",
+  "Rehearse installing the agent on a server that doesn't have it",
   "Remember that node-b reboots on Tuesdays",
 ];
 

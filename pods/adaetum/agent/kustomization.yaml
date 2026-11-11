@@ -4,6 +4,7 @@ resources:
   - serviceaccount.yaml
   - adaetum-agent-cluster-config.yaml
   - gitops-csi.yaml
+  - owner-csi.yaml
   - ansible-job-rbac.yaml
   - volume.yaml
   - deployment.yaml

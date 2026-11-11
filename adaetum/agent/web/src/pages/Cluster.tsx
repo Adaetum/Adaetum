@@ -2,7 +2,7 @@ import { Button, Callout, Card, Code, Flex, Heading, IconButton, Skeleton, Text 
 import { ColumnDef } from "@tanstack/react-table";
 import { Check, CircleAlert, Copy, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Report } from "../api";
+import { Node, Report } from "../api";
 import { AppLocation } from "../app/routes";
 import { useNow } from "../app/useReport";
 import { useToken } from "../lib/auth";
@@ -10,6 +10,7 @@ import { Login } from "./Login";
 import { DataTable } from "../components/DataTable";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
+import { HostCards, hostCards } from "../components/HostCards";
 import { ThisServer } from "../components/ThisServer";
 import { ReleaseCard } from "../components/ReleaseCard";
 import {
@@ -18,7 +19,6 @@ import {
   InstallPlan,
   JoinToken,
   ServerState,
-  ServerStatus,
   UnmatchedCheckIn,
   approveHost,
   mintJoinToken,
@@ -26,15 +26,6 @@ import {
 } from "../lib/clusterApi";
 import { formatAgo, plural } from "../lib/format";
 import { Tone } from "../lib/status";
-
-// What each state means to a person, not to the code. "Agent" is the Adaetum
-// program that runs on a server; "server" is a machine in the cluster.
-const STATE: Record<ServerState, { label: string; tone: Tone; meaning: string }> = {
-  ok: { label: "Running", tone: "green", meaning: "The agent is running and up to date." },
-  missing: { label: "Agent not installed", tone: "red", meaning: "This server is in the cluster, but no agent has ever reported from it." },
-  stale: { label: "Not heard from lately", tone: "amber", meaning: "The agent reported before but has gone quiet. The server may be off, or the agent stopped." },
-  outdated: { label: "Needs an update", tone: "amber", meaning: "The agent is running an older version than the others." },
-};
 
 export function Cluster({ report, location }: { report: Report | null; location: AppLocation }) {
   const { data, error, notClusterAgent, authRequired, loading, refresh } = useCluster();
@@ -79,7 +70,7 @@ export function Cluster({ report, location }: { report: Report | null; location:
           <Skeleton height="200px" />
         </Flex>
       ) : (
-        <Content data={data} now={now} onChanged={refresh} />
+        <Content data={data} nodes={report?.rke2.nodes ?? []} now={now} onChanged={refresh} />
       )}
       {report && (
         <div id="this-server" style={{ marginTop: "var(--space-6)" }}>
@@ -93,7 +84,7 @@ export function Cluster({ report, location }: { report: Report | null; location:
   );
 }
 
-function Content({ data, now, onChanged }: { data: ClusterView; now: Date; onChanged: () => void }) {
+function Content({ data, nodes, now, onChanged }: { data: ClusterView; nodes: Node[]; now: Date; onChanged: () => void }) {
   return (
     <Flex direction="column" gap="6">
       <Summary data={data} />
@@ -105,14 +96,8 @@ function Content({ data, now, onChanged }: { data: ClusterView; now: Date; onCha
       )}
       {!data.nodesError && (
         <Section title="Servers in the cluster">
-          <DataTable
-            data={data.servers}
-            columns={serverColumns(now)}
-            getRowId={(server) => server.server}
-            noun="servers"
-            pageSize={10}
-            empty="The cluster lists no servers."
-          />
+          <Text size="2" color="gray">Last backup: none yet. Backups aren't set up on this cluster.</Text>
+          <HostCards cards={hostCards(data.servers, nodes)} now={now} />
         </Section>
       )}
       {data.install.actions.length > 0 && (
@@ -239,29 +224,6 @@ function InstallSuggestion({ plan }: { plan: InstallPlan }) {
       </Flex>
     </Card>
   );
-}
-
-function serverColumns(now: Date): ColumnDef<ServerStatus, any>[] {
-  return [
-    { id: "server", header: "Server", accessorFn: (row) => row.server, cell: ({ row }) => <Code variant="ghost">{row.original.server}</Code> },
-    {
-      id: "status",
-      header: "Agent",
-      accessorFn: (row) => STATE[row.status].label,
-      cell: ({ row }) => (
-        <StatusBadge tone={STATE[row.original.status].tone} title={STATE[row.original.status].meaning}>
-          {STATE[row.original.status].label}
-        </StatusBadge>
-      ),
-    },
-    {
-      id: "seen",
-      header: "Last heard from",
-      accessorFn: (row) => row.lastSeen ?? "",
-      cell: ({ row }) => <Text size="2">{row.original.lastSeen ? formatAgo(row.original.lastSeen, now) : "Never"}</Text>,
-    },
-    { id: "version", header: "Agent version", accessorFn: (row) => row.version ?? "", cell: ({ row }) => <Text size="2">{row.original.version || "—"}</Text> },
-  ];
 }
 
 function unmatchedColumns(now: Date): ColumnDef<UnmatchedCheckIn, any>[] {

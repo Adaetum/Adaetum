@@ -607,3 +607,30 @@ func TestDirectoryBytesRefusesUnlistedPathsAndGarbage(t *testing.T) {
 		t.Fatal("unparseable du output must be an error, not zero")
 	}
 }
+
+// What Kubernetes already says about a machine is used as it is, never measured again.
+func TestParseNodesCarriesWhatKubernetesAlreadyKnows(t *testing.T) {
+	nodes, err := parseNodes([]byte(`{"items":[{
+	  "metadata":{"name":"w-1"},
+	  "status":{"allocatable":{"cpu":"3920m","memory":"15Gi"},
+	   "nodeInfo":{"kubeletVersion":"v1.35.6","osImage":"Rocky Linux 10.2","kernelVersion":"6.12.0","containerRuntimeVersion":"containerd://2.0"},
+	   "conditions":[{"type":"Ready","status":"True","lastTransitionTime":"2026-11-10T01:02:03Z"}]}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := nodes[0]
+	if node.AllocatableCPUMillis != 3920 || node.AllocatableMemoryBytes != 15<<30 || node.OSImage != "Rocky Linux 10.2" ||
+		node.Kernel != "6.12.0" || node.ContainerRuntime != "containerd://2.0" || node.ReadySince != "2026-11-10T01:02:03Z" {
+		t.Fatalf("unexpected node: %+v", node)
+	}
+}
+
+func TestParseNodeUsageIsKeyedByNodeName(t *testing.T) {
+	usage, err := parseNodeUsage([]byte(`{"items":[{"metadata":{"name":"w-1"},"usage":{"cpu":"250m","memory":"2Gi"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := usage["w-1"]; got.cpuMillis != 250 || got.memoryBytes != 2<<30 {
+		t.Fatalf("unexpected usage: %+v", got)
+	}
+}

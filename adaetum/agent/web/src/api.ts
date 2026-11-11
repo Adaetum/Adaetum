@@ -63,6 +63,16 @@ export interface Node {
   internalIp?: string;
   cordoned?: boolean;
   pressure?: string[];
+  // What Kubernetes already says about the machine (see inspect.Node).
+  allocatableCpuMillis?: number;
+  allocatableMemoryBytes?: number;
+  hasUsage?: boolean;
+  usageCpuMillis?: number;
+  usageMemoryBytes?: number;
+  osImage?: string;
+  kernel?: string;
+  containerRuntime?: string;
+  readySince?: string;
 }
 
 export interface ClusterEvent {

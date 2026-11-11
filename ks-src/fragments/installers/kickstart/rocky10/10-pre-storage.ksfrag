@@ -54,68 +54,6 @@ chmod +x /tmp/ks-storage-watch.sh
 echo "$!" > /tmp/ks-storage-watch.pid
 echo "[KS] started background storage watcher pid=$(cat /tmp/ks-storage-watch.pid)"
 
-# Live installer log stream. Anaconda only reports an error when it decides
-# something failed, and a stalled or silently skipped step is not one. So the
-# whole installer environment (every Anaconda log, the kickstart scripts, the
-# journal and the %post logs written into the target) is re-uploaded every few
-# seconds as installer-live.log, errors or not. The Worker overwrites by name, so
-# the latest copy is always the complete one. It retries until the network is up
-# and ends when the installer reboots.
-cat > /tmp/adaetum-installer-live-log.sh <<'EOF'
-#!/bin/bash
-set +e
-
-LOG_UPLOAD_URL="__KS_LOG_URL__"
-BOOTSTRAP_SHARED_TOKEN="__BOOTSTRAP_SHARED_TOKEN__"
-if [[ "${LOG_UPLOAD_URL}" == __*__ ]] || [ "${LOG_UPLOAD_URL}" = "__KS_LOG_URL_PLACEHOLDER__" ]; then
-  exit 0
-fi
-if [[ "${BOOTSTRAP_SHARED_TOKEN}" == __*__ ]]; then
-  BOOTSTRAP_SHARED_TOKEN=""
-fi
-
-host="$(hostname -s 2>/dev/null || echo node-bootstrap)"
-run_id="live-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || date +%s)"
-url="${LOG_UPLOAD_URL}"
-if [ -n "${BOOTSTRAP_SHARED_TOKEN}" ] && ! printf '%s' "${url}" | grep -qE '(^|[?&])token='; then
-  case "${url}" in *\?*) url="${url}&token=${BOOTSTRAP_SHARED_TOKEN}" ;; *) url="${url}?token=${BOOTSTRAP_SHARED_TOKEN}" ;; esac
-fi
-sep="?"
-case "${url}" in *\?*) sep="&" ;; esac
-# The hostname changes during install, so it is read again on every pass.
-bundle="/tmp/adaetum-installer-live.out"
-
-while true; do
-  host="$(hostname -s 2>/dev/null || echo node-bootstrap)"
-  {
-    echo "=== installer live log $(date -u +%Y-%m-%dT%H:%M:%SZ) host=${host} ==="
-    for f in /tmp/ks-pre.log /tmp/ks-storage-watch.log /tmp/ks-install-watchdog.log \
-             /tmp/anaconda.log /tmp/program.log /tmp/packaging.log /tmp/storage.log \
-             /tmp/ifcfg.log /tmp/dnf.librepo.log /tmp/syslog \
-             /tmp/adaetum-post-growfs.log /tmp/adaetum-post-storage-diag.log /tmp/adaetum-post-embed-repo.log \
-             /mnt/sysroot/root/bootstrap-post.log /mnt/sysroot/root/firstboot.log; do
-      [ -s "${f}" ] || continue
-      echo
-      echo "=== ${f} ==="
-      cat "${f}"
-    done
-    if command -v journalctl >/dev/null 2>&1; then
-      echo
-      echo "=== journalctl -b ==="
-      journalctl -b --no-pager -o short-iso 2>&1
-    fi
-  } 2>&1 | tail -c 8388608 > "${bundle}"
-  curl -4 --http1.1 -sS -o /dev/null --connect-timeout 3 --max-time 20 \
-    -H "x-ks-log-run: ${run_id}" \
-    -X POST --data-binary @"${bundle}" \
-    "${url}${sep}host=${host}&file=installer-live.log" >/dev/null 2>&1
-  sleep 10
-done
-EOF
-chmod +x /tmp/adaetum-installer-live-log.sh
-/tmp/adaetum-installer-live-log.sh >/dev/null 2>&1 &
-echo "[KS] started live installer log stream pid=$!"
-
 echo "[KS] kernel cmdline: $(cat /proc/cmdline 2>/dev/null || true)"
 echo "[KS] lsblk snapshot (pre-selection):"
 lsblk -o NAME,TYPE,RM,SIZE,FSTYPE,PKNAME,MODEL,TRAN 2>/dev/null || true

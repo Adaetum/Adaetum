@@ -366,3 +366,16 @@ a.app-card { display: block; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   .throbber::before { width: 100%; animation: none; opacity: 0.6; }
 }
+
+/* Host cards (Cluster page): bigger than app cards, since a machine has more to show at a glance. */
+.host-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--space-3);
+}
+@media (max-width: 480px) {
+  .host-grid { grid-template-columns: 1fr; }
+}

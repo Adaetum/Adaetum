@@ -1016,7 +1016,10 @@ run_step "bundle-phase10-tooling" "install Phase 10 tooling (task + kubectl) via
     fi
   }
 
-  install_formula task go-task/tap/go-task
+  # Use the homebrew-core formula, not the go-task tap cask: that cask runs
+  # /usr/bin/xattr after install (macOS only), which fails on Rocky and
+  # leaves first boot stuck before Phase 10.
+  install_formula task go-task
   install_formula kubectl kubernetes-cli
 '
 

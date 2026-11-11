@@ -112,8 +112,23 @@ export class AccountStore {
     return epoch;
   }
 
+  // The break-glass owner's email (see breakglass.ts), once known. That account always
+  // exists and is not a person who "set up" the machine.
+  breakGlassEmail: string | null = null;
+
   countUsers(): number {
     return (this.db.query('SELECT count(*) AS c FROM "user"').get() as { c: number }).c;
+  }
+
+  // People are everyone except the break-glass owner, so first-run setup still happens.
+  countPeople(): number {
+    if (!this.breakGlassEmail) return this.countUsers();
+    return (this.db.query('SELECT count(*) AS c FROM "user" WHERE lower(email) != ?').get(this.breakGlassEmail) as { c: number }).c;
+  }
+
+  isBreakGlass(userId: string): boolean {
+    if (!this.breakGlassEmail) return false;
+    return !!this.db.query('SELECT 1 FROM "user" WHERE id = ? AND lower(email) = ?').get(userId, this.breakGlassEmail);
   }
 
   countOwners(): number {

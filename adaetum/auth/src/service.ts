@@ -45,7 +45,7 @@ export async function createService(options: ServiceOptions) {
     db.run("INSERT INTO adaetum_meta (key, value) VALUES ('mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [mode]);
   let settingUp = false;
 
-  const needsSetup = () => readMode() === "primary" && store.countUsers() === 0;
+  const needsSetup = () => readMode() === "primary" && store.countPeople() === 0;
 
   async function publicAuth(request: Request, path: string): Promise<Response> {
     if (readMode() === "replica" && !REPLICA_ALLOWED.has(path)) {
@@ -68,7 +68,7 @@ export async function createService(options: ServiceOptions) {
 
   async function firstOwner(request: Request): Promise<Response> {
     if (readMode() !== "primary") return json(409, { error: "waiting_for_cluster" });
-    if (store.countUsers() > 0) return json(409, { error: "already_set_up" });
+    if (store.countPeople() > 0) return json(409, { error: "already_set_up" });
     const input = await body(request);
     if (input instanceof Response) return input;
     const { code, name, email, password } = (input ?? {}) as Record<string, string>;
@@ -137,7 +137,7 @@ export async function createService(options: ServiceOptions) {
           }
         }
       } catch (error) {
-        if (error instanceof PeopleError) return json(error.code === "not_found" ? 404 : error.code === "last_owner" ? 409 : 400, { error: error.code, message: error.message });
+        if (error instanceof PeopleError) return json(error.code === "not_found" ? 404 : error.code === "last_owner" || error.code === "break_glass" ? 409 : 400, { error: error.code, message: error.message });
         throw error;
       }
     }
@@ -159,7 +159,7 @@ export async function createService(options: ServiceOptions) {
       return isInternalCaller(request) ? internal(request, path) : json(404, { error: "not_found" });
     }
     if (path === "/api/auth-state" && request.method === "GET") {
-      return json(200, { enabled: true, mode: readMode(), needsSetup: needsSetup(), hasAccounts: store.countUsers() > 0 });
+      return json(200, { enabled: true, mode: readMode(), needsSetup: needsSetup(), hasAccounts: store.countPeople() > 0 });
     }
     if (path === "/api/setup" && request.method === "POST") return firstOwner(request);
     if (path.startsWith("/api/auth/")) return publicAuth(request, path.slice("/api/auth".length));

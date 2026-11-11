@@ -107,6 +107,7 @@ func (s *Step) Apply(ctx context.Context, env *engine.Env, ui engine.UI) error {
 		ID: "download-installer", Title: "Your installer is ready",
 		Intro: out,
 		Steps: []engine.Instruction{
+			{Text: "Connect the machine to the internet before you boot it, and keep it connected through install and first boot. Setup stops without it: the machine joins Tailscale on first boot so it is never left reachable without that protection, and the install reports its progress to your own storage"},
 			{Text: "Attach this ISO to your target machine or VM, and boot from it once"},
 			{Text: "The Rocky Linux install then runs on its own"},
 			{Text: "Detach the ISO when it reboots. First boot continues by itself (about 30 minutes)"},

@@ -68,7 +68,7 @@ type Run struct {
 var (
 	// "[ansible-runner] 2026-11-03T09:40:06Z running playbooks/day2.yml"
 	runMarker = regexp.MustCompile(`^\[ansible-runner\] (\S+) running (\S+)\s*$`)
-	// "node-56843  : ok=0    changed=0    unreachable=1    failed=0    skipped=0 ..."
+	// "node-b  : ok=0    changed=0    unreachable=1    failed=0    skipped=0 ..."
 	recapLine = regexp.MustCompile(`^(\S+)\s*: ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s+failed=(\d+)\s+skipped=(\d+)`)
 	// The message inside Ansible's JSON-ish failure output.
 	messageField = regexp.MustCompile(`"msg": "((?:[^"\\]|\\.)*)"`)

@@ -82,7 +82,7 @@ export const formatCpu = (millis: number): string => (millis >= 1000 ? `${(milli
 export const formatMemory = formatBytes;
 
 export const toneOf = (points: number): Tone => (points >= 92 ? "green" : points >= 75 ? "amber" : "red");
-const gradeOf = (points: number): Grade => (points >= 92 ? "Good" : points >= 75 ? "Fair" : "Poor");
+export const gradeOf = (points: number): Grade => (points >= 92 ? "Good" : points >= 75 ? "Fair" : "Poor");
 
 const SECTIONS: { key: SectionKey; label: string; asks: string; weight: number }[] = [
   { key: "resources", label: "Resources", asks: "Are requests and limits set, and sensible?", weight: 35 },

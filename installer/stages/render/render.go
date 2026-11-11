@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/trustelem/zxcvbn"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -82,7 +83,7 @@ func (s *Step) Plan(ctx context.Context, env *engine.Env) ([]string, error) {
 	}
 	return []string{
 		"Validate the Tailscale OAuth clients and mint the one-day, single-use node auth key.",
-		"Keep (or, on a first run, create) the bootstrap backup passphrase. An existing one is never replaced silently.",
+		"Keep the recovery password (on a first run you choose it and are asked to save your own copy). An existing one is never replaced silently.",
 		"Write .env (gitignored) and sync the required secrets to your private repository's Prod GitHub environment.",
 		"Render the GitOps files from platform.yaml and run the repository's validators.",
 		"Commit the rendered files and push them to your private repository, then confirm origin matches.",
@@ -369,13 +370,13 @@ func (s *Step) passphrase(ctx context.Context, env *engine.Env, existing map[str
 		if hasPriorState(existing) && rotate != "1" && rotate != "true" && rotate != "yes" {
 			return "", "", errors.New("BOOTSTRAP_BACKUP_PASSPHRASE is missing even though prior setup state exists. A new one would orphan older emergency kits, so setup will not generate one automatically. Restore the original passphrase into .env, or set SETUP_ALLOW_BACKUP_PASSPHRASE_ROTATE=1 if you are rotating it on purpose")
 		}
-		buf := make([]byte, 18)
-		if _, err := s.Random(buf); err != nil {
+		chosen, err := s.chooseRecoveryPassword(ctx, ui)
+		if err != nil {
 			return "", "", err
 		}
-		pass = base64.RawURLEncoding.EncodeToString(buf)
+		pass = chosen
 		sum := sha256.Sum256([]byte(pass))
-		say("Created a new backup passphrase (fingerprint " + hex.EncodeToString(sum[:])[:12] + "). Keep a copy of the one in .env.")
+		say("Recovery password set (fingerprint " + hex.EncodeToString(sum[:])[:12] + ").")
 	}
 	if b64 == "" {
 		b64 = base64.StdEncoding.EncodeToString([]byte(pass))
@@ -387,6 +388,98 @@ func (s *Step) passphrase(ctx context.Context, env *engine.Env, existing map[str
 		return "", "", err
 	}
 	return pass, b64, nil
+}
+
+// The recovery password's rules: long enough, and hard to guess by zxcvbn's estimate, which
+// rejects common words, keyboard runs, repeats and dates that mixing character kinds does not.
+// This one password opens the emergency recovery kit, which holds the keys to everything
+// else, so it is held to more than a website login but not to anything exotic.
+const (
+	minRecoveryPasswordLength = 16
+	minRecoveryScore          = 4 // zxcvbn: 0 (trivial) to 4 (very strong); 4 is over 10^10 guesses
+)
+
+// recoveryPasswordProblem says what is wrong with a password, or "" when it is acceptable.
+func recoveryPasswordProblem(value string) string {
+	switch {
+	case len([]rune(value)) < minRecoveryPasswordLength:
+		return fmt.Sprintf("use at least %d characters", minRecoveryPasswordLength)
+	case len(value) > 128:
+		return "use 128 characters or fewer"
+	case strings.ContainsAny(value, "\r\n"):
+		return "use a single line"
+	}
+	// zxcvbn estimates how many guesses a real cracker would need, so it rejects common
+	// words, keyboard runs, repeats and dates that a "has a symbol and a digit" rule lets
+	// through. Length is checked first because it is the cheap, explainable rule.
+	if zxcvbn.PasswordStrength(value, nil).Score < minRecoveryScore {
+		return "too easy to guess; try a few unrelated words, or add more that are not common phrases or patterns"
+	}
+	return ""
+}
+
+// chooseRecoveryPassword makes the operator pick the recovery password and asks them to
+// keep their own copy. Setup never makes one up for them: a generated password lives only in
+// setup's files, which is exactly the place the operator will not think to look on the day
+// the cluster is gone. A copy is still kept in .env and uploaded with it for setup to use,
+// which is less secure than keeping it only in the operator's head and is accepted.
+//
+// In a window the password is typed twice, to catch a typing slip before it locks a kit.
+// A headless run has no one to ask again, so it takes one value from the environment.
+func (s *Step) chooseRecoveryPassword(ctx context.Context, ui engine.UI) (string, error) {
+	interactive := false
+	if r, ok := ui.(engine.Retrier); ok {
+		interactive = r.CanRetry()
+	}
+	valid := func(answer string) (string, error) {
+		if problem := recoveryPasswordProblem(strings.TrimSpace(answer)); problem != "" {
+			return "", errors.New(problem)
+		}
+		return "", nil
+	}
+	pass, err := engine.AskValid(ctx, ui, engine.Screen{
+		ID: "recovery-password", Kind: engine.Secret,
+		Title:  "Choose your recovery password",
+		Intro:  "This password opens your emergency recovery kit: the keys to your cluster's secrets. Use at least 16 characters that are hard to guess: a few unrelated words works well, and common words, patterns and dates do not. You will need it on the day something goes badly wrong, so choose one you can keep safe.",
+		Prompt: "Recovery password", YesLabel: "Continue",
+	}, valid)
+	if err != nil {
+		return "", fmt.Errorf("a recovery password is required: %w", err)
+	}
+	pass = strings.TrimSpace(pass)
+	if interactive {
+		if _, err := engine.AskValid(ctx, ui, engine.Screen{
+			ID: "recovery-password-again", Kind: engine.Secret,
+			Title:  "Type it once more",
+			Intro:  "So a typing slip cannot lock you out of your own recovery kit.",
+			Prompt: "Recovery password, again", YesLabel: "Continue",
+		}, func(again string) (string, error) {
+			if strings.TrimSpace(again) != pass {
+				return "", errors.New("that is not the same password")
+			}
+			return "", nil
+		}); err != nil {
+			return "", err
+		}
+	}
+	if err := engine.ApproveScreen(ctx, ui, engine.Screen{
+		ID:    "recovery-password-saved",
+		Title: "Save your recovery password somewhere safe",
+		Intro: "Do this now, before you go on. You will not be shown it again, and nobody can recover it for you.",
+		Steps: []engine.Instruction{
+			{Text: "Put it in your password manager, or write it down and keep it somewhere safe and offline."},
+			{Text: "Keep it apart from your computer's setup files. A copy also stays in those files and is uploaded with them so setup can use it, but this is the copy you rely on."},
+		},
+		YesLabel: "I've saved it",
+		NoLabel:  "Not yet",
+		Default:  "yes",
+	}); err != nil {
+		if errors.Is(err, engine.ErrDeclined) {
+			return "", errors.New("setup stopped so you can save your recovery password first; run setup again when you have")
+		}
+		return "", err
+	}
+	return pass, nil
 }
 
 func hasPriorState(existing map[string]string) bool {

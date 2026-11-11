@@ -76,6 +76,14 @@ included. Existing recovery profiles are preserved and re-rendered in the isolat
 checkout. If a reused recovery repository has no locally available backup passphrase,
 setup asks for the existing passphrase instead of silently replacing it.
 
+On a first run setup asks you to choose the recovery password (at least 16 characters and hard to guess: setup
+scores it with zxcvbn, which refuses common words, keyboard runs, repeats and dates, so
+"correct Horse battery 7" is fine and "Password123456789!" is not) and type it twice, then asks you to confirm you have saved
+your own copy somewhere safe before it goes on. Setup never makes one up for you. A copy
+is still written to `.env` and uploaded with it so setup can use it; that is less secure
+than keeping it only with you, and is accepted so the password is never lost to setup's
+own files. Headless runs read it from `ADAETUM_SECRET_RECOVERY_PASSWORD`.
+
 GitHub requires forks of public repositories to remain public, so setup uses a
 standalone private recovery repository. Setup removes the temporary checkout after
 the run and retains the completed installer under the launch folder's `dist/`.
@@ -616,7 +624,7 @@ on the installer artifacts published through the bootstrap path in R2 instead.
 
 The embedded bootstrap flow performs the operational setup work:
 
-- Ensures a backup passphrase exists
+- Keeps the recovery password you chose (setup never generates one)
 - Uploads local repo-root ISOs to Cloudflare R2 as golden ISOs
 - Builds and uploads the break-glass ansible bundle
 - Builds and uploads the runtime bootstrap env payload

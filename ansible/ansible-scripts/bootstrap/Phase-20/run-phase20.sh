@@ -109,6 +109,11 @@ write_secret "authentik_postgresql_password" 24
 write_secret "authentik_admin_password" 24
 write_secret "authentik_bootstrap_token" 32
 write_literal_secret "authentik_admin_username" "akadmin"
+# The always-active break-glass owner of the Adaetum agent (see adaetum/auth/src/breakglass.ts).
+# Generated here so it lands in the emergency kit with every other first-run secret, and
+# seeded into OpenBao by Phase 40, which is where its password is read and rotated.
+write_literal_secret "adaetum_owner_email" "break-glass@adaetum.local"
+write_secret "adaetum_owner_password" 24
 
 cat <<'INFO'
 

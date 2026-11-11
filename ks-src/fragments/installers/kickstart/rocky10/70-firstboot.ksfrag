@@ -286,6 +286,92 @@ fail_bootstrap() {
   exit 1
 }
 
+# Without an internet connection the install cannot be completed safely: first
+# boot joins the machine to Tailscale before it is allowed to finish booting, and
+# a node that skipped that would be left reachable without it. This is known at
+# install time, so instead of leaving a machine that boots to a bare login prompt
+# (what a failed %post used to produce), record why and install a full-screen
+# notice that takes over the console on every boot until the disk is wiped. The
+# first-boot service and agent are deliberately never installed on this path.
+# Debug-user access, set up earlier in this script, still works for diagnosis.
+fail_no_internet() {
+  local reason="${1:-no internet connection}"
+  echo "[BOOTSTRAP] FAILURE: ${reason}"
+  echo "[BOOTSTRAP] ---- diagnostics ----"
+  ip addr || true
+  ip route || true
+  cat /etc/resolv.conf || true
+  echo "[BOOTSTRAP] ---- end diagnostics ----"
+  echo "[BOOTSTRAP] Installing the installation-failed console screen; first boot will not run"
+
+  install -d -m 0755 /var/lib/adaetum
+  printf '%s\n' "${reason}" >/var/lib/adaetum/install-failed
+
+  cat >/usr/local/sbin/adaetum-install-failed.sh <<'SCRIPT'
+#!/bin/bash
+# Full-screen notice shown instead of first boot when installation had no
+# internet connection. It redraws so kernel or service messages cannot bury it.
+reason="$(cat /var/lib/adaetum/install-failed 2>/dev/null || echo "no internet connection")"
+host="$(hostname -s 2>/dev/null || echo unknown)"
+while true; do
+  clear
+  /usr/bin/gum style --align center --bold --border double --border-foreground 9 \
+    --foreground 9 --padding "1 4" --margin "2 2" \
+    "Adaetum installation failed" \
+    "" \
+    "There was no internet connection during installation." \
+    "" \
+    "Adaetum needs the internet to install: it reports progress," \
+    "and it joins this machine to Tailscale before first boot can" \
+    "finish, so it is never left running without that protection." \
+    "" \
+    "Connect this machine to a network with internet access," \
+    "then wipe its disk and reinstall from the Adaetum ISO." \
+    "" \
+    "Detail: ${reason}" \
+    "Host: ${host}" 2>/dev/null \
+    || printf '\nADAETUM INSTALLATION FAILED\n\nNo internet connection during installation.\nConnect to the internet, wipe this disk and reinstall.\n\nDetail: %s\n' "${reason}"
+  sleep 60
+done
+SCRIPT
+  chmod 0755 /usr/local/sbin/adaetum-install-failed.sh
+
+  cat >/etc/systemd/system/adaetum-install-failed.service <<'UNIT'
+[Unit]
+Description=Show that the Adaetum installation failed
+ConditionPathExists=/var/lib/adaetum/install-failed
+After=systemd-user-sessions.service plymouth-quit-wait.service getty@tty1.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/adaetum-install-failed.sh
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon /usr/local/sbin/adaetum-install-failed.sh /etc/systemd/system/adaetum-install-failed.service /var/lib/adaetum/install-failed 2>&1 || true
+  fi
+  systemctl enable adaetum-install-failed.service || \
+    ln -sf /etc/systemd/system/adaetum-install-failed.service \
+      /etc/systemd/system/multi-user.target.wants/adaetum-install-failed.service
+
+  stop_log_stream
+  upload_log "${log_file}" os-installation.log
+  # The install itself finished; the failure screen is the intended result.
+  echo "[BOOTSTRAP] Install stopped: ${reason}. Wipe and reinstall with internet access."
+  exit 0
+}
+
 retry_cmd() {
   label="$1"
   shift
@@ -426,10 +512,28 @@ while [ "${i}" -le "${attempts}" ]; do
 done
 
 if ! ip route | grep -q '^default '; then
-  fail_bootstrap "no default route detected"
+  fail_no_internet "no network route to the internet (no default route)"
 fi
 
 echo "[BOOTSTRAP] Network readiness confirmed (default route present)"
+
+# A route is not the internet. Tailscale is required for first boot to finish
+# securely, so its coordination server must be reachable. Any HTTP answer counts;
+# only a failure to connect does not.
+echo "[BOOTSTRAP] Checking that the internet (Tailscale) is reachable"
+internet_ok=false
+for attempt in 1 2 3 4 5 6; do
+  if curl -4 -sS -o /dev/null --connect-timeout 5 --max-time 10 https://controlplane.tailscale.com; then
+    internet_ok=true
+    break
+  fi
+  echo "[BOOTSTRAP] Internet check failed (attempt ${attempt}/6); retrying in 5s"
+  sleep 5
+done
+if [ "${internet_ok}" != true ]; then
+  fail_no_internet "the internet is not reachable (Tailscale's servers did not answer)"
+fi
+echo "[BOOTSTRAP] Internet reachable"
 section_end
 
 section_begin "network-diagnostics"

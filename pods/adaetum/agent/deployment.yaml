@@ -99,6 +99,7 @@ spec:
             - {name: AUTH_SOCKET, value: /data/auth/auth.sock}
             - {name: AUTH_BASE_URL, value: 'https://adaetum-cluster-agent.adaetum.svc:8444'}
             - {name: AUTH_MODE, value: primary}
+            - {name: AUTH_BREAKGLASS_DIR, value: /run/adaetum-owner}
           readinessProbe:
             exec:
               command: ["/bin/sh", "-ec", "test -S /data/auth/auth.sock"]
@@ -113,6 +114,7 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /data}
             - {name: tmp, mountPath: /tmp}
+            - {name: owner-credential, mountPath: /run/adaetum-owner, readOnly: true}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -122,5 +124,10 @@ spec:
             driver: secrets-store.csi.k8s.io
             readOnly: true
             volumeAttributes: {secretProviderClass: adaetum-agent-gitops}
+        - name: owner-credential
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes: {secretProviderClass: adaetum-agent-owner}
         - name: tmp
           emptyDir: {sizeLimit: 128Mi}

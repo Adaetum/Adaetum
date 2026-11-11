@@ -213,7 +213,7 @@ MCP is a standard interface of the agent, next to the HTTP API, not an add-on.
 client such as Claude Code:
 
 ```bash
-claude mcp add adaetum -- /path/to/adaetum-agent mcp -ssh ansible@node-50449
+claude mcp add adaetum -- /path/to/adaetum-agent mcp -ssh ansible@node-a
 ```
 
 Rules that keep it standard:

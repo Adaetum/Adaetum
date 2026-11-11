@@ -29,9 +29,10 @@ configure those backups.
 
 Run **Release Adaetum agent software** from the public repository's Actions tab,
 choose the branch to release, and supply a new tag such as
-`adaetum-v0.1.2-beta.1` for development or `adaetum-v0.1.2` for stable. Stable
-releases must use the current main branch; beta releases are GitHub prereleases
-and do not become latest. The selected commit supplies the binaries, images and
+`adaetum-v0.1.2-beta.1` for the beta channel or `adaetum-v0.1.2` for stable.
+Stable releases must use the current tip of the `main` branch and beta releases
+the current tip of the `beta` branch (create `beta` first); beta releases are
+GitHub prereleases and do not become latest. The selected commit supplies the binaries, images and
 manifest. Only a manual start can publish a release, including when automatic
 Actions are disabled.
 

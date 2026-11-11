@@ -9,7 +9,7 @@ RKE2 servers, using read-only commands.
 Container images are the largest consumer of disk on these servers, and most are
 not in use:
 
-| | node-50449 | node-56843 |
+| | node-a | node-b |
 |---|---|---|
 | Disk used | 158 GiB (67%) | 195 GiB (83%) |
 | Unpacked images (kubelet's figure) | 87 GiB | 108 GiB |
@@ -32,12 +32,12 @@ figure is only learned by deleting something.
 
 An image no container uses on this server can still matter:
 
-| Unused image category | node-50449 | node-56843 |
+| Unused image category | node-a | node-b |
 |---|---|---|
 | **Failover cache**: needed by pods on the *other* server | 24% (about 25 GiB) | 4% (about 3 GiB) |
 | **Unused cluster-wide**: no pod on either server needs it | 76% (about 79 GiB) | 96% (about 75 GiB) |
 
-If node-56843 fails, its pods move to node-50449, and the images they need are
+If node-b fails, its pods move to node-a, and the images they need are
 the failover cache. Deleting them turns a fast restart into a download, or a
 failure if the registry is unreachable. The recovery repository exists to work
 during outages.
@@ -92,9 +92,9 @@ What it would do today (estimates from the measurements above):
 
 | | Disk now | Effect of 75% / 60% |
 |---|---|---|
-| node-56843 | 83% | Over 75%, so the kubelet cleans down toward 60%: about 54 GiB. Enough unused images exist to reach it. |
-| node-50449 | 67% | Below 75%, so nothing happens until it grows. |
-| With the 85% / 80% defaults | | node-56843 starts soon but frees only about 12 GiB. |
+| node-b | 83% | Over 75%, so the kubelet cleans down toward 60%: about 54 GiB. Enough unused images exist to reach it. |
+| node-a | 67% | Below 75%, so nothing happens until it grows. |
+| With the 85% / 80% defaults | | node-b starts soon but frees only about 12 GiB. |
 
 The kubelet decides by the whole disk's usage, which also includes Longhorn data and
 the operating system, not by image size alone.
@@ -193,7 +193,7 @@ independent cross-check against the live cluster found that most of them were
 named by old ReplicaSets, which a rollback needs. The planner now protects them.
 With every safeguard on, the default plan is small:
 
-| Plan | node-50449 | node-56843 |
+| Plan | node-a | node-b |
 |---|---|---|
 | Default (superseded versions, public registries) | 3 images, about 1 GiB on disk | 4 images, about 1 GiB |
 | `-include-orphans` (apps with no version anywhere in the cluster) | 37 images, about 23 GiB | 44 images, about 27 GiB |
@@ -218,7 +218,7 @@ download them again from their public registries.
 - "Referenced by the cluster" is judged on this server's view of the API; a
   server that cannot reach it produces no plan.
 - No image has ever been removed with it. On 2026-11-04 `apply -dry-run` was run on
-  node-56843 for the default plan (4 images) and the `-include-orphans` plan (44
+  node-b for the default plan (4 images) and the `-include-orphans` plan (44
   images, `-max 0`): every image passed the live checks, nothing was removed (237
   images before and after), and the audit log recorded only `would-remove`. The
   first real run should be small: `-max` of a handful, then check.
@@ -303,7 +303,7 @@ Measured on 2026-11-04 with read-only plans, an independent check against the
 runtime found none of the planned images held by a container, pinned, or
 system-named:
 
-| Level | node-50449 | node-56843 |
+| Level | node-a | node-b |
 |---|---|---|
 | Careful (default registries) | 3 images, about 1 GiB of disk | 4 images, about 1 GiB |
 | **Aggressive** | **173 images, about 90 GiB** | **115 images, about 75 GiB** |

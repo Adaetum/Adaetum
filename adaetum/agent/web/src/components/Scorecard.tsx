@@ -1,5 +1,16 @@
 import { Flex, Text } from "@radix-ui/themes";
-import { Sizing, toneOf } from "../lib/sizing";
+import { toneOf } from "../lib/sizing";
+import { Tone } from "../lib/status";
+
+// What the radar and chips need from a score. Workload sizing and host scores both fit, so
+// every score in the app reads the same way.
+export interface Scored {
+  points: number;
+  grade: string;
+  tone: Tone;
+  sections: { key: string; label: string; asks: string; points: number | null }[];
+}
+type Sizing = Scored;
 
 // The sizing score as a shape you can read at a glance: one axis per section (Resources,
 // Fit, Scaling, Storage) from the centre outwards, so a lopsided app looks lopsided. The number in the
@@ -23,7 +34,7 @@ export function Radar({ sizing, size = 84 }: { sizing: Sizing; size?: number }) 
   // An axis that does not apply sits on its outer ring, so it neither helps nor hurts the shape.
   const shape = AXES.map((axis) => point(centre, centre, radius * ((byKey[axis.key].points ?? 100) / 100), axis.angle).join(",")).join(" ");
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Sizing score ${sizing.points} out of 100, ${sizing.grade}`}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Score ${sizing.points} out of 100, ${sizing.grade}`}>
       <polygon points={ring(1)} className="radar-ring" />
       <polygon points={ring(0.5)} className="radar-ring" />
       {AXES.map((axis) => (

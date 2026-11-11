@@ -50,16 +50,22 @@ jobs:
             exit 1
           fi
           version="${BASH_REMATCH[1]}"
+          # Two channels, two branches: stable releases come from the tip of main, beta
+          # releases from the tip of beta. Run this workflow from the branch you mean to
+          # release; an old or unmerged commit can never be released by accident.
           channel=stable
+          branch=main
           if [[ "$version" == *-beta.* ]]; then
             channel=beta
-          else
-            # A stable release must be built from the current public main tip.
-            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-            if [[ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]]; then
-              echo "Stable releases must use the current main branch; use a -beta.N tag for development." >&2
-              exit 1
-            fi
+            branch=beta
+          fi
+          if ! git fetch --no-tags origin "+refs/heads/${branch}:refs/remotes/origin/${branch}" 2>/dev/null; then
+            echo "The ${branch} branch does not exist in this repository, so a ${channel} release cannot be made." >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse "origin/${branch}")" != "$GITHUB_SHA" ]]; then
+            echo "A ${channel} release must be built from the current tip of ${branch}. Run this workflow on ${branch}." >&2
+            exit 1
           fi
           echo "ADAETUM_CHANNEL=$channel" >> "$GITHUB_ENV"
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --silent 2>/dev/null; then
