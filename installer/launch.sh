@@ -89,8 +89,13 @@ fi
 if [ "${needs_build}" = 1 ]; then
   echo "Building the setup window..."
   if [ "${clean_generated}" = 1 ]; then
-    # Wails v2 can leave a stale packaged icon in bin/ or frontend/dist.
-    rm -rf "${binary}" "${app}/frontend/dist"
+    # Wails v2 can leave a stale packaged icon in bin/ or frontend/dist. Clear what the build
+    # makes but keep dist/.gitkeep: it is tracked, and the Go window cannot compile on a fresh
+    # checkout without at least one file in dist (deleting it showed up as a commit).
+    rm -rf "${binary}"
+    if [ -d "${app}/frontend/dist" ]; then
+      find "${app}/frontend/dist" -mindepth 1 ! -name .gitkeep -delete
+    fi
   fi
   if ! build_log="$(cd "${app}" && wails build 2>&1)"; then
     echo "${build_log}" >&2
