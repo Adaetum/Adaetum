@@ -115,6 +115,9 @@ jobs:
               -ldflags="-s -w -X main.agentVersion=${ADAETUM_VERSION}" \
               -o "${GITHUB_WORKSPACE}/release/adaetum-agent-linux-${arch}" ./cmd/adaetum-agent)
           done
+          # bun build bundles the service's dependencies (better-auth, ...) from node_modules, so
+          # they must be installed first, exactly as the test job does, from the lockfile.
+          (cd adaetum/auth && bun install --frozen-lockfile)
           (cd adaetum/auth && bun build --compile --target=bun-linux-x64 src/server.ts --outfile "${GITHUB_WORKSPACE}/release/adaetum-auth-linux-amd64")
           (cd adaetum/auth && bun build --compile --target=bun-linux-arm64 src/server.ts --outfile "${GITHUB_WORKSPACE}/release/adaetum-auth-linux-arm64")
           (cd release && sha256sum adaetum-* > SHA256SUMS)
