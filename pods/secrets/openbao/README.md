@@ -18,8 +18,17 @@ of truth.
 ## Notes
 
 - Init output is stored locally on the first server.
-- Installations without an external seal use human-held Shamir shares and must
-  be manually unsealed after every OpenBao restart.
+- New installations unseal themselves after every restart with OpenBao's built-in
+  static seal. Platform bootstrap creates a random 32-byte key once, as the
+  bootstrap-owned `openbao-static-seal` Secret, before OpenBao first starts; the
+  StatefulSet derives the seal stanza from it. The key sits in the cluster next
+  to the data, so it protects copies of the data (snapshots, backups, disks) and
+  not a compromised cluster: use the external Transit seal below when that
+  matters. Phase 99 copies the key into the emergency kit and refuses to burn
+  without it. It is never regenerated, and never added to an OpenBao whose data
+  already exists, because changing a seal needs a migration and losing the key
+  makes the data unrecoverable. Installations that predate it keep Shamir and
+  must still be unsealed by hand after a restart.
 - When all `OPENBAO_TRANSIT_SEAL_*` inputs are supplied, platform bootstrap
   creates the `openbao-transit-seal` credential consumed directly by the
   StatefulSet. The external Transit endpoint—not this OpenBao instance—then

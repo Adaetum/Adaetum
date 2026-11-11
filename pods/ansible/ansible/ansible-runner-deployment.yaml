@@ -22,7 +22,7 @@ spec:
         - name: gitea-registry-creds
       containers:
         - name: ansible-runner
-          image: registry.adaetum.invalid/gitea-admin/ansible-runner:build-a27e74dd03f76290
+          image: registry.adaetum.invalid/gitea-admin/ansible-runner:build-33d4e9a30497b504
           imagePullPolicy: Always
           env:
             - name: CRON_SCHEDULE

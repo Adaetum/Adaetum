@@ -22,7 +22,7 @@ func enrolled(t *testing.T, r *Registry, hostname string, nodes []string) string
 		t.Fatal(err)
 	}
 	id := randomID(t)
-	trust, reason, err := r.Enroll(context.Background(), membership.EnrollRequest{HostID: id, Hostname: hostname, PublicKey: key.PublicKey(), JoinToken: secret}, nodes, true)
+	trust, reason, err := r.Enroll(context.Background(), membership.EnrollRequest{HostID: id, Hostname: hostname, PublicKey: key.PublicKey(), JoinToken: secret}, nodes, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

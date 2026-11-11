@@ -32,6 +32,9 @@ type harness struct {
 	server   *httptest.Server
 	nodes    []string
 	nodesErr error
+	// nodeKeys is what Kubernetes' Node objects carry as host keys, by short node name.
+	nodeKeys map[string]string
+	keysErr  error
 	now      time.Time
 }
 
@@ -48,6 +51,7 @@ func newHarness(t *testing.T) *harness {
 	api := &API{
 		Registry: registry,
 		Nodes:    func(context.Context) ([]string, error) { return h.nodes, h.nodesErr },
+		NodeKeys: func(context.Context) (map[string]string, error) { return h.nodeKeys, h.keysErr },
 		RequireUser: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer "+userToken {

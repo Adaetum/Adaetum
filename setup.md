@@ -339,6 +339,13 @@ avoiding a dependency on one person's continuing tailnet membership.
 
 ### OpenBao restart-time auto-unseal
 
+By default a new installation unseals OpenBao itself after every restart, using a
+random key that platform bootstrap creates once and keeps in the cluster as
+`openbao-static-seal`. Keep the emergency kit: it holds that key, and a rebuilt cluster
+cannot open restored OpenBao data without it. The key sits next to the data, so
+it guards against stolen backups and disks, not against someone who controls the
+cluster. For that, use an external Transit seal as below.
+
 Adaetum supports OpenBao's built-in Transit seal when an independently operated
 OpenBao Transit endpoint is available. This is optional because the Transit
 service, encryption key, and scoped token must exist outside the cluster being

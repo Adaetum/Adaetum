@@ -13,6 +13,7 @@ resources:
   - nginx-routing/openbao-public-ingress.yaml
   - nginx-routing/authentik-ingress.yaml
   - nginx-routing/authentik-outpost-hosts-ingress.yaml
+  - nginx-routing/agent-ingress.yaml
   - nginx-routing/homepage-ingress.yaml
   - nginx-routing/homepage-public-ingress.yaml
   - nginx-routing/registry-ingress.yaml
@@ -294,6 +295,16 @@ replacements:
       - select:
           kind: Ingress
           name: rancher-ui-internal
+        fieldPaths:
+          - spec.rules.0.host
+  - source:
+      kind: ConfigMap
+      name: ingress-cluster-config
+      fieldPath: data.AGENT_LOCAL_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: agent-ui-internal
         fieldPaths:
           - spec.rules.0.host
   - source:

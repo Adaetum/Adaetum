@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -103,6 +104,7 @@ func runCluster(args []string) {
 	api := &cluster.API{
 		Registry:    registry,
 		Nodes:       nodeLister(*sshTarget),
+		NodeKeys:    nodeKeyLister(*sshTarget),
 		RequireUser: guard,
 		// The cluster agent is the same binary as the host agents, so the newest agent
 		// it knows of is itself: any host reporting an older version is out of date.
@@ -276,10 +278,50 @@ func runCluster(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "cluster agent listening on https://%s\n", *listen)
 	fmt.Fprintln(os.Stderr, "certificate fingerprint (give this to `join -fingerprint`):", tlscert.Fingerprint(leaf))
+	publishEndpoint(tlscert.Fingerprint(leaf), *sshTarget)
 	if err := server.ListenAndServeTLS("", ""); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// nodeKeyLister is how the cluster agent reads the host keys that nodes published. Only in a
+// pod: with -ssh (development) there is no service account, and hosts then need join tokens.
+func nodeKeyLister(sshTarget string) cluster.NodeKeyLister {
+	if sshTarget != "" {
+		return nil
+	}
+	return cluster.InClusterNodeKeys()
+}
+
+// publishEndpoint tells host agents where this one is, so they can adopt themselves without
+// anyone typing an address. It is a no-op outside a pod.
+func publishEndpoint(fingerprint, sshTarget string) {
+	if sshTarget != "" {
+		return
+	}
+	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+	url, ok := cluster.InClusterServiceURL("ADAETUM_CLUSTER_AGENT")
+	if host == "" || port == "" || !ok {
+		return
+	}
+	const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+	namespace := membership.EndpointNamespace
+	if raw, err := os.ReadFile(saDir + "/namespace"); err == nil && strings.TrimSpace(string(raw)) != "" {
+		namespace = strings.TrimSpace(string(raw))
+	}
+	api := "https://" + net.JoinHostPort(host, port)
+	var last string
+	go cluster.RunPublishEndpoint(context.Background(), func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		return cluster.PublishEndpoint(ctx, api, saDir+"/token", saDir+"/ca.crt", namespace, url, fingerprint)
+	}, func(err error) {
+		if message := err.Error(); message != last {
+			last = message
+			fmt.Fprintln(os.Stderr, "host adoption: cannot publish this agent's address yet (will keep trying):", err)
+		}
+	})
 }
 
 // nodeLister returns how the cluster agent learns which servers Kubernetes lists.

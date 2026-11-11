@@ -17,8 +17,9 @@ collected for recovery diagnostics.
 
 ## Seal behavior
 
-When `openbao-transit-seal` is absent, OpenBao uses Shamir and must be manually
-unsealed after every process restart:
+When neither `openbao-transit-seal` nor `openbao-static-seal` exists (an
+installation that predates the static seal), OpenBao uses Shamir and must be
+manually unsealed after every process restart:
 
 Unseal with at least the threshold number of keys:
 

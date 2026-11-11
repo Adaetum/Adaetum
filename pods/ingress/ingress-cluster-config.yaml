@@ -19,6 +19,7 @@ data:
   AUTHENTIK_AUTH_SNIPPET: 'proxy_set_header X-Forwarded-Host $http_host;'
   HOMEPAGE_LOCAL_HOST: 'home.adaetum.local'
   HOMEPAGE_PUBLIC_HOST: 'home.adaetum.invalid'
+  AGENT_LOCAL_HOST: 'agent.adaetum.local'
   REGISTRY_LOCAL_HOST: 'registry.adaetum.local'
   REGISTRY_PUBLIC_HOST: 'registry.adaetum.invalid'
   RANCHER_LOCAL_HOST: 'rancher.adaetum.local'

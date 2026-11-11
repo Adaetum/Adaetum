@@ -2906,7 +2906,7 @@
           service must be independent of this OpenBao cluster.
       when: inventory_hostname == rke2_primary_host
 
-    - name: Ensure OpenBao namespace exists for the Transit seal credential
+    - name: Ensure OpenBao namespace exists for the seal credential
       ansible.builtin.shell: |
         set -euo pipefail
         {{ kubectl_cmd }} create namespace openbao --dry-run=client -o yaml |
@@ -2915,9 +2915,42 @@
         executable: /bin/bash
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
+      when: inventory_hostname == rke2_primary_host
+
+    # Default restart-time auto-unseal when no external Transit seal is supplied.
+    # The key must exist before OpenBao first starts: the seal cannot be changed
+    # after initialization without a migration, and a key that is lost or replaced
+    # makes the data unrecoverable. So it is created once, never regenerated, and
+    # never added to an installation whose OpenBao data already exists.
+    - name: Create the OpenBao static seal key for a new installation
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        if {{ kubectl_cmd }} -n openbao get secret openbao-static-seal >/dev/null 2>&1; then
+          echo "kept"
+          exit 0
+        fi
+        if {{ kubectl_cmd }} -n openbao get pvc openbao-data-openbao-0 >/dev/null 2>&1; then
+          echo "skipped: OpenBao data already exists, so its seal is not changed here"
+          exit 0
+        fi
+        key_file="$(mktemp)"
+        trap 'rm -f "${key_file}"' EXIT
+        head -c 32 /dev/urandom >"${key_file}"
+        [ "$(wc -c <"${key_file}")" -eq 32 ]
+        {{ kubectl_cmd }} -n openbao create secret generic openbao-static-seal \
+          --from-file=key="${key_file}"
+        echo "created"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: openbao_static_seal_result
+      changed_when: "'created' in openbao_static_seal_result.stdout"
+      no_log: true
       when:
         - inventory_hostname == rke2_primary_host
-        - openbao_transit_seal_enabled | bool
+        - not (openbao_transit_seal_enabled | bool)
 
     - name: Install the external OpenBao Transit seal credential
       ansible.builtin.shell: |

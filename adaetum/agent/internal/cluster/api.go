@@ -29,6 +29,9 @@ type NodeLister func(ctx context.Context) ([]string, error)
 type API struct {
 	Registry *Registry
 	Nodes    NodeLister
+	// NodeKeys, when set, is how a host is vouched for without a token. Optional: without it
+	// every enrollment needs a join token, as before.
+	NodeKeys NodeKeyLister
 	// RequireUser wraps a handler so only a signed-in person reaches it.
 	RequireUser func(http.Handler) http.Handler
 	// Membership tunes the missing/stale/outdated rules.
@@ -72,7 +75,16 @@ func (a *API) enroll(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	nodes, nodesErr := a.Nodes(ctx)
 
-	trust, reason, err := a.Registry.Enroll(ctx, request, nodes, nodesErr == nil)
+	// Vouching comes from Kubernetes alone: the node this host names must carry the very key it
+	// presented. Nothing in the request can make it true.
+	vouched := false
+	if a.NodeKeys != nil && nodesErr == nil && request.PublicKey != "" {
+		if keys, err := a.NodeKeys(ctx); err == nil {
+			vouched = keys[identity.ShortName(request.Hostname)] == request.PublicKey
+		}
+	}
+
+	trust, reason, err := a.Registry.Enroll(ctx, request, nodes, nodesErr == nil, vouched)
 	if err != nil {
 		http.Error(w, "enrollment failed", http.StatusInternalServerError)
 		return

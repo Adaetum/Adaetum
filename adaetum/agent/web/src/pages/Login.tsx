@@ -1,6 +1,7 @@
 import { Button, Callout, Card, Code, Flex, Heading, Text, TextField } from "@radix-ui/themes";
 import { CircleAlert, Info, KeyRound } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
+import { PasswordRules, passwordAcceptable } from "../components/PasswordRules";
 import { tokenStore } from "../lib/auth";
 import { AuthState, fetchAuthState, setUpFirstOwner, signInWithAccount } from "../lib/session";
 
@@ -159,9 +160,10 @@ function FirstOwner({ onDone }: { onDone: () => void }) {
         </label>
         <label>
           <Text as="div" size="2" weight="medium" mb="1">Password</Text>
-          <TextField.Root type="password" autoComplete="new-password" placeholder="At least 12 characters" value={form.password} onChange={set("password")} />
+          <TextField.Root type="password" autoComplete="new-password" aria-describedby="password-rules" value={form.password} onChange={set("password")} />
+          <div id="password-rules"><PasswordRules password={form.password} /></div>
         </label>
-        <Button type="submit" disabled={busy || !form.code.trim() || !form.name.trim() || !form.email.trim() || form.password.length < 12}>
+        <Button type="submit" disabled={busy || !form.code.trim() || !form.name.trim() || !form.email.trim() || !passwordAcceptable(form.password)}>
           {busy ? "Setting up…" : "Create the owner account"}
         </Button>
       </Flex>

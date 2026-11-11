@@ -594,6 +594,18 @@ PY
     fi
   fi
 
+  # A static seal key is what lets this OpenBao open itself after a restart, and the
+  # only way to open a restored copy of its data on a rebuilt cluster. Losing it makes
+  # the data unrecoverable, so it travels with the kit and the burn is refused without it.
+  if [[ "${openbao_seal_type}" == "static" ]]; then
+    if ! "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-static-seal -o json \
+      >"${kit_dir}/openbao/static-seal-secret.json"; then
+      echo "Static-sealed OpenBao is missing its Kubernetes seal key; refusing to burn recovery material." >&2
+      exit 12
+    fi
+    chmod 0600 "${kit_dir}/openbao/static-seal-secret.json"
+  fi
+
   # Export the bootstrap paths from OpenBao (the intended post-burn source of truth).
   # We treat this as required: if OpenBao export fails, we do not burn local secrets.
   if [[ -z "${openbao_token}" ]]; then

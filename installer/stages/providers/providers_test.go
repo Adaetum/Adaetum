@@ -435,3 +435,35 @@ func TestStartingFreshIgnoresAnEarlierEnv(t *testing.T) {
 		t.Fatalf("a clean run used the old .env: %v", env.Secrets)
 	}
 }
+
+// After `task reset:cloud` removes the OAuth clients from Tailscale, the .env still
+// holds their IDs. A rerun must not trust them: it validates each saved pair, drops
+// one Tailscale no longer knows, and makes new clients, so the secrets that reach
+// OpenBao are real ones rather than the deleted clients.
+func TestOAuthClientsDeletedFromTailscaleAreReplacedNotReused(t *testing.T) {
+	dir := t.TempDir()
+	stale := "TAILSCALE_OAUTH_CLIENT_ID=gone-id\nTAILSCALE_OAUTH_CLIENT_SECRET=gone-secret\n" +
+		"TAILSCALE_OPERATOR_OAUTH_CLIENT_ID=gone-op-id\nTAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET=gone-op-secret\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Tailscale answers "no such client" to the validation of the saved pairs.
+	f := runner(
+		sys.Rule{Prefix: "python3 ./tasks/scripts/bootstrap-tailscale.py --oauth-credentials-stdin --validate-oauth-only", Result: sys.Result{ExitCode: 1, Stderr: "unknown client"}},
+		sys.Rule{Prefix: "python3 ./tasks/scripts/bootstrap-tailscale.py --oauth-credentials-stdin --validate-operator-oauth-only", Result: sys.Result{ExitCode: 1, Stderr: "unknown client"}},
+	)
+	s := step(f, &secrets.Memory{}, apis(t, []string{"cfat_good"}, []string{"tskey-good"}, devices))
+	s.Dir = dir
+	env := &engine.Env{}
+	if err := apply(t, s, env, fresh); err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{
+		"tailscale_oauth_client_id":          "node-id",
+		"tailscale_operator_oauth_client_id": "op-id",
+	} {
+		if got := env.Secret(k); got != want {
+			t.Fatalf("%s = %q, want a newly made client %q (a deleted client was reused)", k, got, want)
+		}
+	}
+}

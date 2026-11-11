@@ -56,6 +56,8 @@ func startHostIdentity(dataDir, sshTarget string, auth *accounts.Client) func() 
 	// A host that has joined a cluster copies the cluster's accounts, so people can sign
 	// in here even when the cluster is down. Ends with ctx; never blocks the agent.
 	startAccountSync(ctx, dataDir, db.HostID(), auth)
+	// A host that is a cluster node adopts itself into the cluster agent; otherwise it joins by hand.
+	startAutoAdopt(ctx, dataDir, db.HostID())
 
 	go func() {
 		defer func() { done <- struct{}{} }()

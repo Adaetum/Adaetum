@@ -93,6 +93,7 @@ def config_from_profile(profile: dict) -> dict[str, str]:
         "OPENBAO_LOCAL_HOST": host("openbao", local_domain),
         "HOMEPAGE_PUBLIC_HOST": host("home", domain),
         "HOMEPAGE_LOCAL_HOST": host("home", local_domain),
+        "AGENT_LOCAL_HOST": host("agent", local_domain),
         "ALERTMANAGER_PUBLIC_HOST": host("alertmanager", domain),
         "ALERTMANAGER_LOCAL_HOST": host("alertmanager", local_domain),
         "GRAFANA_PUBLIC_HOST": host("grafana", domain),

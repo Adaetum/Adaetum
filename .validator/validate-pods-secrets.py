@@ -268,6 +268,8 @@ ROTATION_CONTRACTS = {
         "openbao-transit-seal",
         "transit-seal-secret.json",
         "Transit-sealed OpenBao is missing its Kubernetes seal credential",
+        "static-seal-secret.json",
+        "Static-sealed OpenBao is missing its Kubernetes seal key",
     ),
     "tasks/scripts/build-bootstrap-runtime-env.sh": (
         'bootstrap_backup_url_runtime="${KS_BASE_URL%/}/backup"',
@@ -414,10 +416,14 @@ ROTATION_CONTRACTS = {
         "OPENBAO_TRANSIT_SEAL_KEY_NAME",
         "create secret generic openbao-transit-seal",
         "Install the external OpenBao Transit seal credential",
+        "create secret generic openbao-static-seal",
+        "Create the OpenBao static seal key for a new installation",
     ),
     "pods/secrets/openbao/manifests/statefulset.yaml": (
         "name: openbao-transit-seal",
         "name: openbao-transit-seal-ca",
+        "name: openbao-static-seal",
+        'seal "static"',
         "optional: true",
     ),
     "pods/secrets/openbao/init/migrate-to-transit-seal.sh": (
@@ -431,6 +437,7 @@ ROTATION_CONTRACTS = {
     ),
     "pods/secrets/openbao/init/init-openbao.sh": (
         'seal_type}" == "transit"',
+        '"static"',
         "-recovery-shares=5",
         "-recovery-threshold=3",
         "-key-shares=5",
@@ -623,6 +630,7 @@ COORDINATED_SECRET_REFERENCES = {
     "gitea-postgresql": "database-first Gitea PostgreSQL rotation",
     "homepage-grafana": "Grafana Viewer identity promotion",
     "openbao-bootstrap-token": "temporary Phase 40 OpenBao configuration credential",
+    "openbao-static-seal": "bootstrap-owned restart-time auto-unseal key",
     "openbao-transit-seal": "bootstrap-owned external root-of-trust credential",
     "openbao-transit-seal-ca": "bootstrap-owned external root-of-trust CA",
 }

@@ -144,6 +144,9 @@ func validateEnroll(e membership.EnrollRequest) error {
 	return nil
 }
 
+// vouchedReason is recorded for a host Kubernetes vouched for.
+const vouchedReason = "Kubernetes lists this server and it holds the key this host presented"
+
 // Enroll registers a host and says how far it is trusted.
 //
 // A host that is already registered with the same key gets its current status back
@@ -151,7 +154,12 @@ func validateEnroll(e membership.EnrollRequest) error {
 // ask again. A registered host ID presented with a different key is refused: that is
 // what a takeover attempt looks like. The token is consumed in the same transaction
 // that registers the host, so one token can never enroll two hosts.
-func (r *Registry) Enroll(ctx context.Context, request membership.EnrollRequest, nodes []string, nodesKnown bool) (identity.Trust, string, error) {
+//
+// vouched means Kubernetes itself vouches for this request: the node the host names carries
+// the very key the host presented (membership.HostKeyAnnotation), which only that node or an
+// administrator can write. A vouched host needs no token and is approved on the spot. The
+// caller must compute it from the node list it just read, never from anything in the request.
+func (r *Registry) Enroll(ctx context.Context, request membership.EnrollRequest, nodes []string, nodesKnown, vouched bool) (identity.Trust, string, error) {
 	if err := validateEnroll(request); err != nil {
 		return identity.Rejected, err.Error(), nil
 	}
@@ -163,17 +171,42 @@ func (r *Registry) Enroll(ctx context.Context, request membership.EnrollRequest,
 	}
 	defer tx.Rollback()
 
-	var existingKey, existingStatus, existingReason string
-	err = tx.QueryRowContext(ctx, `SELECT public_key, status, reason FROM hosts WHERE host_id = ?`, request.HostID).
-		Scan(&existingKey, &existingStatus, &existingReason)
+	var existingKey, existingStatus, existingReason, existingApprovedBy string
+	err = tx.QueryRowContext(ctx, `SELECT public_key, status, reason, approved_by FROM hosts WHERE host_id = ?`, request.HostID).
+		Scan(&existingKey, &existingStatus, &existingReason, &existingApprovedBy)
 	switch {
 	case err == nil:
 		if existingKey != request.PublicKey {
+			// A reinstalled node comes back with a new key under the same name. If Kubernetes
+			// approved it before and now vouches for the new key, Kubernetes' word replaces the
+			// old key. Anything else with a different key is what a takeover looks like.
+			if vouched && existingApprovedBy == kubernetesMatch {
+				if _, err := tx.ExecContext(ctx, `UPDATE hosts SET public_key = ?, hostname = ?, status = ?, reason = ? WHERE host_id = ?`,
+					request.PublicKey, request.Hostname, string(identity.Approved), vouchedReason, request.HostID); err != nil {
+					return "", "", err
+				}
+				if err := tx.Commit(); err != nil {
+					return "", "", err
+				}
+				return identity.Approved, vouchedReason, nil
+			}
 			return identity.Rejected, "this host ID is already enrolled with a different key", nil
 		}
 		return identity.Trust(existingStatus), existingReason, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return "", "", err
+	}
+
+	if vouched && nodesKnown {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO hosts(host_id, hostname, public_key, status, reason, enrolled_at_ms, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			request.HostID, request.Hostname, request.PublicKey, string(identity.Approved), vouchedReason, now.UnixMilli(), kubernetesMatch); err != nil {
+			return "", "", err
+		}
+		if err := tx.Commit(); err != nil {
+			return "", "", err
+		}
+		return identity.Approved, vouchedReason, nil
 	}
 
 	// Consume the token only if it is unexpired and unused. The UPDATE's row count

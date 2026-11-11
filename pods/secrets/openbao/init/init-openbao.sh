@@ -33,7 +33,7 @@ fi
 
 seal_type="$(${KUBECTL_BIN} -n "${NAMESPACE}" exec "${POD}" -- \
   bao status -format=json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("type", "shamir"))' 2>/dev/null || true)"
-if [[ "${seal_type}" == "transit" ]]; then
+if [[ "${seal_type}" == "transit" || "${seal_type}" == "static" ]]; then
   init_key_args=(-recovery-shares=5 -recovery-threshold=3)
 else
   init_key_args=(-key-shares=5 -key-threshold=3)

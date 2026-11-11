@@ -3,6 +3,6 @@ kind: ConfigMap
 metadata:
   name: ansible-cluster-config
 data:
-  ANSIBLE_RUNNER_IMAGE: 'registry.adaetum.invalid/gitea-admin/ansible-runner:build-a27e74dd03f76290'
+  ANSIBLE_RUNNER_IMAGE: 'registry.adaetum.invalid/gitea-admin/ansible-runner:build-33d4e9a30497b504'
   TAILSCALE_DOMAIN: 'example-tailnet.ts.net'
   TAILSCALE_CLUSTER_TAG: 'tag:cluster'

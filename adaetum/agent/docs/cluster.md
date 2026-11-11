@@ -101,6 +101,28 @@ its database on a persistent volume is enough. If this is not what you meant by
 5. Work on top: the Ansible jobs engine, policy, and the embedding queue described
    in the README.
 
+## Adopting a host automatically
+
+A host that is a cluster node joins the cluster agent with no token and nothing to type.
+Kubernetes is the notary:
+
+1. The cluster agent publishes its address and certificate fingerprint in the ConfigMap
+   `adaetum/adaetum-cluster-agent-endpoint`. Neither is secret.
+2. A host agent with no link, on a machine that has RKE2's credentials, reads that ConfigMap,
+   and publishes its own public key as the Node annotation `adaetum.io/host-key` on its own
+   Node. Only that node, or a cluster administrator, can write it.
+3. It enrols without a token. The cluster agent approves it only if the Node it names carries
+   the very key it presented. Naming a node is not enough, which is why a stranger cannot
+   claim `node-12484`: they cannot put their key on that Node.
+4. The host saves the link and exits with status 75 so its service restarts and starts sending
+   and copying accounts (they read the link once, at startup).
+
+A reinstalled node comes back with a new key under the same name and republishes it; because
+Kubernetes approved the old key, Kubernetes' word replaces it. A host a person approved by hand
+is never replaced this way. A machine Kubernetes does not list is untouched and still joins with
+`adaetum-agent join` and a join token. Hosts that are not the first node (workers) can use the
+same path where the node's own credentials exist; otherwise they use a token.
+
 ## Installing and updating the agent remotely
 
 Ansible over SSH already has administrator rights on every server, so it is also how

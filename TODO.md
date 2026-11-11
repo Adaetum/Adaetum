@@ -170,9 +170,20 @@ default should be opinionated and on without configuration.
   retention are public, non-secret profile values.
 - [ ] Prove restore, not just backup. **Acceptance:** a documented drill
   rebuilds a cluster from the off-site copy and shows the data returned.
+- [ ] Prove the OpenBao static seal key survives a rebuild: a new installation
+  unseals itself (done, `openbao-static-seal`, copied into the emergency kit by
+  Phase 99); the restore drill must reopen restored data with the kit's key.
 - [ ] Decide where OpenBao unseal keys and the root of trust are kept so a
   rebuilt cluster can open restored secrets. **Acceptance:** the custody and
   recovery path is documented and exercised in the restore drill.
+- [ ] Say so when OpenBao is sealed. A Shamir-sealed OpenBao stays sealed after
+  any restart (by design, see `pods/secrets/openbao/README.md`) and every secret
+  consumer then fails in its own confusing way; on 2026-11-11 the Tailscale
+  operator crash-looped with "no such file /oauth/client_id" for hours. The
+  cluster agent should check the seal status (unauthenticated `bao status`) and
+  put "OpenBao is sealed: unseal it" at the top of the attention list, with the
+  command. **Acceptance:** a restarted, sealed OpenBao appears in the attention
+  list within a minute and clears when unsealed.
 - [ ] Show protection in the agent web app: a backups card on Overview with
   last success, age and size, a warning when stale, and a restore test.
   **Acceptance:** a missing or failing backup appears in the attention list

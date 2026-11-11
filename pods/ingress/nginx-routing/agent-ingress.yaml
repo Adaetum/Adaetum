@@ -1,0 +1,25 @@
+# Private LAN front door to the cluster agent. The agent serves HTTPS with its
+# own certificate and keeps its own sign-in (it must work when Authentik is
+# down), so there is no forward-auth here and nginx talks TLS to the backend.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-ui-internal
+  namespace: adaetum
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: agent.adaetum.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: adaetum-cluster-agent
+                port:
+                  number: 8444
