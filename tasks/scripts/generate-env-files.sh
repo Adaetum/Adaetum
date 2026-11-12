@@ -528,21 +528,31 @@ validate_r2_credentials() {
   }
 
   # Listing a reserved, nonexistent prefix performs a signed bucket request
-  # without printing object names or mutating recovery storage.
-  if validation_output="$(
-    RCLONE_CONFIG_ADAETUM_R2_TYPE=s3 \
-    RCLONE_CONFIG_ADAETUM_R2_PROVIDER=Cloudflare \
-    RCLONE_CONFIG_ADAETUM_R2_ACCESS_KEY_ID="${access_key_id}" \
-    RCLONE_CONFIG_ADAETUM_R2_SECRET_ACCESS_KEY="${secret_access_key}" \
-    RCLONE_CONFIG_ADAETUM_R2_ENDPOINT="${endpoint}" \
-    RCLONE_CONFIG_ADAETUM_R2_NO_CHECK_BUCKET=true \
-      rclone lsf "adaetum_r2:${bucket}/.adaetum-credential-validation" --max-depth 1 2>&1
-  )"; then
-    return 0
-  fi
-  if printf '%s' "${validation_output}" | grep -Eqi 'StatusCode: 403|Forbidden|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied'; then
-    return 2
-  fi
+  # without printing object names or mutating recovery storage. A freshly created
+  # key can take a moment to be accepted, and R2 occasionally drops a request, so an
+  # answer that is not a clear refusal is tried a few times before giving up.
+  local attempt
+  for attempt in 1 2 3; do
+    if validation_output="$(
+      RCLONE_CONFIG_ADAETUM_R2_TYPE=s3 \
+      RCLONE_CONFIG_ADAETUM_R2_PROVIDER=Cloudflare \
+      RCLONE_CONFIG_ADAETUM_R2_ACCESS_KEY_ID="${access_key_id}" \
+      RCLONE_CONFIG_ADAETUM_R2_SECRET_ACCESS_KEY="${secret_access_key}" \
+      RCLONE_CONFIG_ADAETUM_R2_ENDPOINT="${endpoint}" \
+      RCLONE_CONFIG_ADAETUM_R2_NO_CHECK_BUCKET=true \
+        rclone lsf "adaetum_r2:${bucket}/.adaetum-credential-validation" --max-depth 1 --contimeout 15s --timeout 30s 2>&1
+    )"; then
+      return 0
+    fi
+    if printf '%s' "${validation_output}" | grep -Eqi 'StatusCode: 403|Forbidden|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied'; then
+      return 2
+    fi
+    [ "${attempt}" -lt 3 ] && sleep 5
+  done
+  # Say what the storage endpoint answered, so a refusal to write .env is explainable.
+  # rclone does not echo the keys, but they are removed anyway.
+  printf '%s\n' "${validation_output}" | tail -n 3 \
+    | sed -e "s#${access_key_id}#<key id>#g" -e "s#${secret_access_key}#<secret>#g" >&2
   echo "Unable to validate R2 credentials because the storage endpoint could not be checked." >&2
   return 1
 }
