@@ -101,6 +101,10 @@ jobs:
 
       - name: Install go-task
         uses: arduino/setup-task@v3.0.0
+        with:
+          # Authenticated, so the lookup of the latest task release is not rate limited
+          # by the shared runner address.
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Validate generated kickstarts
         run: |
