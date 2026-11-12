@@ -57,6 +57,7 @@ tasks:
         printf '  %stask init:silent%s   Replay setup from saved credentials with no window and no questions\n' "${c_task}" "${c_reset}"
         printf '  %stask init:clean%s    Open the setup window ignoring saved credentials and values\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dev%s      Like init, but the ISO carries an agent built from this checkout\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:dev:silent%s init:dev with no window, replaying saved credentials\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun%s   Show every setup step and what it would do, changing nothing\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun -- --window%s  Rehearse the full setup flow in the guided window\n' "${c_task}" "${c_reset}"
         printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
@@ -114,6 +115,15 @@ tasks:
         platforms: [linux, darwin]
       - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./installer/launch.sh
         platforms: [windows]
+
+  init:dev:silent:
+    desc: init:dev with no window, replaying saved credentials (for rebuilding the dev ISO over and over)
+    deps: ['env:install:prerequisites']
+    dir: installer
+    env:
+      ADAETUM_DEV_AGENT: "1"
+    cmds:
+      - go run ./cmd/adaetum-setup --apply --replay {{.CLI_ARGS}}
 
   init:dryrun:
     desc: Show read-only plans; pass -- --window to rehearse the full UI without checks or changes
