@@ -40,13 +40,16 @@ func Prepare(ctx context.Context, source string) (_ *Workspace, err error) {
 		return nil, err
 	}
 	w := &Workspace{Root: filepath.Join(dir, "source"), dir: dir}
-	// Existing backup keys are needed to avoid orphaning previous emergency kits.
+	// Existing backup keys are needed to avoid orphaning previous emergency kits. The Worker
+	// tokens are carried too: setup syncs them to GitHub and redeploys the Worker with them,
+	// so a fresh pair on every run would leave the launch checkout's .env (which local
+	// bundle uploads and headless builds read) holding tokens the Worker no longer accepts.
 	// Only these values are copied into the private, short-lived checkout.
 	defer func() {
 		if err != nil {
 			return
 		}
-		if err = w.Carry(source, "BOOTSTRAP_BACKUP_PASSPHRASE", "BOOTSTRAP_BACKUP_PASSPHRASE_B64"); err != nil {
+		if err = w.Carry(source, "BOOTSTRAP_BACKUP_PASSPHRASE", "BOOTSTRAP_BACKUP_PASSPHRASE_B64", "KS_SHARED_TOKEN", "KS_UPLOAD_TOKEN"); err != nil {
 			_ = w.Close()
 		}
 	}()

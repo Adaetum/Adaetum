@@ -128,11 +128,11 @@ func TestIsolatedCheckoutCanPublishWithoutChangingSource(t *testing.T) {
 	}
 }
 
-func TestPreparePreservesOnlyBackupPassphraseForReruns(t *testing.T) {
+func TestPreparePreservesOnlyBackupPassphraseAndWorkerTokensForReruns(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "platform.yaml"), []byte("safe"), 0600)
 	os.Mkdir(filepath.Join(root, "installer"), 0755)
-	os.WriteFile(filepath.Join(root, ".env"), []byte("BOOTSTRAP_BACKUP_PASSPHRASE=keep-old-backup\nCLOUDFLARE_API_TOKEN=do-not-copy\n"), 0600)
+	os.WriteFile(filepath.Join(root, ".env"), []byte("BOOTSTRAP_BACKUP_PASSPHRASE=keep-old-backup\nKS_SHARED_TOKEN=keep-shared\nKS_UPLOAD_TOKEN=keep-upload\nCLOUDFLARE_API_TOKEN=do-not-copy\n"), 0600)
 	w, err := Prepare(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +142,8 @@ func TestPreparePreservesOnlyBackupPassphraseForReruns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "BOOTSTRAP_BACKUP_PASSPHRASE=keep-old-backup") || strings.Contains(string(data), "do-not-copy") {
+	if !strings.Contains(string(data), "BOOTSTRAP_BACKUP_PASSPHRASE=keep-old-backup") || strings.Contains(string(data), "do-not-copy") ||
+		!strings.Contains(string(data), "KS_SHARED_TOKEN=keep-shared") || !strings.Contains(string(data), "KS_UPLOAD_TOKEN=keep-upload") {
 		t.Fatal("copied incorrect credential state")
 	}
 }
