@@ -110,6 +110,14 @@ func main() {
 			os.Exit(1)
 		}
 		workRoot = workspace.Root
+		// Reuse everything an earlier run made, unless asked to start clean.
+		if !*clean {
+			if carryErr := workspace.CarryAll(root); carryErr != nil {
+				_ = workspace.Close()
+				fmt.Fprintln(os.Stderr, "could not carry .env into the setup checkout:", carryErr)
+				os.Exit(1)
+			}
+		}
 	}
 	steps, err := chooseStages(stages.ISOFromSource(workRoot, root, runner), *only)
 	if err != nil {
@@ -136,6 +144,13 @@ func main() {
 		}
 	}
 	if workspace != nil {
+		// Keep what this run generated: it is already on GitHub and the Worker.
+		if persistErr := workspace.Persist(root); persistErr != nil {
+			fmt.Fprintln(os.Stderr, "could not save the generated values to .env:", persistErr)
+			if runErr == nil {
+				runErr = persistErr
+			}
+		}
 		if cleanupErr := workspace.Close(); cleanupErr != nil {
 			fmt.Fprintln(os.Stderr, "could not remove temporary setup checkout:", cleanupErr)
 			if runErr == nil {

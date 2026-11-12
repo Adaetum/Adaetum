@@ -152,16 +152,6 @@ var envVarFor = map[string]string{
 	keyOperatorSec: "TAILSCALE_OPERATOR_OAUTH_CLIENT_SECRET",
 }
 
-// ReusableEnvVars lists the .env variables setup may reuse, so the caller can carry them
-// into the private setup checkout. Whatever is reused is still validated before use.
-func ReusableEnvVars() []string {
-	vars := make([]string, 0, len(envVarFor))
-	for _, v := range envVarFor {
-		vars = append(vars, v)
-	}
-	return vars
-}
-
 // saved returns a remembered credential, or "" when there is none or the operator asked
 // to start clean. The credential store is tried first, then the .env of an earlier run.
 // Callers validate the value before trusting it, so a stale one costs a question, not a
