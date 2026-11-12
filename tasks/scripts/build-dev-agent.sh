@@ -13,6 +13,9 @@ output="${2:?output file is required}"
 case "${arch}" in amd64|arm64) ;; *) echo "unsupported architecture: ${arch}" >&2; exit 1 ;; esac
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# The build runs from the agent's directory, so a relative output path would land
+# there instead of where the caller meant. Resolve it against the caller's directory.
+case "${output}" in /*) ;; *) output="$(pwd)/${output}" ;; esac
 version="dev-$(git -C "${root}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if ! git -C "${root}" diff --quiet HEAD -- adaetum/agent 2>/dev/null; then
   version="${version}+local"
