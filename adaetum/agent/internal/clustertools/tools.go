@@ -84,8 +84,13 @@ func Tools(api agentapi.Client, options Options) []mcp.Tool {
 			Description: "Create a reviewable GitOps pull request pinning the latest checked Adaetum agent, auth and embed images. Does not merge or deploy it. Requires the version and manifestHash from check_agent_release.",
 			InputSchema: object(map[string]any{"version": text("The checked release version."), "manifestHash": text("The exact manifestHash returned by check_agent_release.")}, "version", "manifestHash"),
 			Call: func(ctx context.Context, raw json.RawMessage) (any, error) {
-				var in struct { Version string `json:"version"`; ManifestHash string `json:"manifestHash"` }
-				if err := json.Unmarshal(raw, &in); err != nil || in.Version == "" || in.ManifestHash == "" { return nil, errors.New("give the checked release version and manifest hash") }
+				var in struct {
+					Version      string `json:"version"`
+					ManifestHash string `json:"manifestHash"`
+				}
+				if err := json.Unmarshal(raw, &in); err != nil || in.Version == "" || in.ManifestHash == "" {
+					return nil, errors.New("give the checked release version and manifest hash")
+				}
 				var out any
 				err := api.Do(ctx, "POST", "/api/v1/releases/proposals", in, &out)
 				return out, err

@@ -225,7 +225,10 @@ Wants=network-online.target
 Type=simple
 User=root
 Environment=TURSO_GO_CACHE_DIR=/var/lib/adaetum/cache
-ExecStart=/usr/local/bin/adaetum-agent serve -listen 0.0.0.0:8443 -data-dir /var/lib/adaetum -token-file /etc/adaetum/agent-token
+# Absent on production media. Development media (task init:dev) puts
+# ADAETUM_AGENT_ARGS here to turn on features of the bundled agent.
+EnvironmentFile=-/etc/adaetum/agent.env
+ExecStart=/usr/local/bin/adaetum-agent serve -listen 0.0.0.0:8443 -data-dir /var/lib/adaetum -token-file /etc/adaetum/agent-token $ADAETUM_AGENT_ARGS
 Restart=on-failure
 RestartSec=5
 PrivateTmp=true

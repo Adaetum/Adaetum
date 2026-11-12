@@ -35,10 +35,14 @@ const (
 // reached, is reported and the agent carries on. It is a no-op without a data
 // directory, and it refuses to run over SSH: that mode is a read-only development
 // aid and must not leave a database on the developer's laptop that claims to be a host.
-func startHostIdentity(dataDir, sshTarget string, auth *accounts.Client) func() {
+//
+// It returns the function that stops it and the open database (nil when there is none),
+// so other parts of the agent that keep their history there, such as the run engine,
+// share this one handle rather than opening the file a second time.
+func startHostIdentity(dataDir, sshTarget string, auth *accounts.Client) (func(), *store.Store) {
 	noop := func() {}
 	if dataDir == "" {
-		return noop
+		return noop, nil
 	}
 	if sshTarget != "" {
 		fmt.Fprintln(os.Stderr, "-data-dir cannot be used with -ssh: the local database belongs to the machine the agent runs on.")
@@ -47,7 +51,7 @@ func startHostIdentity(dataDir, sshTarget string, auth *accounts.Client) func() 
 	db, err := store.Open(filepath.Join(dataDir, databaseName))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cannot open the local database; continuing without it:", err)
-		return noop
+		return noop, nil
 	}
 	fmt.Fprintf(os.Stderr, "local database %s (host %s)\n", filepath.Join(dataDir, databaseName), db.HostID())
 
@@ -106,7 +110,7 @@ func startHostIdentity(dataDir, sshTarget string, auth *accounts.Client) func() 
 			<-done
 		}
 		db.Close()
-	}
+	}, db
 }
 
 // clusterTransport returns a transport to the cluster agent this host joined, or

@@ -481,8 +481,20 @@ tasks:
         mv -f "${gum_rpm_partial}" "${gum_rpm_path}"
         # The kickstart installs this on each host, including when the
         # kickstart itself is fetched rather than embedded on the media.
-        python3 tasks/scripts/fetch-host-agent.py --arch "${host_agent_arch}" \
-          --output "${work_dir}/ks/adaetum-agent"
+        if [ "${ADAETUM_DEV_AGENT:-}" = "1" ]; then
+          # Development media (task init:dev): carry an agent built from this checkout
+          # instead of the pinned release, so first-boot work can be tried on a real
+          # host without cutting a release. The host never replaces its own binary
+          # (the update policy defaults to manual and only opens pull requests), so
+          # nothing swaps this one out afterwards. The extra arguments start the run
+          # engine; a production ISO has no such file and its agent starts as before.
+          echo "[iso] DEVELOPMENT MEDIA: bundling an agent built from this checkout (not the pinned release)"
+          bash tasks/scripts/build-dev-agent.sh "${host_agent_arch}" "${work_dir}/ks/adaetum-agent"
+          printf 'ADAETUM_AGENT_ARGS=-allow-runs -run-on-start=host-readiness\n' >"${work_dir}/ks/adaetum-agent.env"
+        else
+          python3 tasks/scripts/fetch-host-agent.py --arch "${host_agent_arch}" \
+            --output "${work_dir}/ks/adaetum-agent"
+        fi
         if [ "${embed_ks}" = "1" ]; then
           ks_rendered="{{.KS_OUT_DIR}}/${ks_name}"
           if [ ! -f "${ks_rendered}" ]; then

@@ -297,3 +297,31 @@ func TestAFailedSSHRuleLookupIsReportedAndDoesNotBlockTheRest(t *testing.T) {
 		t.Error("devices were not removed after the rule lookup failed")
 	}
 }
+
+func TestQuickRemovesDevicesAndLogsOnlyAndNeedsNoMenuOrToken(t *testing.T) {
+	s, f := harness(t, envText)
+	s.Quick = true
+	// No reset-what answer and no token: quick must not ask either.
+	if err := run(t, s, map[string]string{"reset-confirm": "yes"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !anyCall(f, "--reset-devices --reset-confirm-ids 1,2") || !anyCall(f, "--delete-host-logs-confirm") {
+		t.Error("quick should remove the devices and their logs")
+	}
+	for _, kept := range []string{"--reset-oauth-clients", "--reset-ssh-rule"} {
+		if anyCall(f, kept) {
+			t.Errorf("quick touched %s, which it must keep", kept)
+		}
+	}
+}
+
+func TestQuickStillNeedsTheFinalYes(t *testing.T) {
+	s, f := harness(t, envText)
+	s.Quick = true
+	if err := run(t, s, nil, ""); !errors.Is(err, engine.ErrDeclined) {
+		t.Fatalf("a quick run with no confirmation should be declined, got %v", err)
+	}
+	if anyCall(f, "--reset-confirm-ids") || anyCall(f, "--delete-host-logs-confirm") {
+		t.Error("quick deleted something without the final yes")
+	}
+}

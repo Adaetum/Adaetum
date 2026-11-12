@@ -10,6 +10,7 @@ import { AssistantProvider } from "../components/assistant/AssistantProvider";
 import { Explore } from "../pages/Explore";
 import { Login } from "../pages/Login";
 import { Overview } from "../pages/Overview";
+import { Runs } from "../pages/Runs";
 import { Settings } from "../pages/Settings";
 import { Workloads } from "../pages/Workloads";
 import { AppLocation, useLocation } from "./routes";
@@ -57,6 +58,9 @@ export function App() {
         <Cluster key={location.path} report={report} location={location} />
       ) : location.path === "explore" ? (
         <Explore key={location.path} />
+      ) : location.path === "runs" ? (
+        // Runs are the agent's own work, so like Settings they must not wait for a host report.
+        <Runs key={location.path} location={location} />
       ) : location.path === "settings" ? (
         // Settings are the agent's own (assistant, security), so like the cluster view they
         // must not wait for a host report.

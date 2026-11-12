@@ -215,3 +215,26 @@ func TestADatabaseFromANewerAgentIsRefused(t *testing.T) {
 		t.Fatal("opening a database written by a newer agent could corrupt it")
 	}
 }
+
+func TestEventsWithPrefixReturnsOnlyThatFamilyOldestFirstEvenWhenAcknowledged(t *testing.T) {
+	db, _ := openTemp(t)
+	ctx := context.Background()
+	for _, kind := range []string{"agent.checkin", "runs.run.started", "agent.checkin", "runs.step.done"} {
+		if _, err := db.Append(ctx, kind, map[string]string{"k": kind}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Ack(ctx, 4); err != nil { // everything is sent; Pending would now be empty
+		t.Fatal(err)
+	}
+	got, err := db.EventsWithPrefix(ctx, "runs.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Kind != "runs.run.started" || got[1].Kind != "runs.step.done" || got[0].Seq >= got[1].Seq {
+		t.Fatalf("got %+v", got)
+	}
+	if _, err := db.EventsWithPrefix(ctx, ""); err == nil {
+		t.Fatal("an empty prefix would return everything and should be refused")
+	}
+}

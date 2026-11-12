@@ -56,6 +56,7 @@ tasks:
         printf '  %stask init%s          Open the guided setup window (builds it from installer/ on first use)\n' "${c_task}" "${c_reset}"
         printf '  %stask init:silent%s   Replay setup from saved credentials with no window and no questions\n' "${c_task}" "${c_reset}"
         printf '  %stask init:clean%s    Open the setup window ignoring saved credentials and values\n' "${c_task}" "${c_reset}"
+        printf '  %stask init:dev%s      Like init, but the ISO carries an agent built from this checkout\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun%s   Show every setup step and what it would do, changing nothing\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun -- --window%s  Rehearse the full setup flow in the guided window\n' "${c_task}" "${c_reset}"
         printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
@@ -63,6 +64,7 @@ tasks:
         printf '  %stask clean%s         Reset tracked public-safe config and remove derived installer artifacts\n' "${c_task}" "${c_reset}"
         printf '  %stask reset%s         Clean generated state and return the checkout to public main\n' "${c_task}" "${c_reset}"
         printf '  %stask reset:cloud%s Interactively remove the Tailscale devices, OAuth clients, SSH rule and R2 host logs setup created\n' "${c_task}" "${c_reset}"
+        printf '  %stask reset:cloud -- --quick%s Remove only the cluster'\''s Tailscale devices and their R2 logs, after one confirmation\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-on%s Enable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
         printf '  %stask maintainer-off%s Disable local maintainer bypass for example placeholders\n' "${c_task}" "${c_reset}"
         printf '  %stask build-iso%s     Build the local kickstart-enabled ISO\n' "${c_task}" "${c_reset}"
@@ -89,6 +91,21 @@ tasks:
 
   init:
     desc: Open the guided setup window (builds it from installer/ on first use)
+    cmds:
+      - task: env:install:setup-bootstrap
+      - task: env:install:prerequisites
+      - task: env:install:github-cli
+      - cmd: bash ./installer/launch.sh
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tasks/scripts/invoke-bash-script.ps1 ./installer/launch.sh
+        platforms: [windows]
+
+  init:dev:
+    desc: Like task init, but the ISO carries an agent built from this checkout (no release needed)
+    env:
+      # Read by tasks/iso.yml. It swaps the pinned release agent for dist/agent/ and
+      # starts that agent with the run engine on. Nothing here changes a production ISO.
+      ADAETUM_DEV_AGENT: "1"
     cmds:
       - task: env:install:setup-bootstrap
       - task: env:install:prerequisites
@@ -147,6 +164,8 @@ tasks:
       # (optional) names the .env or recovery file to read; without it the checkout's .env
       # and any downloaded recovery files are offered. Under a script with no terminal,
       # every question takes its safe default and nothing is deleted unless answered.
+      # `task reset:cloud -- --quick` skips the menu: it removes only the cluster's Tailscale
+      # devices and their R2 logs (keeping the OAuth clients), after one confirmation.
       - go run ./cmd/adaetum-setup --reset --apply {{if .ENV_FILE}}--env '{{.ENV_FILE}}'{{end}} {{.CLI_ARGS}}
 
   iso:download:

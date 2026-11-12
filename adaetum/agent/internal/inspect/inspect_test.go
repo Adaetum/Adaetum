@@ -634,3 +634,16 @@ func TestParseNodeUsageIsKeyedByNodeName(t *testing.T) {
 		t.Fatalf("unexpected usage: %+v", got)
 	}
 }
+
+func TestOnlyReadOnlyProgramsAreAllowedForInspection(t *testing.T) {
+	for _, name := range []string{"uname", "systemctl", "df", "du", "nproc", "timedatectl"} {
+		if !allowedCommands[name] {
+			t.Errorf("%s should be allowed", name)
+		}
+	}
+	for _, name := range []string{"sh", "bash", "rm", "curl", "chronyc", "tailscale"} {
+		if allowedCommands[name] {
+			t.Errorf("%s must not be allowed: inspection is read-only and fixed", name)
+		}
+	}
+}

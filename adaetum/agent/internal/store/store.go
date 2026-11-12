@@ -261,6 +261,37 @@ func (s *Store) Pending(ctx context.Context, limit int) ([]Event, error) {
 	return events, rows.Err()
 }
 
+// EventsWithPrefix returns every event whose kind starts with prefix, oldest first,
+// whether or not central has acknowledged it. Pending serves the outbox; this serves
+// a subsystem that keeps its own history in events (the run journal reads its records
+// back at start-up) and needs all of it, not only what is still unsent.
+func (s *Store) EventsWithPrefix(ctx context.Context, prefix string) ([]Event, error) {
+	if prefix == "" {
+		return nil, errors.New("a kind prefix is required")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT seq, kind, at_ms, payload FROM events WHERE substr(kind, 1, ?) = ? ORDER BY seq`, len(prefix), prefix)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s events: %w", prefix, err)
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var event Event
+		var atMs int64
+		var payload string
+		if err := rows.Scan(&event.Seq, &event.Kind, &atMs, &payload); err != nil {
+			return nil, err
+		}
+		event.HostID = s.hostID
+		event.At = time.UnixMilli(atMs).UTC()
+		event.Payload = json.RawMessage(payload)
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
 // AckedSeq is the highest sequence number central has acknowledged, or 0.
 func (s *Store) AckedSeq(ctx context.Context) (int64, error) {
 	value, err := s.meta(ctx, metaAckedSeq)

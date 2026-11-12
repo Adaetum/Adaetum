@@ -150,11 +150,14 @@ func NewInspector() *Inspector {
 var allowedCommands = map[string]bool{
 	"uname":     true,
 	"systemctl": true,
-	"df":        true,
-	"du":        true,
-	"nproc":     true,
-	rke2Kubectl: true,
-	rke2Crictl:  true,
+	// timedatectl is read with "show -p NTPSynchronized" only: whether the clock is
+	// synchronized, which first boot waits for because TLS depends on it.
+	"timedatectl": true,
+	"df":          true,
+	"du":          true,
+	"nproc":       true,
+	rke2Kubectl:   true,
+	rke2Crictl:    true,
 }
 
 func init() {

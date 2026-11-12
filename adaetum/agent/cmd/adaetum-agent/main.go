@@ -59,6 +59,8 @@ func main() {
 		runInspect(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
+	case "run":
+		runRun(os.Args[2:])
 	case "images":
 		runImages(os.Args[2:])
 	case "token":
@@ -80,7 +82,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: adaetum-agent inspect [-ssh target] | serve [-listen addr] [-ssh target] | images plan|apply|run | token create | mcp [-ssh target] | join | cluster | embed (see embed/) | version")
+	fmt.Fprintln(os.Stderr, "usage: adaetum-agent inspect [-ssh target] | serve [-listen addr] [-ssh target] | run [-list] <procedure> | images plan|apply|run | token create | mcp [-ssh target] | join | cluster | embed (see embed/) | version")
 	os.Exit(2)
 }
 
@@ -125,6 +127,7 @@ func runServe(args []string) {
 	dataDir := flags.String("data-dir", "", "directory for the agent's local database (e.g. /var/lib/adaetum); off when empty")
 	historyDir := flags.String("history-dir", "", "directory for the usage history database (workload CPU and memory over time, for sizing); defaults to -data-dir; off when both are empty")
 	ansible := addAnsibleFlags(flags)
+	runsCfg := addRunsFlags(flags)
 	tokenFile := flags.String("token-file", "", "file holding the access token that changes require (make one with `token create`)")
 	auth := addAuthFlags(flags)
 	_ = flags.Parse(args)
@@ -145,7 +148,8 @@ func runServe(args []string) {
 	guard := combinedGuard(accessToken, authClient)
 
 	inspector := newInspector(*sshTarget)
-	defer startHostIdentity(*dataDir, *sshTarget, authClient)()
+	stopHost, hostDB := startHostIdentity(*dataDir, *sshTarget, authClient)
+	defer stopHost()
 	mux := http.NewServeMux()
 	if *historyDir == "" {
 		*historyDir = *dataDir
@@ -160,6 +164,10 @@ func runServe(args []string) {
 	noBoard := func() *policy.Switchboard { return nil }
 	ansibleAvailable, stopAnsible := setupAnsible(mux, *ansible, noBoard)
 	defer stopAnsible()
+	// Registered after the database is open and closed before it (defers run last to
+	// first), so a run is never writing to a closed file.
+	runsAvailable, stopRuns := setupRuns(mux, hostDB, runsCfg, *tokenFile, guard, hostProcedures(inspector), noBoard)
+	defer stopRuns()
 	cleanupCfg := cleanupConfig{allowChanges: *allowChanges, sshTarget: *sshTarget, tokenFile: *tokenFile}
 	stopCleanup := setupCleanup(mux, inspector, cleanupCfg)
 	defer stopCleanup()
@@ -167,7 +175,7 @@ func runServe(args []string) {
 	imageCaps, _ := decideCapabilities(host, cleanupCfg, realSystem())
 	board, closeSecurity := newSwitchboard(nil, "", func() []policy.Lever {
 		// The cluster-only override is not offered on a host agent at all.
-		return []policy.Lever{ansibleLever(ansibleAvailable, ansible.allow, false), {
+		return []policy.Lever{ansibleLever(ansibleAvailable, ansible.allow, false), runsLever(runsAvailable, runsCfg.allow, false), {
 			Key: "image_changes", Title: "Remove unused container images from this page",
 			Description: "Lets the Storage page remove images on this server. It needs root, the access token, and -allow-changes.",
 			Risk:        "medium", Toggleable: false, StartupDefault: true, OffReason: imageCaps.Reason,
