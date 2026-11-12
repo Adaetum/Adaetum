@@ -1090,6 +1090,34 @@ run_post_bootstrap_healthcheck_phase70() {
   fi
 }
 
+# The healthcheck is read-only and measures a system that has only just finished
+# deploying: load is at its peak and some scrape targets are still starting. A single
+# reading therefore fails a healthy cluster, so the step is retried until the system
+# settles. Only the overall ceiling ends it as failed; it never changes anything, so
+# retrying is safe. PHASE70_HEALTHCHECK_SETTLE_TIMEOUT and ..._DELAY tune it (seconds).
+run_post_bootstrap_healthcheck_settled_phase70() {
+  local timeout="${PHASE70_HEALTHCHECK_SETTLE_TIMEOUT:-900}"
+  local delay="${PHASE70_HEALTHCHECK_SETTLE_DELAY:-30}"
+  local started="${SECONDS}"
+  local attempt=1
+
+  while true; do
+    if run_post_bootstrap_healthcheck_phase70; then
+      if (( attempt > 1 )); then
+        echo "[phase70] healthcheck passed on attempt ${attempt} after $(( SECONDS - started ))s"
+      fi
+      return 0
+    fi
+    if (( SECONDS - started >= timeout )); then
+      echo "[phase70] healthcheck still failing after ${attempt} attempt(s) and $(( SECONDS - started ))s (ceiling ${timeout}s)" >&2
+      return 1
+    fi
+    echo "[phase70] healthcheck not passing yet (attempt ${attempt}); the cluster may still be settling, retrying in ${delay}s (ceiling ${timeout}s)"
+    sleep "${delay}"
+    attempt=$(( attempt + 1 ))
+  done
+}
+
 echo "[phase70] repo: ${repo_root}"
 
 run_phase70_step "verify GitOps handoff" critical verify_phase70_gitops_handoff
@@ -1120,7 +1148,7 @@ run_phase70_step "reconcile requested CSI runtime rotations" critical reconcile_
 run_phase70_step "reconcile ansible-runner" critical ensure_ansible_runner_phase70
 # This playbook asserts the complete monitor and scrape-target inventory, so it
 # belongs after Phase 70 has realized and reconciled every workload it measures.
-run_phase70_step "run post-bootstrap healthcheck" critical run_post_bootstrap_healthcheck_phase70
+run_phase70_step "run post-bootstrap healthcheck" critical run_post_bootstrap_healthcheck_settled_phase70
 
 if (( phase70_failures > 0 )); then
   echo "[phase70] completed with ${phase70_failures} failed step(s); critical=${phase70_critical_failures}" >&2
