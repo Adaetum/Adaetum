@@ -29,7 +29,7 @@ So it is never a client of the cluster agent.
 
 - **Host agent.** Installed by the kickstart (`/usr/local/bin/adaetum-agent`, service
   `adaetum-agent.service`) and running from first boot. It listens on
-  `0.0.0.0:8443` over HTTPS with a certificate it makes for itself and requires its
+  `0.0.0.0:28443` over HTTPS with a certificate it makes for itself and requires its
   **access token** for every request except `/healthz`. It keeps its own database
   (a local Turso file) of events. Every feature works with the cluster agent
   unreachable. The kickstart starts it without `-allow-ansible` or

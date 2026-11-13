@@ -30,25 +30,30 @@ func fileExists(path string) bool {
 
 // startAutoAdopt lets a host that is a cluster node join the cluster agent with no token and
 // no address to type (see membership/adopt.go for why this is safe). It runs only for a host
-// with no link yet, only where RKE2's credentials exist on the machine, and only in the
-// background: the host agent never waits on the cluster, which may not be up for minutes
-// after boot. Once it succeeds it exits so the service restarts with the link.
+// with no link yet and only in the background: the host agent never waits on the cluster,
+// which may not exist for many minutes after the agent starts. On a first install the agent
+// starts well BEFORE RKE2 is installed, so the wait for RKE2's credentials has to happen here,
+// in the background: returning early when they are missing at start would mean a freshly
+// built node never joins and the cluster reports its agent as "not installed". Once it
+// succeeds it exits so the service restarts with the link.
 func startAutoAdopt(ctx context.Context, dataDir, hostID string) {
 	if _, joined, err := membership.LoadLink(dataDir); err != nil || joined {
 		return
 	}
-	kubeconfigPath := membership.FirstExisting(adoptKubeconfigs, fileExists)
-	if kubeconfigPath == "" {
-		return // not a cluster node, or the cluster is not installed yet: join by hand
-	}
-	key, err := identity.LoadOrCreateHostKey(dataDir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "host adoption: cannot load this host's key:", err)
-		return
-	}
-	hostname, _ := os.Hostname()
 
 	go func() {
+		// Wait quietly for the credentials. A host that is not a cluster node never has
+		// them, so saying anything while waiting would be noise on every ordinary host.
+		kubeconfigPath, ok := waitForFile(ctx, adoptKubeconfigs, adoptRetryEvery)
+		if !ok {
+			return
+		}
+		key, err := identity.LoadOrCreateHostKey(dataDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "host adoption: cannot load this host's key:", err)
+			return
+		}
+		hostname, _ := os.Hostname()
 		var last string
 		say := func(message string) {
 			if message != last {
@@ -86,4 +91,19 @@ func startAutoAdopt(ctx context.Context, dataDir, hostID string) {
 			}
 		}
 	}()
+}
+
+// waitForFile returns the first of paths that exists, checking now and then every interval
+// until ctx ends; ok is false if ctx ended first.
+func waitForFile(ctx context.Context, paths []string, every time.Duration) (path string, ok bool) {
+	for {
+		if found := membership.FirstExisting(paths, fileExists); found != "" {
+			return found, true
+		}
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-time.After(every):
+		}
+	}
 }

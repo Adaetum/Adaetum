@@ -120,7 +120,7 @@ func runInspect(args []string) {
 // the agent has its own auth.
 func runServe(args []string) {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
-	listen := flags.String("listen", "127.0.0.1:8080", "address to listen on; use 0.0.0.0:8443 to be reachable from the local network (needs -token-file, and serves HTTPS)")
+	listen := flags.String("listen", "127.0.0.1:8080", "address to listen on; use 0.0.0.0:28443 to be reachable from the local network (needs -token-file, and serves HTTPS)")
 	tlsDir := flags.String("tls-dir", filepath.Join(stateDir, "tls"), "where the self-signed certificate is kept when listening beyond this machine")
 	sshTarget := flags.String("ssh", "", "inspect this host over SSH (user@host) instead of the local machine")
 	allowChanges := flags.Bool("allow-changes", false, "let the UI remove container images and schedule cleanups (needs root, RKE2, and -token-file)")
@@ -168,6 +168,10 @@ func runServe(args []string) {
 	// first), so a run is never writing to a closed file.
 	runsAvailable, stopRuns := setupRuns(mux, hostDB, runsCfg, *tokenFile, guard, hostProcedures(inspector), noBoard)
 	defer stopRuns()
+	if exposed {
+		// The login banner tells whoever is at this machine's keyboard where this agent is.
+		defer startConsoleBanner(*listen)()
+	}
 	cleanupCfg := cleanupConfig{allowChanges: *allowChanges, sshTarget: *sshTarget, tokenFile: *tokenFile}
 	stopCleanup := setupCleanup(mux, inspector, cleanupCfg)
 	defer stopCleanup()
@@ -237,7 +241,7 @@ func runServe(args []string) {
 		server.TLSConfig = &tls.Config{GetCertificate: certificates.GetCertificate, MinVersion: tls.VersionTLS12}
 		fmt.Fprintf(os.Stderr, "listening on https://%s (reachable from the network; token required)\n", *listen)
 		fmt.Fprintln(os.Stderr, "certificate fingerprint (SHA-256), to check on first visit:", tlscert.Fingerprint(leaf))
-		server.Handler = handler
+		server.Handler = withHSTS(handler)
 		if err := server.ListenAndServeTLS("", ""); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

@@ -25,6 +25,7 @@ import (
 	"github.com/Adaetum/Adaetum/agent/internal/memory"
 	"github.com/Adaetum/Adaetum/agent/internal/policy"
 	"github.com/Adaetum/Adaetum/agent/internal/releases"
+	"github.com/Adaetum/Adaetum/agent/internal/runsapi"
 	"github.com/Adaetum/Adaetum/agent/internal/tlscert"
 	"github.com/Adaetum/Adaetum/agent/internal/webui"
 )
@@ -231,6 +232,10 @@ func runCluster(args []string) {
 			},
 		}).Register(mux)
 	}
+	registerClusterReport(mux, *sshTarget)
+	// Runs are a host agent's own work (they act on one machine), so the cluster agent has
+	// none; it answers the Runs page with that reason instead of a 404.
+	(&runsapi.API{Reason: "Runs are the work a server's own agent does on that server, so the cluster agent has none. Open a server's agent to see its runs.", RequireUser: guard}).Register(mux)
 	mux.Handle("/api/", api.Handler())
 	mux.Handle("/", webui.Handler())
 
@@ -265,6 +270,9 @@ func runCluster(args []string) {
 	assistantAPI.Register(mux)
 
 	certificates := tlscert.NewManager(filepath.Join(*dataDir, "tls"))
+	if identity, ok := podCertificateIdentity(os.Getenv); ok {
+		certificates.Identity = identity
+	}
 	_, leaf, err := certificates.Current()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cannot make a certificate:", err)
