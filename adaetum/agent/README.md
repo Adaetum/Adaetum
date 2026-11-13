@@ -33,7 +33,7 @@ workloads (`pods/`), public configuration (`platform.yaml`), or secrets
   fixed allowlist in `internal/inspect/inspect.go`.
 - `-ssh user@host` makes either command inspect another machine over SSH.
 - `serve` listens on `127.0.0.1:8080` by default (plain HTTP; reach it through an
-  SSH tunnel). With `-listen 0.0.0.0:8443 -token-file /etc/adaetum/agent-token` it
+  SSH tunnel). With `-listen 0.0.0.0:28443 -token-file /etc/adaetum/agent-token` it
   is reachable from the local network over HTTPS with a self-signed certificate,
   and every request but `/healthz` needs the token. It refuses to listen beyond
   loopback without a valid token file, and never in `-ssh` mode. The web
@@ -94,8 +94,7 @@ appliances without internet access. It is read-only and organized as:
   `preview_app_install`). Only those two fixed hosts are contacted, and every
   result is treated as untrusted text (`internal/catalog`). The same package serves
   app logos for the cards on the Apps and Find apps pages. The agent fetches them
-  (never the browser): first from the community dashboard-icons set (the one Homepage
-  uses, keyed by exact app name), then from Artifact Hub when a well-used chart has
+  (never the browser): first from the community dashboard-icons set (keyed by exact app name), then from Artifact Hub when a well-used chart has
   exactly that name (or, for a Helm app, the very chart Argo CD deploys it from), then Docker Hub (a logo a
   verified, official or well-used image of that name has uploaded), then GitHub: the
   avatar of the organisation behind a well-known repository named exactly like the app

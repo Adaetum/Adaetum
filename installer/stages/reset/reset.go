@@ -47,6 +47,11 @@ type Step struct {
 	Run     sys.Runner
 	Dir     string
 	EnvPath string
+	// Quick is for reinstalling over and over: it skips the menu and removes only the
+	// cluster's Tailscale devices and their host logs, keeping the OAuth clients and the
+	// SSH rule (so it never needs the temporary access token). It still lists what it
+	// found and still waits for the final yes.
+	Quick bool
 }
 
 // New returns the reset for the checkout at dir, reading envPath (or dir/.env when empty).
@@ -294,6 +299,29 @@ func (s *Step) Apply(ctx context.Context, _ *engine.Env, ui engine.UI) error {
 		return nil
 	}
 
+	what := optNoClients
+	if s.Quick {
+		if len(devs) == 0 {
+			// Logs are found through the devices, so with none there is nothing quick to do.
+			say("Nothing quick to remove: there are no cluster devices. Run the full reset to remove anything else.")
+			return nil
+		}
+	} else if err := func() error {
+		var err error
+		what, err = s.choose(ctx, ui, devs, in, sshRules)
+		return err
+	}(); err != nil {
+		return err
+	}
+	if what == optNothing {
+		say("Nothing was removed.")
+		return engine.ErrDeclined
+	}
+	return s.remove(ctx, ui, in, what, devs, logCounts, sshRules, canLogs)
+}
+
+// choose asks what to remove, offering only what exists.
+func (s *Step) choose(ctx context.Context, ui engine.UI, devs []device, in inputs, sshRules int) (string, error) {
 	var options []string
 	if len(devs) > 0 || len(in.clientIDs) > 0 || sshRules > 0 {
 		options = append(options, optEverything)
@@ -308,14 +336,14 @@ func (s *Step) Apply(ctx context.Context, _ *engine.Env, ui engine.UI) error {
 		options = append(options, optClients)
 	}
 	options = append(options, optNothing)
-	what, err := engine.Choose(ctx, ui, "reset-what", "What would you like to remove?", options, optNothing)
-	if err != nil {
-		return err
-	}
-	if what == optNothing {
-		say("Nothing was removed.")
-		return engine.ErrDeclined
-	}
+	return engine.Choose(ctx, ui, "reset-what", "What would you like to remove?", options, optNothing)
+}
+
+// remove carries out the chosen removal: it narrows the list, asks the final question
+// and deletes exactly what was shown.
+func (s *Step) remove(ctx context.Context, ui engine.UI, in inputs, what string, devs []device, logCounts map[string]int, sshRules int, canLogs bool) error {
+	say := func(msg string) { ui.Report(engine.Event{StepID: stepID, Message: msg}) }
+	var err error
 
 	// Decide which devices go.
 	chosen := devs

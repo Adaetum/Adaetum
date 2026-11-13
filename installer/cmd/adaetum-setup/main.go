@@ -58,6 +58,7 @@ func main() {
 	imageType := flag.String("type", "minimal", "with --download-iso: minimal or dvd")
 	release := flag.String("release", media.Release, "with --download-iso: the Rocky Linux release")
 	reset := flag.Bool("reset", false, "list what setup created in Tailscale and R2 (devices, OAuth clients, host logs); with --apply and --answer reset-confirm=yes, remove it")
+	quick := flag.Bool("quick", false, "with --reset: skip the menu and remove only the cluster's Tailscale devices and their R2 logs (keeps the OAuth clients and SSH rule), after one confirmation")
 	envPath := flag.String("env", "", "with --reset: the .env or recovery file naming what to reset (default: .env in the checkout)")
 	given := answers{}
 	flag.Var(given, "answer", "answer a question: id=value (repeatable)")
@@ -76,7 +77,7 @@ func main() {
 		os.Exit(downloadInstaller(root, *arch, *imageType, *release))
 	}
 	if *reset {
-		os.Exit(runReset(root, *envPath, given, *apply))
+		os.Exit(runReset(root, *envPath, given, *apply, *quick))
 	}
 	env := &engine.Env{DryRun: !*apply, Clean: *clean}
 	var ui engine.UI = engine.Headless{Answers: given, Replay: *replay, Log: func(e engine.Event) {
@@ -109,6 +110,14 @@ func main() {
 			os.Exit(1)
 		}
 		workRoot = workspace.Root
+		// Reuse everything an earlier run made, unless asked to start clean.
+		if !*clean {
+			if carryErr := workspace.CarryAll(root); carryErr != nil {
+				_ = workspace.Close()
+				fmt.Fprintln(os.Stderr, "could not carry .env into the setup checkout:", carryErr)
+				os.Exit(1)
+			}
+		}
 	}
 	steps, err := chooseStages(stages.ISOFromSource(workRoot, root, runner), *only)
 	if err != nil {
@@ -135,6 +144,13 @@ func main() {
 		}
 	}
 	if workspace != nil {
+		// Keep what this run generated: it is already on GitHub and the Worker.
+		if persistErr := workspace.Persist(root); persistErr != nil {
+			fmt.Fprintln(os.Stderr, "could not save the generated values to .env:", persistErr)
+			if runErr == nil {
+				runErr = persistErr
+			}
+		}
 		if cleanupErr := workspace.Close(); cleanupErr != nil {
 			fmt.Fprintln(os.Stderr, "could not remove temporary setup checkout:", cleanupErr)
 			if runErr == nil {
@@ -166,10 +182,17 @@ func main() {
 	}
 }
 
+// resetStep builds the reset, in its quick form when asked.
+func resetStep(root, envPath string, quick bool) *reset.Step {
+	step := reset.New(sys.Exec{}, root, envPath)
+	step.Quick = quick
+	return step
+}
+
 // runReset lists, and with --apply and an explicit reset-confirm=yes answer removes, what
 // setup created in Tailscale and R2. It uses a plain runner and no installer log: the log
 // records command lines and this command's inputs are credentials.
-func runReset(root, envPath string, given answers, apply bool) int {
+func runReset(root, envPath string, given answers, apply, quick bool) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	// In a terminal, ask. Under a script, or when answers were given on the command
@@ -203,7 +226,7 @@ func runReset(root, envPath string, given answers, apply bool) int {
 		}
 	}
 	env := &engine.Env{DryRun: !apply}
-	results, err := engine.Run(ctx, []engine.Step{reset.New(sys.Exec{}, root, envPath)}, env, ui)
+	results, err := engine.Run(ctx, []engine.Step{resetStep(root, envPath, quick)}, env, ui)
 	for _, r := range results {
 		fmt.Printf("%-18s %s\n", r.StepID, r.Finding.Status)
 		if r.Finding.Detail != "" {

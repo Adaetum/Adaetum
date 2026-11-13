@@ -91,8 +91,6 @@ def config_from_profile(profile: dict) -> dict[str, str]:
         "ARGOCD_LOCAL_HOST": host("argocd", local_domain),
         "OPENBAO_PUBLIC_HOST": host("openbao", domain),
         "OPENBAO_LOCAL_HOST": host("openbao", local_domain),
-        "HOMEPAGE_PUBLIC_HOST": host("home", domain),
-        "HOMEPAGE_LOCAL_HOST": host("home", local_domain),
         "AGENT_LOCAL_HOST": host("agent", local_domain),
         "ALERTMANAGER_PUBLIC_HOST": host("alertmanager", domain),
         "ALERTMANAGER_LOCAL_HOST": host("alertmanager", local_domain),
@@ -145,7 +143,6 @@ def config_from_profile(profile: dict) -> dict[str, str]:
             else "/bin/false"
         ),
     }
-    config["HOMEPAGE_ALLOWED_HOSTS"] = ",".join((config["HOMEPAGE_LOCAL_HOST"], config["HOMEPAGE_PUBLIC_HOST"], "homepage.homepage.svc.cluster.local", "homepage.homepage.svc", "localhost", "127.0.0.1"))
     return config
 
 

@@ -14,7 +14,7 @@ or unit restarts the service. Run it with `--check` first to see what would chan
 
 ## Defaults
 
-The agent listens on every interface on port 8443 over HTTPS with its own
+The agent listens on every interface on port 28443 over HTTPS with its own
 certificate, requires its access token for the API, and keeps its data in
 `/var/lib/adaetum`. The firewall is left alone unless `host_agent_firewall_zone` is
 set. The UI cannot remove images unless `host_agent_allow_changes` is true (the

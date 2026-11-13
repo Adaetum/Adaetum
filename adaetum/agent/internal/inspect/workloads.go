@@ -210,6 +210,9 @@ func podTotals(containers []containerSpec, pick func(containerSpec) resourceQuan
 
 // kubectlGet runs a read-only `kubectl get` against the local RKE2 server.
 func (i *Inspector) kubectlGet(ctx context.Context, resources string, extra ...string) ([]byte, error) {
+	if i.Get != nil {
+		return i.Get(ctx, resources, extra...)
+	}
 	args := append([]string{"--kubeconfig", rke2Kubeconfig, "get", resources}, extra...)
 	args = append(args, "-o", "json")
 	out, err := i.Run(ctx, rke2Kubectl, args...)
@@ -222,6 +225,9 @@ func (i *Inspector) kubectlGet(ctx context.Context, resources string, extra ...s
 // kubectlRaw reads an API server path directly, such as a kubelet's stats via
 // the node proxy. It is still a read: `get --raw` issues a GET.
 func (i *Inspector) kubectlRaw(ctx context.Context, path string) ([]byte, error) {
+	if i.Raw != nil {
+		return i.Raw(ctx, path)
+	}
 	out, err := i.Run(ctx, rke2Kubectl, "--kubeconfig", rke2Kubeconfig, "get", "--raw", path)
 	if err != nil {
 		return nil, fmt.Errorf("kubectl get --raw %s: %w", path, err)

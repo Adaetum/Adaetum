@@ -31,7 +31,6 @@ GLOB_TARGETS = (
 
 KUSTOMIZE_TARGETS = (
     REPO_ROOT / "pods" / "ingress",
-    REPO_ROOT / "pods" / "portal" / "homepage",
     REPO_ROOT / "pods" / "ansible" / "ansible",
 )
 

@@ -91,23 +91,6 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: home-tailnet
-  namespace: homepage
-  annotations:
-    tailscale.com/proxy-group: adaetum-ingress
-spec:
-  ingressClassName: tailscale
-  tls:
-    - hosts: [home]
-  defaultBackend:
-    service:
-      name: homepage
-      port:
-        number: 3000
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
   name: rancher-tailnet
   namespace: cattle-system
   annotations:

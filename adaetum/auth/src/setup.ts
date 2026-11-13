@@ -10,6 +10,11 @@ const LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O or 1/I to misread
 const MAX_WRONG = 5;
 const LOCK_MS = 60_000;
 
+function matches(given: string, expected: Buffer): boolean {
+  const candidate = Buffer.from(given);
+  return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+}
+
 export type CodeCheck = "ok" | "wrong" | "locked";
 
 export class SetupCode {
@@ -19,8 +24,10 @@ export class SetupCode {
 
   constructor(private readonly file: string | null, private readonly now: () => number = Date.now) {}
 
-  // ensure makes (or reloads) the code. Reloading keeps the same code across restarts,
-  // so what an operator saw in the log still works.
+  // ensure makes (or reloads) the code. First boot may already have put the operator's
+  // recovery password in the file, so any saved value of 8 or more characters is used as is.
+  // Reloading keeps the same code across restarts, so what an operator saw in the log
+  // still works.
   ensure(): string {
     if (this.code) return this.code;
     if (this.file && existsSync(this.file)) {
@@ -43,8 +50,10 @@ export class SetupCode {
   check(presented: string): CodeCheck {
     if (this.now() < this.lockedUntil) return "locked";
     const expected = Buffer.from(this.ensure());
-    const given = Buffer.from(presented.trim().toUpperCase());
-    if (given.length === expected.length && timingSafeEqual(given, expected)) {
+    // A generated code is upper case and typed by hand, so it is compared case-insensitively.
+    // A seeded code (the operator's recovery password, see Phase 20) is compared exactly
+    // first, since its case matters and must not be loosened.
+    if (matches(presented.trim(), expected) || matches(presented.trim().toUpperCase(), expected)) {
       this.wrong = 0;
       return "ok";
     }
@@ -54,6 +63,12 @@ export class SetupCode {
       return "locked";
     }
     return "wrong";
+  }
+
+  // isGenerated says whether the code is one this service made, as opposed to a password
+  // seeded into the file. Only a generated code may be shown in a log or on a console.
+  isGenerated(): boolean {
+    return /^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(this.ensure());
   }
 
   // consume removes the code once it has been used.

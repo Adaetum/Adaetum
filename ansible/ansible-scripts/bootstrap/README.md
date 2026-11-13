@@ -51,8 +51,7 @@ are generated locally on the first server and are disposable.
   ansible-runner image/pull path and critical realization checks.
 - `Phase-90/run-phase90.sh`: Reconcile the late live-state credentials that can
   only be finalized once the applications are actually running. This includes
-  Authentik and Grafana admin-password alignment plus Homepage widget token
-  mint/validate/writeback to OpenBao and rendered workload secrets.
+  Authentik and Grafana admin-password alignment.
 - `Phase-90/run-phase99.sh`: Export the recovery kit and remove bootstrap-local authority.
 - `bundle-bootstrap`: Default first-boot orchestrator for the full bootstrap chain.
   It is the only supported operator entrypoint and expects the OS install layer

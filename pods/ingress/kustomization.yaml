@@ -14,8 +14,6 @@ resources:
   - nginx-routing/authentik-ingress.yaml
   - nginx-routing/authentik-outpost-hosts-ingress.yaml
   - nginx-routing/agent-ingress.yaml
-  - nginx-routing/homepage-ingress.yaml
-  - nginx-routing/homepage-public-ingress.yaml
   - nginx-routing/registry-ingress.yaml
   - nginx-routing/registry-public-ingress.yaml
   - nginx-routing/rancher-ingress.yaml
@@ -209,26 +207,6 @@ replacements:
           - spec.rules.7.host
   - source:
       kind: ConfigMap
-      name: ingress-cluster-config
-      fieldPath: data.HOMEPAGE_LOCAL_HOST
-    targets:
-      - select:
-          kind: Ingress
-          name: authentik-outpost-hosts
-        fieldPaths:
-          - spec.rules.8.host
-  - source:
-      kind: ConfigMap
-      name: ingress-cluster-config
-      fieldPath: data.HOMEPAGE_PUBLIC_HOST
-    targets:
-      - select:
-          kind: Ingress
-          name: authentik-outpost-hosts
-        fieldPaths:
-          - spec.rules.9.host
-  - source:
-      kind: ConfigMap
       name: observability-routing-cluster-config
       fieldPath: data.ALERTMANAGER_LOCAL_HOST
     targets:
@@ -236,7 +214,7 @@ replacements:
           kind: Ingress
           name: authentik-outpost-hosts
         fieldPaths:
-          - spec.rules.10.host
+          - spec.rules.8.host
   - source:
       kind: ConfigMap
       name: observability-routing-cluster-config
@@ -246,7 +224,7 @@ replacements:
           kind: Ingress
           name: authentik-outpost-hosts
         fieldPaths:
-          - spec.rules.11.host
+          - spec.rules.9.host
   - source:
       kind: ConfigMap
       name: observability-routing-cluster-config
@@ -256,7 +234,7 @@ replacements:
           kind: Ingress
           name: authentik-outpost-hosts
         fieldPaths:
-          - spec.rules.12.host
+          - spec.rules.10.host
   - source:
       kind: ConfigMap
       name: observability-routing-cluster-config
@@ -266,7 +244,7 @@ replacements:
           kind: Ingress
           name: authentik-outpost-hosts
         fieldPaths:
-          - spec.rules.13.host
+          - spec.rules.11.host
   - source:
       kind: ConfigMap
       name: observability-routing-cluster-config
@@ -276,7 +254,7 @@ replacements:
           kind: Ingress
           name: authentik-outpost-hosts
         fieldPaths:
-          - spec.rules.14.host
+          - spec.rules.12.host
   - source:
       kind: ConfigMap
       name: observability-routing-cluster-config
@@ -286,7 +264,7 @@ replacements:
           kind: Ingress
           name: authentik-outpost-hosts
         fieldPaths:
-          - spec.rules.15.host
+          - spec.rules.13.host
   - source:
       kind: ConfigMap
       name: ingress-cluster-config
@@ -307,27 +285,6 @@ replacements:
           name: agent-ui-internal
         fieldPaths:
           - spec.rules.0.host
-  - source:
-      kind: ConfigMap
-      name: ingress-cluster-config
-      fieldPath: data.HOMEPAGE_LOCAL_HOST
-    targets:
-      - select:
-          kind: Ingress
-          name: homepage-ui-internal
-        fieldPaths:
-          - spec.rules.0.host
-  - source:
-      kind: ConfigMap
-      name: ingress-cluster-config
-      fieldPath: data.HOMEPAGE_PUBLIC_HOST
-    targets:
-      - select:
-          kind: Ingress
-          name: homepage-ui-public
-        fieldPaths:
-          - spec.rules.0.host
-          - metadata.annotations.[external-dns.alpha.kubernetes.io/hostname]
   - source:
       kind: ConfigMap
       name: ingress-cluster-config

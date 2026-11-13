@@ -293,7 +293,6 @@
         - { name: "grafana_secret_key", length: 48 }
         - { name: "ntfy_admin_password", length: 24 }
         - { name: "ntfy_apprise_password", length: 32, format: "url_password" }
-        - { name: "homepage_grafana_password", length: 24 }
         - { name: "authentik_secret_key", length: 48 }
         - { name: "authentik_postgresql_password", length: 24 }
         - { name: "authentik_admin_password", length: 24 }
@@ -359,7 +358,6 @@
         - grafana_secret_key
         - ntfy_admin_password
         - ntfy_apprise_password
-        - homepage_grafana_password
         - authentik_secret_key
         - authentik_postgresql_password
         - authentik_admin_password
@@ -613,7 +611,6 @@
         gitea_jwt_secret: "{{ lookup('file', bootstrap_secret_dir + '/gitea_jwt_secret') | trim }}"
         grafana_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/grafana_admin_password') | trim }}"
         grafana_secret_key: "{{ lookup('file', bootstrap_secret_dir + '/grafana_secret_key') | trim }}"
-        homepage_grafana_password: "{{ lookup('file', bootstrap_secret_dir + '/homepage_grafana_password') | trim }}"
         authentik_admin_username: "{{ lookup('file', bootstrap_secret_dir + '/authentik_admin_username') | trim }}"
         authentik_admin_password: "{{ lookup('file', bootstrap_secret_dir + '/authentik_admin_password') | trim }}"
         authentik_bootstrap_token: "{{ lookup('file', bootstrap_secret_dir + '/authentik_bootstrap_token') | trim }}"

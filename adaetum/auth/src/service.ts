@@ -168,7 +168,10 @@ export async function createService(options: ServiceOptions) {
 
   // announce prints the setup code where only someone at the machine sees it.
   function announce(log: (line: string) => void = console.error): void {
-    if (needsSetup()) log(`Adaetum first-run setup code: ${setup.ensure()}  (enter it on the sign-in page to create the first owner)`);
+    if (!needsSetup()) return;
+    // A seeded code is the operator's recovery password; it never goes in a log.
+    if (setup.isGenerated()) log(`Adaetum first-run setup code: ${setup.ensure()}  (enter it on the sign-in page to create the first owner)`);
+    else log("Adaetum first-run setup: enter your recovery password on the sign-in page to create the first owner");
   }
 
   return { fetch, auth, store, db, setup, announce, mode: readMode };

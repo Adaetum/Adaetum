@@ -1,6 +1,6 @@
 // Package webui serves the web interface from inside the agent binary.
 //
-// INTENT: so an operator can open https://<host>:8443 on any host, with the cluster
+// INTENT: so an operator can open https://<host>:28443 on any host, with the cluster
 // down and nothing else installed, and get the full interface. That is what makes
 // the host agent a real out-of-band troubleshooting tool rather than only an API.
 //

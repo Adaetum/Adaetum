@@ -33,6 +33,9 @@ bun src/server.ts              # development: loopback port 8787
 There is no default account, in development or anywhere else. While nobody has an account
 the service prints a first-run setup code (and keeps it in `AUTH_STATE_DIR/setup-code`);
 entering it on the sign-in page creates the first owner.
+On a host installed by Adaetum, first boot (Phase 20) puts the operator's recovery password in that
+file instead, so the password is the setup code. It is then matched exactly, never printed in the
+log, and used once. A generated code is matched without regard to case.
 
 With the agent: start this with `AUTH_SOCKET=/path/a.sock AUTH_STATE_DIR=/path`, then start the
 agent with `-auth-socket /path/a.sock -auth-secret-file /path/internal-secret` (the service
@@ -51,6 +54,7 @@ before: the access token alone.
 
 ## Not done yet
 
-Packaging (a systemd unit and Ansible role for hosts, a container and manifest for the pod), a
-Linux build of the compiled binary, passkeys, and write-through of account changes made at a
+Publishing the compiled service in the release (development media builds it with
+`tasks/scripts/build-dev-auth.sh`; the pod runs the container image), an Ansible role for existing
+hosts, passkeys, and write-through of account changes made at a
 host to the cluster. See "Not built" in the design doc.

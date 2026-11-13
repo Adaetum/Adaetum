@@ -32,7 +32,7 @@ host_agent_service_unit: adaetum-agent.service
 # NETWORK. The agent listens on every interface so a host is reachable directly by
 # IP or hostname even when the cluster is down. It refuses to do that without a
 # token and serves HTTPS with its own certificate.
-host_agent_port: 8443
+host_agent_port: 28443
 # Firewall zone to open the port in (for example "internal"). Empty leaves the
 # firewall alone; the port is then reachable only where the zone already allows it.
 host_agent_firewall_zone: ""

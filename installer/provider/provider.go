@@ -53,6 +53,69 @@ func (c Client) get(ctx context.Context, url, token string, into any) (int, erro
 	return resp.StatusCode, nil
 }
 
+// TailnetHTTPS reports whether HTTPS certificates are enabled on the token's tailnet.
+// known is false when the answer did not say, for example an older API, so a caller never
+// treats "unknown" as "off". The setting gates every Tailscale ingress in the cluster.
+func (c Client) TailnetHTTPS(ctx context.Context, token string) (on, known bool, err error) {
+	var doc struct {
+		HTTPSEnabled *bool `json:"httpsEnabled"`
+	}
+	status, err := c.get(ctx, c.tailscaleBase()+"/tailnet/-/settings", token, &doc)
+	if err != nil {
+		return false, false, fmt.Errorf("unable to read the Tailscale HTTPS setting: %w", err)
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return false, false, fmt.Errorf("%w: Tailscale refused it while reading tailnet settings", ErrRejected)
+	}
+	if status >= 400 {
+		return false, false, fmt.Errorf("unable to read the Tailscale HTTPS setting: HTTP %d", status)
+	}
+	if doc.HTTPSEnabled == nil {
+		return false, false, nil
+	}
+	return *doc.HTTPSEnabled, true, nil
+}
+
+// EnableTailnetHTTPS turns HTTPS certificates on, then reads the setting back so a
+// success is only reported when Tailscale actually shows it enabled. Writing it needs a
+// token that may change tailnet settings (the networking_settings scope, or an admin's
+// access token); a refusal is returned as ErrRejected for the caller to explain.
+func (c Client) EnableTailnetHTTPS(ctx context.Context, token string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.tailscaleBase()+"/tailnet/-/settings", strings.NewReader(`{"httpsEnabled":true}`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "adaetum-installer")
+	resp, err := c.http().Do(req)
+	if err != nil {
+		return errors.New(strings.ReplaceAll(err.Error(), token, "[token]"))
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("%w: Tailscale refused it while changing tailnet settings", ErrRejected)
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("unable to turn on Tailscale HTTPS: HTTP %d", resp.StatusCode)
+	}
+	on, known, err := c.TailnetHTTPS(ctx, token)
+	if err != nil {
+		return err
+	}
+	if !known || !on {
+		return errors.New("Tailscale accepted the change but does not show HTTPS certificates as enabled")
+	}
+	return nil
+}
+
+func (c Client) tailscaleBase() string {
+	if c.TailscaleBase != "" {
+		return c.TailscaleBase
+	}
+	return tailscaleBase
+}
+
 // Zone is a Cloudflare DNS zone and the account that owns it.
 type Zone struct {
 	Name        string

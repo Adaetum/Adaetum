@@ -168,121 +168,6 @@ fi
     return failures
 
 
-def validate_gitea_token_helpers() -> list[str]:
-    """Exercise scope rejection and post-promotion stale-token revocation."""
-    source_path = shlex.quote(str(SHARED_HELPERS))
-    script = rf'''
-set -euo pipefail
-source {source_path}
-
-MOCK_MODE=mint-valid
-curl() {{
-  if [[ " $* " == *" --request DELETE "* ]]; then
-    MOCK_MODE=revoke-after
-    return 0
-  fi
-  case "${{MOCK_MODE}}" in
-    mint-valid)
-      printf '%s\n%s' '{{"sha1":"0123456789abcdef0123456789abcdef01234567"}}' '201'
-      ;;
-    mint-malformed)
-      printf '%s\n%s' '{{"sha1":"not-a-token"}}' '201'
-      ;;
-    mint-rejected)
-      printf '%s\n%s' '{{"message":"bad credentials"}}' '401'
-      ;;
-    readonly|revoke-after)
-      printf '%s' '[{{"id":2,"name":"homepage-widget-2","token_last_eight":"abcdefgh","scopes":["read:issue","read:repository","read:notification"]}}]'
-      ;;
-    broad)
-      printf '%s' '[{{"id":1,"name":"homepage-widget","token_last_eight":"abcdefgh","scopes":["all"]}}]'
-      ;;
-    revoke-before)
-      printf '%s' '[{{"id":1,"name":"homepage-widget","token_last_eight":"oldtoken","scopes":["all"]}},{{"id":2,"name":"homepage-widget-2","token_last_eight":"abcdefgh","scopes":["read:issue","read:repository","read:notification"]}}]'
-      ;;
-  esac
-}}
-
-[[ "$(mint_gitea_widget_token http://gitea gitea-admin password)" == \
-  0123456789abcdef0123456789abcdef01234567 ]]
-MOCK_MODE=mint-malformed
-if mint_gitea_widget_token http://gitea gitea-admin password >/dev/null 2>&1; then
-  echo 'malformed API token was accepted' >&2
-  exit 1
-fi
-MOCK_MODE=mint-rejected
-if mint_gitea_widget_token http://gitea gitea-admin password >/dev/null 2>&1; then
-  echo 'rejected token request was accepted' >&2
-  exit 1
-fi
-MOCK_MODE=readonly
-gitea_widget_token_has_required_scopes \
-  http://gitea gitea-admin password 0123456789abcdefgh
-MOCK_MODE=broad
-if gitea_widget_token_has_required_scopes \
-  http://gitea gitea-admin password 0123456789abcdefgh; then
-  echo 'all-scope token was accepted' >&2
-  exit 1
-fi
-MOCK_MODE=revoke-before
-revoke_stale_gitea_widget_tokens \
-  http://gitea gitea-admin password 0123456789abcdefgh
-[[ "${{MOCK_MODE}}" == revoke-after ]]
-'''
-    result = subprocess.run(
-        ["bash", "-c", script],
-        cwd=REPOSITORY_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        return []
-    detail = result.stderr.strip() or result.stdout.strip() or "unknown failure"
-    return [f"Gitea token helper behavior failed: {detail}"]
-
-
-def validate_homepage_credential_handoff() -> list[str]:
-    """Keep credential-only stdout and verified OpenBao delivery fail closed."""
-    failures: list[str] = []
-    for phase, path in (("70", PHASE_70), ("90", PHASE_90)):
-        source = path.read_text(encoding="utf-8")
-        for required in (
-            "/api/v1/notifications?limit=1",
-            "bootstrap_service_address",
-            "mint_gitea_widget_token",
-            "Gitea widget token validation returned HTTP",
-            "OpenBao write verification failed",
-            "Homepage widget reconciliation failed before workload restart",
-            "Homepage CSI credential delivery did not become ready",
-        ):
-            if required not in source:
-                failures.append(f"Phase {phase} Homepage handoff missing: {required}")
-        if f'mint_argocd_widget_key_phase{phase} "${{openbao_token}}" || true' in source:
-            failures.append(
-                f"Phase {phase} must preserve Argo CD mint failure instead of accepting stdout"
-            )
-        if f'"${{gitea_base_url}}" || true)' in source:
-            failures.append(
-                f"Phase {phase} must preserve Gitea mint failure instead of accepting stdout"
-            )
-
-        phase_functions = functions(path)
-        for mint_name in (
-            f"mint_argocd_widget_key_phase{phase}",
-            f"mint_gitea_widget_auth_phase{phase}",
-        ):
-            implementation = phase_functions.get(mint_name, "")
-            if (
-                "bootstrap_wait_for_deployment_rollout" not in implementation
-                or ">&2; then" not in implementation
-            ):
-                failures.append(
-                    f"Phase {phase} {mint_name} must keep rollout logs off credential stdout"
-                )
-    return failures
-
-
 def validate_push_mirror_helper() -> list[str]:
     """Prove OpenBao wins on rerun and the hook reads only its projection."""
     source_path = shlex.quote(str(SHARED_HELPERS))
@@ -672,7 +557,7 @@ mock_kubectl() {{
 }}
 
 result="$(bootstrap_wait_for_csi_secret_delivery \
-  mock_kubectl homepage mounted-class homepage)"
+  mock_kubectl apprise mounted-class apprise)"
 [[ "${{result}}" == *$'mounted by live-status\tlive-pod'* ]]
 [[ "${{result}}" != *"terminal mount failure"* ]]
 rm -f "${{STATUS_FILE}}"
@@ -978,9 +863,7 @@ wait_for_gitea_registry_bootstrap_path
         "verify_secret_delivery_foundation_phase70",
         "secret-delivery foundation failed; stopping before workload realization checks",
         "GitOps realization checks failed; stopping before secret-delivery reconciliation",
-        'run_phase70_step "reconcile Homepage widget secrets"',
         'run_phase70_step "run post-bootstrap healthcheck"',
-        "Homepage widget reconciliation failed; stopping before workload secret verification",
         'registry_host="${runner_image%%/*}"',
         "ansible-cluster-config does not declare ANSIBLE_RUNNER_IMAGE",
     ):
@@ -1000,21 +883,6 @@ wait_for_gitea_registry_bootstrap_path
     if foundation_gate < 0 or realization_gate < 0 or foundation_gate > realization_gate:
         failures.append(
             "Phase 70 must prove the secret-delivery foundation before workload realization"
-        )
-
-    homepage_reconcile = phase_70.find(
-        'run_phase70_step "reconcile Homepage widget secrets"'
-    )
-    secret_verification = phase_70.find("if ! verify_openbao_secret_delivery_phase70")
-    if (
-        realization_gate < 0
-        or homepage_reconcile < 0
-        or secret_verification < 0
-        or not realization_gate < homepage_reconcile < secret_verification
-    ):
-        failures.append(
-            "Phase 70 must reconcile Homepage's generated credentials before "
-            "verifying workload secret mounts"
         )
 
     runner_reconcile = phase_70.find(
@@ -1470,8 +1338,6 @@ def main() -> int:
     )
     failures = validate_service_address_helper()
     failures.extend(validate_gitea_runner_token_mint())
-    failures.extend(validate_gitea_token_helpers())
-    failures.extend(validate_homepage_credential_handoff())
     failures.extend(validate_push_mirror_helper())
     failures.extend(validate_external_secret_timeout())
     failures.extend(validate_external_secret_ready())
@@ -1498,7 +1364,7 @@ def main() -> int:
     print(
         "Control-pair helper ownership ok: "
         f"{len(phase_50_functions)} Phase 50 and {len(phase_60_functions)} Phase 60 helpers; "
-        "Gitea token, push-mirror, bounded secret delivery, Rancher origin settling, "
+        "push-mirror, bounded secret delivery, Rancher origin settling, "
         "and Phase 70 realization behavior passed."
     )
     return 0

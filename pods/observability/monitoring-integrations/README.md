@@ -17,7 +17,7 @@ Apprise to the authenticated ntfy publisher; configuring Rancher's Alertmanager
 with the same receiver would generate duplicate notifications because both
 Prometheus instances evaluate the shared rules.
 
-Workloads without a native metrics endpoint, including Apprise, ntfy, Homepage,
+Workloads without a native metrics endpoint, including Apprise, ntfy,
 and ansible-runner, are covered by kube-state-metrics and the standard
 kube-prometheus workload rules. Do not create ServiceMonitors for ordinary HTTP
 health endpoints; a monitor must scrape Prometheus-format metrics.
@@ -32,7 +32,7 @@ health endpoints; a monitor must scrape Prometheus-format metrics.
 | Gitea, Grafana, Alertmanager, External Secrets, Kured, and Kubescape | Chart-native ServiceMonitors | Product metrics plus upstream workload and target rules |
 | Reloader | Chart-native PodMonitor | Upstream workload and target rules |
 | external-dns, cloudflared, and kube-vip | Native metrics ports plus monitors in this app | Upstream workload and target rules |
-| Kubewarden, Apprise, ntfy, Homepage, ansible-runner, CSI providers, and secret-sync resources | kube-state-metrics; no fake or unowned metrics endpoints | Upstream Deployment, StatefulSet, DaemonSet, Job, pod, and PVC rules |
+| Kubewarden, Apprise, ntfy, ansible-runner, CSI providers, and secret-sync resources | kube-state-metrics; no fake or unowned metrics endpoints | Upstream Deployment, StatefulSet, DaemonSet, Job, pod, and PVC rules |
 
 OpenBao's metrics endpoint requires an authenticated token unless explicitly
 made public. Adaetum does not weaken that boundary or persist a monitoring token

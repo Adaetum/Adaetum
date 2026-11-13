@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Adaetum/Adaetum/installer/envfile"
@@ -34,14 +35,50 @@ func (w *Workspace) Carry(source string, keys ...string) error {
 	return nil
 }
 
+// CarryAll copies every non-empty value from the launch checkout's .env into the private
+// checkout's. Setup generates and provisions long-lived values (the Worker tokens, the R2
+// credentials, the Rancher tunnel, the Tailscale OAuth clients). A run that cannot see the
+// ones an earlier run made creates new ones, which the already-deployed Worker and the
+// operator's earlier recovery copy then disagree with. Start-clean runs do not call this.
+func (w *Workspace) CarryAll(source string) error {
+	return copyEnv(filepath.Join(source, ".env"), filepath.Join(w.Root, ".env"))
+}
+
+// Persist writes every non-empty value of the private checkout's .env back into the launch
+// checkout's .env, keeping any other line there. The private checkout is deleted when setup
+// ends, so without this a value generated this run (and already synced to GitHub and the
+// Worker, or saved in the R2 recovery copy) exists nowhere the next run, a local bundle
+// upload or a headless ISO build can read it. Call it whether or not the run succeeded:
+// values are synced as they are made, so a failed run must not forget them.
+func (w *Workspace) Persist(source string) error {
+	return copyEnv(filepath.Join(w.Root, ".env"), filepath.Join(source, ".env"))
+}
+
+func copyEnv(from, to string) error {
+	values := envfile.Read(from)
+	keys := make([]string, 0, len(values))
+	for k, v := range values {
+		if v != "" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := envfile.Upsert(to, k, values[k]); err != nil {
+			return fmt.Errorf("copy %s into %s: %w", k, to, err)
+		}
+	}
+	return nil
+}
+
 func Prepare(ctx context.Context, source string) (_ *Workspace, err error) {
 	dir, err := os.MkdirTemp("", "adaetum-setup-")
 	if err != nil {
 		return nil, err
 	}
 	w := &Workspace{Root: filepath.Join(dir, "source"), dir: dir}
-	// Existing backup keys are needed to avoid orphaning previous emergency kits.
-	// Only these values are copied into the private, short-lived checkout.
+	// Existing backup keys are needed to avoid orphaning previous emergency kits, even on a
+	// start-clean run. Everything else is carried by CarryAll, which clean runs skip.
 	defer func() {
 		if err != nil {
 			return

@@ -15,7 +15,7 @@ export default defineConfig({
   build: { outDir: "../internal/webui/ui/dist", emptyOutDir: true },
   server: {
     // AGENT_URL points the dev server at another agent, for example a host agent
-    // started with -listen 0.0.0.0:8443 (https, self-signed, hence secure: false).
+    // started with -listen 0.0.0.0:28443 (https, self-signed, hence secure: false).
     proxy: { "/api": { target: process.env.AGENT_URL ?? "http://127.0.0.1:8080", secure: false } },
   },
 });

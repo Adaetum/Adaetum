@@ -194,7 +194,7 @@ depends on replicas, storage placement, and valid PodDisruptionBudgets.
 | GitOps and source control | Argo CD, Gitea, Gitea Actions |
 | Secrets, identity, and policy | OpenBao, External Secrets, Secrets Store CSI, Authentik, Kubewarden, Kubescape |
 | Networking and edge | Tailscale, ingress-nginx, external-dns, Cloudflare, cloudflared, kube-vip |
-| Operations | Homepage, Prometheus, Grafana, Alertmanager, Kured |
+| Operations | Prometheus, Grafana, Alertmanager, Kured |
 | Adaetum's own software | Host agent and web app (Go, React), sign-in service (Bun, Better Auth), embedding service |
 
 Adaetum is activation and integration code. Those upstream applications remain
@@ -325,6 +325,12 @@ finalizing—and finishes with the path to the generated ISO. Attach that ISO to
 the first machine and boot it. On first run, setup installs missing tools and
 builds the window using a supported local package manager. ISO tools are bundled
 for supported platforms, so Docker is not required there.
+
+Setup asks you to choose one **recovery password** (at least 16 characters, typed
+on a standard keyboard). It opens the emergency recovery kit, and it is also how
+you get into a server directly: it is the access token on every host and the code
+that claims a server's first account, so you can sign in on a host even when the
+cluster is down. Keep your own copy somewhere safe and offline.
 
 You will need:
 

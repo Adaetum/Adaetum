@@ -39,6 +39,18 @@ if [ ! -f "${agent_source}" ]; then
   exit 1
 fi
 install -D -m 0755 "${agent_source}" "${target_root}/usr/local/bin/adaetum-agent"
+# Only development media (task init:dev) carries this file. It adds arguments to the
+# agent's command line, so it must never exist on a production ISO, whose pinned agent
+# may not know them.
+if [ -f /run/install/repo/ks/adaetum-agent.env ]; then
+  install -D -m 0644 /run/install/repo/ks/adaetum-agent.env "${target_root}/etc/adaetum/agent.env"
+fi
+# The account sign-in service (adaetum/auth) is optional: media that does not carry it
+# leaves a host accepting only its access token. First boot installs its unit only when
+# the binary is here (75-firstboot-install-handoff.ksfrag).
+if [ -f /run/install/repo/ks/adaetum-auth ]; then
+  install -D -m 0755 /run/install/repo/ks/adaetum-auth "${target_root}/usr/local/bin/adaetum-auth"
+fi
 
 if [ ! -f "${gum_source}" ]; then
   echo "[BOOTSTRAP] Missing required Gum RPM on installer media" \

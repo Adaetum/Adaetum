@@ -528,21 +528,31 @@ validate_r2_credentials() {
   }
 
   # Listing a reserved, nonexistent prefix performs a signed bucket request
-  # without printing object names or mutating recovery storage.
-  if validation_output="$(
-    RCLONE_CONFIG_ADAETUM_R2_TYPE=s3 \
-    RCLONE_CONFIG_ADAETUM_R2_PROVIDER=Cloudflare \
-    RCLONE_CONFIG_ADAETUM_R2_ACCESS_KEY_ID="${access_key_id}" \
-    RCLONE_CONFIG_ADAETUM_R2_SECRET_ACCESS_KEY="${secret_access_key}" \
-    RCLONE_CONFIG_ADAETUM_R2_ENDPOINT="${endpoint}" \
-    RCLONE_CONFIG_ADAETUM_R2_NO_CHECK_BUCKET=true \
-      rclone lsf "adaetum_r2:${bucket}/.adaetum-credential-validation" --max-depth 1 2>&1
-  )"; then
-    return 0
-  fi
-  if printf '%s' "${validation_output}" | grep -Eqi 'StatusCode: 403|Forbidden|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied'; then
-    return 2
-  fi
+  # without printing object names or mutating recovery storage. A freshly created
+  # key can take a moment to be accepted, and R2 occasionally drops a request, so an
+  # answer that is not a clear refusal is tried a few times before giving up.
+  local attempt
+  for attempt in 1 2 3; do
+    if validation_output="$(
+      RCLONE_CONFIG_ADAETUM_R2_TYPE=s3 \
+      RCLONE_CONFIG_ADAETUM_R2_PROVIDER=Cloudflare \
+      RCLONE_CONFIG_ADAETUM_R2_ACCESS_KEY_ID="${access_key_id}" \
+      RCLONE_CONFIG_ADAETUM_R2_SECRET_ACCESS_KEY="${secret_access_key}" \
+      RCLONE_CONFIG_ADAETUM_R2_ENDPOINT="${endpoint}" \
+      RCLONE_CONFIG_ADAETUM_R2_NO_CHECK_BUCKET=true \
+        rclone lsf "adaetum_r2:${bucket}/.adaetum-credential-validation" --max-depth 1 --contimeout 15s --timeout 30s 2>&1
+    )"; then
+      return 0
+    fi
+    if printf '%s' "${validation_output}" | grep -Eqi 'StatusCode: 403|Forbidden|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied'; then
+      return 2
+    fi
+    [ "${attempt}" -lt 3 ] && sleep 5
+  done
+  # Say what the storage endpoint answered, so a refusal to write .env is explainable.
+  # rclone does not echo the keys, but they are removed anyway.
+  printf '%s\n' "${validation_output}" | tail -n 3 \
+    | sed -e "s#${access_key_id}#<key id>#g" -e "s#${secret_access_key}#<secret>#g" >&2
   echo "Unable to validate R2 credentials because the storage endpoint could not be checked." >&2
   return 1
 }
@@ -1236,9 +1246,9 @@ RANCHER_CLOUDFLARED_TUNNEL_ID="$(existing_value RANCHER_CLOUDFLARED_TUNNEL_ID)"
 RANCHER_CLOUDFLARED_TUNNEL_NAME="$(existing_value RANCHER_CLOUDFLARED_TUNNEL_NAME)"
 REGISTRY_PUBLIC_DOMAIN="${PROFILE_REGISTRY_PUBLIC_DOMAIN}"
 default_ingress_public_hosts="$(existing_value_primary CLOUDFLARED_INGRESS_PUBLIC_HOSTS)"
-[ -n "${default_ingress_public_hosts}" ] || default_ingress_public_hosts="$(printf '%s' "registry.${CLUSTER_DOMAIN},gitea.${CLUSTER_DOMAIN},argocd.${CLUSTER_DOMAIN},authentik.${CLUSTER_DOMAIN},home.${CLUSTER_DOMAIN},alertmanager.${CLUSTER_DOMAIN},grafana.${CLUSTER_DOMAIN},ntfy.${CLUSTER_DOMAIN},prometheus.${CLUSTER_DOMAIN}")"
+[ -n "${default_ingress_public_hosts}" ] || default_ingress_public_hosts="$(printf '%s' "registry.${CLUSTER_DOMAIN},gitea.${CLUSTER_DOMAIN},argocd.${CLUSTER_DOMAIN},authentik.${CLUSTER_DOMAIN},alertmanager.${CLUSTER_DOMAIN},grafana.${CLUSTER_DOMAIN},ntfy.${CLUSTER_DOMAIN},prometheus.${CLUSTER_DOMAIN}")"
 CLOUDFLARED_INGRESS_PUBLIC_HOSTS="${default_ingress_public_hosts}"
-default_ingress_cleanup_hosts="$(printf '%s' "registry.${CLUSTER_DOMAIN},gitea.${CLUSTER_DOMAIN},argocd.${CLUSTER_DOMAIN},authentik.${CLUSTER_DOMAIN},home.${CLUSTER_DOMAIN},alertmanager.${CLUSTER_DOMAIN},grafana.${CLUSTER_DOMAIN},ntfy.${CLUSTER_DOMAIN},prometheus.${CLUSTER_DOMAIN}")"
+default_ingress_cleanup_hosts="$(printf '%s' "registry.${CLUSTER_DOMAIN},gitea.${CLUSTER_DOMAIN},argocd.${CLUSTER_DOMAIN},authentik.${CLUSTER_DOMAIN},alertmanager.${CLUSTER_DOMAIN},grafana.${CLUSTER_DOMAIN},ntfy.${CLUSTER_DOMAIN},prometheus.${CLUSTER_DOMAIN}")"
 INGRESS_CLOUDFLARED_CLEANUP_HOSTS="${default_ingress_cleanup_hosts}"
 default_ingress_origin_url="$(existing_value INGRESS_CLOUDFLARED_ORIGIN_URL)"
 [ -n "${default_ingress_origin_url}" ] || default_ingress_origin_url="https://rke2-ingress-nginx-controller.kube-system.svc.cluster.local:443"

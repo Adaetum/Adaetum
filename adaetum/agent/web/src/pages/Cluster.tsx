@@ -72,7 +72,8 @@ export function Cluster({ report, location }: { report: Report | null; location:
       ) : (
         <Content data={data} nodes={report?.rke2.nodes ?? []} now={now} onChanged={refresh} />
       )}
-      {report && (
+      {/* Only a server's own agent knows its machine; the cluster agent's report has no hostname. */}
+      {report?.host.hostname && (
         <div id="this-server" style={{ marginTop: "var(--space-6)" }}>
           <Section title="This server">
             <Text size="2" color="gray">The machine this agent is reporting on.</Text>

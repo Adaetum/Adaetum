@@ -45,7 +45,7 @@ Ask only what you cannot read from the source; propose defaults.
 | Source | Shape | Precedent |
 | --- | --- | --- |
 | A maintained Helm chart | `source_type: helm`, pinned chart version, **inline, commented** `source_helm_values`. Extras the chart cannot hold go in a companion `git` app. | `observability/alertmanager.app.yaml`, `gitea/gitea.app.yaml` + `gitea-secret-sync` |
-| A container image only | `source_type: git`: explicit manifests under `pods/<category>/<app>/`, one file per resource, listed in `kustomization.yaml`. | `portal/homepage/` |
+| A container image only | `source_type: git`: explicit manifests under `pods/<category>/<app>/`, one file per resource, listed in `kustomization.yaml`. | `observability/apprise/` |
 
 Prefer the chart when one exists and is maintained. If the chart is hosted in an OCI
 registry, note in the report that the registry may need adding to Argo CD (unverified
@@ -72,14 +72,14 @@ Files (category `<c>`, app `<a>`):
 - `pods/<c>/<a>/README.md` (git shape) or a header comment block (helm shape) with
   **What it does**, **Notes** (routes, data, first login, anything surprising).
 
-Workload rules (from `homepage`):
+Workload rules (from `apprise`):
 
 - Labels `app.kubernetes.io/name: <a>` on workload, pods and service.
 - Explicit `resources` requests and limits. Probes where the app has a health
   endpoint. Image `tag@sha256:digest`.
 - Namespace: the category's shared namespace for small related apps
   (`observability`, `games`); its own namespace when it needs isolation
-  (`homepage`, `gitea`, `authentik`). Say which you chose and why.
+  (`gitea`, `authentik`). Say which you chose and why.
 - **Storage sizing: lean by default.** Volumes are replicated, so each one costs
   its size times the replica count in raw disk, and a volume can usually be grown
   later but not shrunk. So start small and say how to grow it. Defaults:
@@ -150,8 +150,8 @@ file: change its template or source and re-render.
   pods from its own namespace); allow it in the values with a comment, e.g.
   `networkPolicy.allowExternal: true`. Both were found only by rendering.
   Optional per-app assertions exist (`validate-pods-consistency`,
-  `validate-ingress-contract`, `validate-setup-pods-roundtrip`) and a Homepage card;
-  Homepage has them, they are not needed for the suite to pass, and each is another
+  `validate-ingress-contract`, `validate-setup-pods-roundtrip`) and a dashboard card;
+  other apps have them, they are not needed for the suite to pass, and each is another
   list to keep in step. Offer, don't add.
 - **Tier 2b, public web route** (**not exercised**). A public route adds, on top of 2a:
   a `-public-` ingress behind Authentik forward-auth, a positional entry in the
@@ -182,7 +182,7 @@ file: change its template or source and re-render.
   2. `autoscaling.yaml` beside it (listed in the kustomization) holding the HPA
      (two or more minimum, headroom above it, CPU only, scale-up stabilisation 0,
      scale-down at least 900 s) and a PDB with `minAvailable` of at least 1. Model it on
-     `pods/portal/homepage/autoscaling.yaml`. Keep the PDB out of the Deployment file.
+     `pods/observability/apprise/autoscaling.yaml`. Keep the PDB out of the Deployment file.
   3. The app file: `ignore_differences` for the Deployment's `/spec/replicas` and
      `sync_options: [RespectIgnoreDifferences=true]`, so Argo does not fight the HPA.
   4. A VerticalPodAutoscaler in `pods/operations/workload-autosizing/vertical-pod-autoscalers.yaml`

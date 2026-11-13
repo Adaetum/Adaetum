@@ -49,14 +49,6 @@ ROTATION_CONTRACTS = {
         "name: external-dns-cloudflare",
         "name: CF_API_TOKEN",
     ),
-    "pods/portal/homepage/deployment.yaml": (
-        "secretProviderClass: homepage-openbao",
-        'secret_dir = Path("/run/openbao")',
-    ),
-    "pods/portal/homepage/config/services.yaml": (
-        "username: __HOMEPAGE_GRAFANA_USERNAME__",
-        "password: __HOMEPAGE_GRAFANA_PASSWORD__",
-    ),
     "pods/observability/apprise/apprise-deployment.yaml": (
         "serviceAccountName: apprise",
         "secretProviderClass: apprise-openbao",
@@ -153,32 +145,6 @@ ROTATION_CONTRACTS = {
         "htpasswd -niBC 10 admin",
         "admin.passwordMtime",
         "adaetum.io/admin-password-sha256",
-    ),
-    "pods/observability/grafana-secret-sync/external-secret.yaml": (
-        "kind: ExternalSecret",
-        "key: apps/observability/grafana",
-        "name: grafana-admin",
-        "secretKey: admin-password",
-        "refreshInterval: 1m",
-    ),
-    "pods/observability/grafana-secret-sync/homepage-external-secret.yaml": (
-        "kind: ExternalSecret",
-        "name: homepage-grafana-desired",
-        "namespace: observability",
-        "key: apps/homepage/grafana",
-        "refreshInterval: 1m",
-    ),
-    "pods/observability/grafana-secret-sync/homepage-viewer-rotation.yaml": (
-        "name: grafana-viewer-rotation",
-        'resourceNames: ["homepage-grafana"]',
-        'namespace: observability',
-        'namespace: homepage',
-        '"${grafana_url}/api/admin/users"',
-        '"${grafana_url}/api/admin/users/${user_id}/password"',
-        '"${grafana_url}/api/orgs/1/users/${user_id}"',
-        "'{\"role\":\"Viewer\"}'",
-        "authenticate /var/run/desired/username /var/run/desired/password",
-        "patch secret homepage-grafana",
     ),
     "pods/observability/grafana.app.yaml": (
         'source_target_revision: "10.5.15"',
@@ -315,7 +281,6 @@ ROTATION_CONTRACTS = {
         "seed_openbao_app_fields authentik/encryption",
         "seed_openbao_app_fields authentik/postgresql",
         "seed_openbao_app_fields authentik/admin",
-        "seed_openbao_app_fields homepage/grafana",
         "seed_openbao_app_fields observability/ntfy",
         "ntfy://apprise:%s@ntfy.observability.svc.cluster.local:80/adaetum-alerts",
     ),
@@ -353,22 +318,10 @@ ROTATION_CONTRACTS = {
         'configure_gitea_push_mirror_from_openbao "phase60" "$@"',
     ),
     "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh": (
-        "read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY",
-        "read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH",
-        "mint_gitea_widget_token",
-        "gitea_widget_token_has_required_scopes",
-        "revoke_stale_gitea_widget_tokens",
         "seed_openbao_app_fields gitea/registry",
         '"push_host=${push_host}"',
         "bootstrap_request_external_secret_refresh",
         "gitea-registry-creds gitea-registry-creds ansible-runner",
-    ),
-    "ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh": (
-        "read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY",
-        "read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH",
-        "mint_gitea_widget_token",
-        "gitea_widget_token_has_required_scopes",
-        "revoke_stale_gitea_widget_tokens",
     ),
     "ansible/ansible-scripts/bootstrap/control-pair-common.sh": (
         "bootstrap_adopt_gitea_postgresql_credentials()",
@@ -376,13 +329,6 @@ ROTATION_CONTRACTS = {
         "seed_openbao_app_fields()",
         'bao kv patch "secret/apps/${path}"',
         'bao kv put "secret/apps/${path}"',
-        "mint_gitea_widget_token()",
-        '"${base_url}/api/v1/users/${username}/tokens"',
-        "gitea_widget_token_has_required_scopes()",
-        "revoke_stale_gitea_widget_tokens()",
-        '"read:notification", "read:repository", "read:issue"',
-        'name.startswith("homepage-widget")',
-        'tokens/${token_id}',
         "configure_gitea_push_mirror_from_openbao()",
         "read_openbao_app_field gitea/push-mirror token",
         "seed_openbao_app_fields gitea/push-mirror",
@@ -405,7 +351,6 @@ ROTATION_CONTRACTS = {
         "grafana_secret_key",
         "argocd_server_secret_key",
         "argocd_redis_password",
-        "homepage_grafana_password",
         "ntfy_admin_password",
         "ntfy_apprise_password",
         "redisSecretInit.enabled=false",
@@ -450,7 +395,6 @@ ROTATION_CONTRACTS = {
         'write_secret "gitea_internal_token" 48',
         'write_secret "gitea_jwt_secret" 48',
         'write_secret "grafana_secret_key" 48',
-        'write_secret "homepage_grafana_password" 24',
         'write_secret "ntfy_admin_password" 24',
         "write_ntfy_publisher_password",
     ),
@@ -487,41 +431,6 @@ FORBIDDEN_ROTATION_FRAGMENTS = {
     ),
     "pods/ansible/ansible/ansible-runner-deployment.yaml": ("playbooks/bootstrap.yml",),
     "pods/ansible/ansible/ansible-runner-deployment.yaml.tmpl": ("playbooks/bootstrap.yml",),
-    # Homepage exposes Cloudflare and Tailscale as links, not authenticated API
-    # widgets. Provider setup credentials must never be copied into its delivery
-    # Secret by an early bootstrap or late reconciliation phase.
-    "pods/portal/homepage/external-secret.yaml": (
-        "HOMEPAGE_AUTHENTIK_",
-        "HOMEPAGE_CLOUDFLARE_",
-        "HOMEPAGE_TAILSCALE_",
-        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
-    ),
-    "ansible/ansible-scripts/bootstrap/Phase-50/run-phase50.sh": (
-        "HOMEPAGE_AUTHENTIK_",
-        "HOMEPAGE_CLOUDFLARE_",
-        "HOMEPAGE_TAILSCALE_",
-        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
-    ),
-    "ansible/ansible-scripts/bootstrap/Phase-60/run-phase60.sh": (
-        "HOMEPAGE_AUTHENTIK_",
-        "HOMEPAGE_CLOUDFLARE_",
-        "HOMEPAGE_TAILSCALE_",
-        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
-    ),
-    "ansible/ansible-scripts/bootstrap/Phase-70/run-phase70.sh": (
-        "HOMEPAGE_AUTHENTIK_",
-        "HOMEPAGE_CLOUDFLARE_",
-        "HOMEPAGE_TAILSCALE_",
-        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
-        '--scopes "all"',
-    ),
-    "ansible/ansible-scripts/bootstrap/Phase-90/run-phase90.sh": (
-        "HOMEPAGE_AUTHENTIK_",
-        "HOMEPAGE_CLOUDFLARE_",
-        "HOMEPAGE_TAILSCALE_",
-        "HOMEPAGE_GRAFANA_ADMIN_PASSWORD",
-        '--scopes "all"',
-    ),
     "ansible/ansible-scripts/bootstrap/Phase-40/run-phase40.sh": (
         "bao kv put secret/apps/",
     ),
@@ -616,7 +525,6 @@ def validate_post_handoff_secret_writers() -> list[str]:
 # application credential manifests must instead be ExternalSecrets backed by
 # OpenBao; adding another static Secret here is an ownership regression.
 ALLOWED_SECRET_MANIFESTS = {
-    "pods/portal/homepage/secret.yaml": "type: kubernetes.io/service-account-token",
 }
 
 # These delivery Secrets are deliberately not direct ExternalSecret targets.
@@ -628,7 +536,6 @@ COORDINATED_SECRET_REFERENCES = {
     "authentik-postgresql": "database-first Authentik PostgreSQL rotation",
     "bootstrap-secret": "Rancher-native administrator password rotation",
     "gitea-postgresql": "database-first Gitea PostgreSQL rotation",
-    "homepage-grafana": "Grafana Viewer identity promotion",
     "openbao-bootstrap-token": "temporary Phase 40 OpenBao configuration credential",
     "openbao-static-seal": "bootstrap-owned restart-time auto-unseal key",
     "openbao-transit-seal": "bootstrap-owned external root-of-trust credential",
@@ -767,7 +674,6 @@ def validate_rotation_toolbox_images() -> list[str]:
         "pods/authentik/authentik-secret-sync/postgresql-rotation.yaml",
         "pods/argocd/secret-sync/admin-rotation.yaml",
         "pods/gitea/gitea-secret-sync/postgresql-rotation.yaml",
-        "pods/observability/grafana-secret-sync/homepage-viewer-rotation.yaml",
         "pods/secrets/rancher-secret-sync/rotation.yaml",
     )
     for relative_path in rotation_paths:

@@ -127,6 +127,12 @@ type Inspector struct {
 	Arch     string
 	Now      func() time.Time
 
+	// Get and Raw replace kubectl for reading the cluster. The cluster agent sets them to
+	// read through its pod's service account; a host agent leaves them nil and uses the
+	// local RKE2 kubectl. Both are read-only.
+	Get func(ctx context.Context, resources string, extra ...string) ([]byte, error)
+	Raw func(ctx context.Context, path string) ([]byte, error)
+
 	// The last directory measurement, so repeated reports do not re-walk it.
 	measureMutex  sync.Mutex
 	measuredBytes uint64
@@ -144,17 +150,36 @@ func NewInspector() *Inspector {
 	}
 }
 
+// NewClusterInspector reads only the cluster, through get and raw, and touches no machine.
+func NewClusterInspector(get func(context.Context, string, ...string) ([]byte, error), raw func(context.Context, string) ([]byte, error)) *Inspector {
+	return &Inspector{Get: get, Raw: raw, Now: time.Now}
+}
+
+// CollectCluster is the report of the cluster alone: what Collect finds in Kubernetes, with
+// nothing about the machine this runs on (the cluster agent runs in a pod, and each server's
+// own agent has the host details). Like Collect it never fails; problems go in Report.Errors.
+func (i *Inspector) CollectCluster(ctx context.Context) Report {
+	report := Report{SchemaVersion: SchemaVersion, CollectedAt: i.Now().UTC(), RKE2: RKE2{Services: map[string]string{}}}
+	sink := &errorSink{}
+	i.collectCluster(ctx, &report.RKE2, sink.add)
+	report.Errors = sink.sorted()
+	return report
+}
+
 // allowedCommands is the complete set of programs inspection may execute. The
 // real runner refuses anything else so that no future caller can turn this
 // read-only package into a general command executor.
 var allowedCommands = map[string]bool{
 	"uname":     true,
 	"systemctl": true,
-	"df":        true,
-	"du":        true,
-	"nproc":     true,
-	rke2Kubectl: true,
-	rke2Crictl:  true,
+	// timedatectl is read with "show -p NTPSynchronized" only: whether the clock is
+	// synchronized, which first boot waits for because TLS depends on it.
+	"timedatectl": true,
+	"df":          true,
+	"du":          true,
+	"nproc":       true,
+	rke2Kubectl:   true,
+	rke2Crictl:    true,
 }
 
 func init() {

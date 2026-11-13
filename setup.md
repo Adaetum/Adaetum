@@ -433,6 +433,10 @@ Someone who also needs `root` or other people should add their own rule beside i
   - `devices:posture_attributes:read`, required by Tailscale for policy access
   - `policy_file` (Write), to validate and prepare tag ownership
   - `oauth_keys` (Write), to create the durable OAuth client
+  - `networking_settings` (Write), optional: lets setup turn on the tailnet's HTTPS
+    Certificates setting after asking you. Every Tailscale link in the cluster (agent,
+    Argo CD, Rancher, Gitea) needs it. Without this permission setup only warns, and
+    you enable it in the Tailscale admin console (DNS page).
 - OAuth client permissions use the same `auth_keys` and `policy_file` Write
   access, their required read dependencies, and the Adaetum node tags.
 - OAuth scopes should include:
@@ -479,7 +483,6 @@ tunnel routing from the profile:
 KS_BASE_URL=https://bootstrap.<public-domain>
 RANCHER_URL=https://rancher.<public-domain>
 REGISTRY_URL=https://registry.<public-domain>
-HOME_URL=https://home.<public-domain>
 ARGOCD_URL=https://argocd.<public-domain>
 GITEA_URL=https://gitea.<public-domain>
 AUTHENTIK_URL=https://authentik.<public-domain>
@@ -513,7 +516,6 @@ Adaetum now uses a single standard app-routing pattern for cluster UIs:
 
 In practice, the normal operator-facing UI hosts are:
 
-- `home.<public-domain>` and `home.<public-domain>.local`
 - `argocd.<public-domain>` and `argocd.<public-domain>.local`
 - `gitea.<public-domain>` and `gitea.<public-domain>.local`
 - `authentik.<public-domain>` and `authentik.<public-domain>.local`
@@ -526,7 +528,7 @@ In practice, the normal operator-facing UI hosts are:
 Rancher is the exception:
 
 - `rancher.<public-domain>` remains a dedicated external path and is treated as separate management access
-- Homepage includes Rancher as a convenience link, but Rancher is not part of the shared nginx ingress route set
+- Rancher is not part of the shared nginx ingress route set
 - `rancher.<tailnet>.ts.net` is still available through the Tailscale Operator
 
 Every private route also has an additive Tailscale alias using the same service
@@ -554,7 +556,6 @@ route, but still wish to access on the same network.
 - `ntfy.<public-domain>.local`
 - `prometheus.<public-domain>.local`
 - `authentik.<public-domain>.local`
-- `home.<public-domain>.local`
 - `registry.<public-domain>.local`
 
 Recommendation: create a wildcard record like
@@ -771,20 +772,17 @@ the manual recovery override for deliberately creating a replacement primary.
 ### Validate the UI and routing baseline
 
 After the first node completes bootstrap and Argo CD finishes reconciling, the
-fastest validation path is the cluster portal:
+fastest validation path is the Adaetum agent's cluster overview:
 
-- open `https://home.<public-domain>` from a public route, or
-- open `https://home.<public-domain>.local` from LAN/VPN split-DNS
-- open `https://home.<tailnet>.ts.net` from a Tailscale-connected client
-- authenticate with the bootstrap-generated Homepage credential when prompted
+- open `https://agent.<tailnet>.ts.net` from a Tailscale-connected client, or
+- open `https://agent.<public-domain>.local` from LAN/VPN split-DNS
 
-That portal is meant to be the baseline smoke test for the platform UIs and
-route health. It gives you curated internal and public links plus status
-checks for the known services.
+The overview shows the servers, the apps and whether each is running, and what
+needs attention. It reads the cluster itself, so it is the baseline smoke test
+for the platform. Then confirm each routed UI opens and, where it should,
+redirects through Authentik for login rather than using a separate basic-auth
+credential:
 
-At minimum, confirm these cards load and show healthy where expected:
-
-- `Portal (internal)` and `Portal (public)`
 - `Argo CD`
 - `Gitea`
 - `Authentik`
@@ -793,17 +791,11 @@ At minimum, confirm these cards load and show healthy where expected:
 - `ntfy`
 - `Prometheus`
 - `Registry`
-- `Rancher` as a convenience-only external link
+- `Rancher`, which intentionally follows its own external route instead of the
+  shared nginx ingress pattern, as a management-path spot check
 
-If `home.<public-domain>` is up and the service cards are green, you have a quick
-end-to-end confirmation that the shared routing layer, public/internal hosts,
-and baseline UIs are wired correctly. The Rancher card is useful as a
-management-path spot check, but it intentionally follows its own external route
-instead of the shared nginx ingress pattern.
-
-Homepage is treated like the other operator-facing routed UIs and is expected
-to redirect through Authentik for login rather than using a separate basic-auth
-credential.
+If the overview is healthy and these open, the shared routing layer, public and
+internal hosts, and baseline UIs are wired correctly.
 
 ntfy is the deliberate routing exception. Its web UI, PWA, mobile clients, and
 publish API share one endpoint, so an Authentik browser redirect would break

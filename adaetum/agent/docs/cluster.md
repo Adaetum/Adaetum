@@ -18,6 +18,16 @@ after it is a design, recorded so the decisions are not accidents.
   the servers **not running the agent**, and those running an out-of-date one, so they can be fixed. Detection only for
   now; installing the agent on a missing host stays with Ansible.
 
+## What each agent shows
+
+Both serve the same pages from the same `/api/v1/inspect` report. The **cluster agent**
+builds it from Kubernetes alone, with its pod's read-only service account (`internal/cluster/kubeget.go`;
+the kinds it may read are the `adaetum-cluster-agent-report` role in `pods/adaetum/agent/serviceaccount.yaml`),
+so overview, workloads and storage work there with no host access. A **host agent** builds the same
+cluster part with the local `kubectl` and adds what only that machine knows: its OS, failed services,
+disk and processor figures. The cluster agent's report leaves those empty and the pages say so.
+Forwarding a request for machine details from the cluster agent to the right host agent is not built yet.
+
 ## Both installs are required
 
 The host agent exists so that troubleshooting and direct host actions still work
@@ -26,7 +36,7 @@ when Kubernetes is down, so it is never a client of the cluster agent:
 - **Independent.** Every feature a host agent offers works with the cluster agent
   unreachable. Sending events upward is best-effort and never blocks anything.
 - **Directly reachable, out of band.** The host agent can listen on every
-  interface (`serve -listen 0.0.0.0:8443`), so an operator reaches any host on the
+  interface (`serve -listen 0.0.0.0:28443`), so an operator reaches any host on the
   local network by IP address or hostname with no cluster, tailnet, or internet
   involved. Listening beyond loopback is refused unless both protections are on:
   every request except `/healthz` needs the access token (`-token-file`, mode 600),

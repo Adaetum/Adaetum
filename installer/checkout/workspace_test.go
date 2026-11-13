@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Adaetum/Adaetum/installer/envfile"
 )
 
 func gitRun(t *testing.T, dir string, args ...string) string {
@@ -132,7 +134,7 @@ func TestPreparePreservesOnlyBackupPassphraseForReruns(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "platform.yaml"), []byte("safe"), 0600)
 	os.Mkdir(filepath.Join(root, "installer"), 0755)
-	os.WriteFile(filepath.Join(root, ".env"), []byte("BOOTSTRAP_BACKUP_PASSPHRASE=keep-old-backup\nCLOUDFLARE_API_TOKEN=do-not-copy\n"), 0600)
+	os.WriteFile(filepath.Join(root, ".env"), []byte("BOOTSTRAP_BACKUP_PASSPHRASE=keep-old-backup\nKS_SHARED_TOKEN=do-not-copy-either\nCLOUDFLARE_API_TOKEN=do-not-copy\n"), 0600)
 	w, err := Prepare(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +144,7 @@ func TestPreparePreservesOnlyBackupPassphraseForReruns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "BOOTSTRAP_BACKUP_PASSPHRASE=keep-old-backup") || strings.Contains(string(data), "do-not-copy") {
+	if !strings.Contains(string(data), "BOOTSTRAP_BACKUP_PASSPHRASE=keep-old-backup") || strings.Contains(string(data), "do-not-copy") || strings.Contains(string(data), "do-not-copy-either") {
 		t.Fatal("copied incorrect credential state")
 	}
 }
@@ -166,5 +168,58 @@ func TestRetainInstallersSurvivesWorkspaceCleanup(t *testing.T) {
 	}
 	if data, err := os.ReadFile(paths[0]); err != nil || string(data) != "built installer" {
 		t.Fatalf("retained data %q: %v", data, err)
+	}
+}
+
+func TestCarryAllThenPersistKeepsEveryGeneratedValueAcrossRuns(t *testing.T) {
+	source := t.TempDir()
+	os.WriteFile(filepath.Join(source, "platform.yaml"), []byte("safe"), 0600)
+	os.Mkdir(filepath.Join(source, "installer"), 0755)
+	os.WriteFile(filepath.Join(source, ".env"), []byte("KS_SHARED_TOKEN=shared\nKS_UPLOAD_TOKEN=upload\nR2_ACCESS_KEY_ID=r2id\nRANCHER_CLOUDFLARED_TUNNEL_TOKEN=tunnel\nUNRELATED_LOCAL_NOTE=keep\n"), 0600)
+	w, err := Prepare(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if err := w.CarryAll(source); err != nil {
+		t.Fatal(err)
+	}
+	got := envfile.Read(filepath.Join(w.Root, ".env"))
+	for k, want := range map[string]string{"KS_SHARED_TOKEN": "shared", "KS_UPLOAD_TOKEN": "upload", "R2_ACCESS_KEY_ID": "r2id", "RANCHER_CLOUDFLARED_TUNNEL_TOKEN": "tunnel"} {
+		if got[k] != want {
+			t.Fatalf("%s was not carried into the setup checkout: %q", k, got[k])
+		}
+	}
+	// The run makes a value the operator's .env has never seen, and leaves one empty.
+	envfile.Upsert(filepath.Join(w.Root, ".env"), "TAILSCALE_OAUTH_CLIENT_ID", "new-client")
+	envfile.Upsert(filepath.Join(w.Root, ".env"), "GITHUB_APP_ID", "")
+	if err := w.Persist(source); err != nil {
+		t.Fatal(err)
+	}
+	back := envfile.Read(filepath.Join(source, ".env"))
+	if back["TAILSCALE_OAUTH_CLIENT_ID"] != "new-client" || back["KS_SHARED_TOKEN"] != "shared" || back["UNRELATED_LOCAL_NOTE"] != "keep" {
+		t.Fatalf("the launch .env lost or missed a value: %v", back)
+	}
+	if _, ok := back["GITHUB_APP_ID"]; ok {
+		t.Fatal("an empty value was written back")
+	}
+}
+
+func TestPersistNeverBlanksALaunchValueTheRunDidNotProduce(t *testing.T) {
+	source := t.TempDir()
+	os.WriteFile(filepath.Join(source, "platform.yaml"), []byte("safe"), 0600)
+	os.Mkdir(filepath.Join(source, "installer"), 0755)
+	os.WriteFile(filepath.Join(source, ".env"), []byte("R2_ACCESS_KEY_ID=keep-me\n"), 0600)
+	w, err := Prepare(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	// A start-clean run does not carry, so its .env lacks the key entirely.
+	if err := w.Persist(source); err != nil {
+		t.Fatal(err)
+	}
+	if got := envfile.Read(filepath.Join(source, ".env"))["R2_ACCESS_KEY_ID"]; got != "keep-me" {
+		t.Fatalf("a launch value was blanked: %q", got)
 	}
 }

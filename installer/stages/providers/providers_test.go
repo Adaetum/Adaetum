@@ -467,3 +467,67 @@ func TestOAuthClientsDeletedFromTailscaleAreReplacedNotReused(t *testing.T) {
 		}
 	}
 }
+
+// httpsAPI is apis with a Tailscale server that also serves the HTTPS setting.
+// patch is the status the write returns; patched records whether a write happened.
+func httpsAPI(t *testing.T, settings string, patch int) (api provider.Client, patched *bool) {
+	t.Helper()
+	api = apis(t, []string{"cfat_good"}, []string{"tskey-good"}, devices)
+	wrote := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/tailnet/-/settings" && r.Method == http.MethodPatch:
+			if patch >= 400 {
+				w.WriteHeader(patch)
+				return
+			}
+			wrote, settings = true, `{"httpsEnabled":true}`
+		case r.URL.Path == "/tailnet/-/settings":
+			fmt.Fprint(w, settings)
+		default:
+			fmt.Fprint(w, devices)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	api.TailscaleBase = ts.URL
+	return api, &wrote
+}
+
+func TestHTTPSOffIsLeftAloneUnlessTheOperatorSaysYes(t *testing.T) {
+	api, patched := httpsAPI(t, `{"httpsEnabled":false}`, 200)
+	if err := apply(t, step(runner(), &secrets.Memory{}, api), &engine.Env{}, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if *patched {
+		t.Fatal("a silent run changed the tailnet without an explicit yes")
+	}
+}
+
+func TestHTTPSIsTurnedOnWhenApprovedAndNeverFailsSetupWhenRefused(t *testing.T) {
+	api, patched := httpsAPI(t, `{"httpsEnabled":false}`, 200)
+	answers := map[string]string{"tailnet-https": "yes"}
+	for k, v := range fresh {
+		answers[k] = v
+	}
+	if err := apply(t, step(runner(), &secrets.Memory{}, api), &engine.Env{}, answers); err != nil || !*patched {
+		t.Fatalf("patched=%v err=%v", *patched, err)
+	}
+
+	api, patched = httpsAPI(t, `{"httpsEnabled":false}`, 403)
+	if err := apply(t, step(runner(), &secrets.Memory{}, api), &engine.Env{}, answers); err != nil || *patched {
+		t.Fatalf("a refused change must only warn: patched=%v err=%v", *patched, err)
+	}
+}
+
+func TestHTTPSAlreadyOnOrUnknownAsksNothing(t *testing.T) {
+	for _, settings := range []string{`{"httpsEnabled":true}`, `{"other":1}`} {
+		api, patched := httpsAPI(t, settings, 200)
+		answers := map[string]string{"tailnet-https": "yes"}
+		for k, v := range fresh {
+			answers[k] = v
+		}
+		if err := apply(t, step(runner(), &secrets.Memory{}, api), &engine.Env{}, answers); err != nil || *patched {
+			t.Fatalf("%s: patched=%v err=%v", settings, *patched, err)
+		}
+	}
+}

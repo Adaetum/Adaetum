@@ -83,7 +83,7 @@ func (s *Step) Plan(ctx context.Context, env *engine.Env) ([]string, error) {
 	}
 	return []string{
 		"Validate the Tailscale OAuth clients and mint the one-day, single-use node auth key.",
-		"Keep the recovery password (on a first run you choose it and are asked to save your own copy). An existing one is never replaced silently.",
+		"Keep the recovery password (on a first run you choose it and are asked to save your own copy). It opens the recovery kit and is also each server's access token and first-account code. An existing one is never replaced silently.",
 		"Write .env (gitignored) and sync the required secrets to your private repository's Prod GitHub environment.",
 		"Render the GitOps files from platform.yaml and run the repository's validators.",
 		"Commit the rendered files and push them to your private repository, then confirm origin matches.",
@@ -440,7 +440,7 @@ func (s *Step) chooseRecoveryPassword(ctx context.Context, ui engine.UI) (string
 	pass, err := engine.AskValid(ctx, ui, engine.Screen{
 		ID: "recovery-password", Kind: engine.Secret,
 		Title:  "Choose your recovery password",
-		Intro:  "This password opens your emergency recovery kit: the keys to your cluster's secrets. Use at least 16 characters that are hard to guess: a few unrelated words works well, and common words, patterns and dates do not. You will need it on the day something goes badly wrong, so choose one you can keep safe.",
+		Intro:  "This password opens your emergency recovery kit: the keys to your cluster's secrets. It is also how you get into each server directly: it is the access token on every host and the code that claims a new server's first account. Use at least 16 letters, numbers and symbols from a standard keyboard that are hard to guess: a few unrelated words works well, and common words, patterns and dates do not. You will need it on the day something goes badly wrong, so choose one you can keep safe.",
 		Prompt: "Recovery password", YesLabel: "Continue",
 	}, valid)
 	if err != nil {

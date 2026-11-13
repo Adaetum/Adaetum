@@ -94,6 +94,32 @@ policy that hosts follow, that is a separate decision (see below).
 Not built: interactive SSH sessions (a terminal in the page). The override runs one
 command and returns its output.
 
+## Starting runs
+
+A **run** is one go at a *procedure*: a named list of steps the agent knows how to do
+(bring a node up, unseal OpenBao), written in Go inside the agent and run by the run
+engine (`internal/runs`). Starting one is a lever like launching a playbook, because a
+procedure can change the machine it runs on:
+
+- **Off unless asked for.** A host agent starts with it off; `-allow-runs` turns it on
+  at startup, and the Security page shows the switch ("Start runs") read-only, like the
+  playbook launcher, because a host's levers are not changed from the network.
+- **Never without the access token.** Starting needs a valid token file even on a
+  loopback agent with no other login. Without one the switch reads as unavailable.
+- **Recorded first.** A run's start, and each step before it runs, is written to the
+  agent's journal before the work happens; if a record cannot be written, the step does
+  not run. The record names who started it.
+- **Reading and stopping are never gated.** Switching starting off stops new work
+  without hiding or trapping a run in progress.
+- **Destructive steps need a named approval** on the run, confirmed by a person. A run
+  that reaches one without it stops and asks.
+- **Run inputs are recorded in clear**, so a name that looks like a secret is refused;
+  a step that needs a secret reads it from the secret authority itself.
+
+Procedures act only through the adapters they are built with. The run engine does not
+run commands itself, and it adds no way around the rule above: anything that must run a
+command on a server still goes through a playbook, or a reviewed host action.
+
 ## How it is enforced, not just documented
 
 `.validator/validate-agent-boundary.py` (a pre-commit hook; run it by hand with

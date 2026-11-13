@@ -31,7 +31,7 @@ export function Overview({ report }: { report: Report }) {
     <>
       <PageHeader
         title="Overview"
-        description={`${report.host.hostname} · checked ${formatAgo(report.collectedAt, new Date())}`}
+        description={`${report.host.hostname || "Whole cluster"} · checked ${formatAgo(report.collectedAt, new Date())}`}
       />
       <Flex direction="column" gap="5">
         <HealthCard attention={attention} critical={critical} />
@@ -192,7 +192,11 @@ function ResourcesCard({ report }: { report: Report }) {
         {metrics && <Text size="2" color="gray">Running for {formatDuration(metrics.uptimeSeconds)}</Text>}
       </Flex>
       {!metrics ? (
-        <Text size="2" color="gray">Resource figures aren't available for this server.</Text>
+        <Text size="2" color="gray">
+          {report.host.hostname
+            ? "Resource figures aren't available for this server."
+            : "Processor, memory and disk figures belong to one machine, so they are on each server's own agent."}
+        </Text>
       ) : (
         <Flex direction="column" gap="4">
           {metrics.cpuCount > 0 && (
@@ -232,7 +236,7 @@ function ServersCard({ report }: { report: Report }) {
     <Card size="3">
       <Flex justify="between" align="baseline" mb="4">
         <Heading size="4" as="h2">Servers</Heading>
-        <Text size="2" color="gray">Cluster software {report.rke2.version ?? "version unknown"}</Text>
+        {report.rke2.version && <Text size="2" color="gray">Cluster software {report.rke2.version}</Text>}
       </Flex>
       {servers.length === 0 ? (
         <Text size="2" color="gray">No servers reported yet.</Text>

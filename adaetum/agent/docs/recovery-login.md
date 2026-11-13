@@ -153,8 +153,12 @@ real service; the milestone scenario above is `TestTheRecoveryScenario`):
 
 **Not built:**
 
-- **Running the service**: a systemd unit and Ansible role for hosts, a container and manifest for
-  the pod, and a Linux build of the compiled binary. Today it is started by hand (`adaetum/auth/README.md`).
+- **Running the service on production media and through Ansible.** Hosts installed from development
+  media (`task init:dev`) get it: the kickstart installs `adaetum-auth` (compiled with Bun by
+  `tasks/scripts/build-dev-auth.sh`), its systemd unit, and the agent's `-auth-socket` flags, and the
+  host then copies the cluster's accounts (checked 2026-11-13: a joined host took the cluster's accounts
+  within seconds of the service starting). The release pipeline does not publish the service yet, so
+  production media has none, and no Ansible role installs it on an existing host.
 - **"Run commands" on a host at run time.** Step 6 of the scenario needs a host to let an owner turn
   the launcher on while the cluster is down. Today a host's switches are fixed when it starts, and
   `security-boundary.md` says so deliberately. Changing that is a security-policy decision, not
@@ -206,6 +210,14 @@ Ranked. Items 1 to 3 must be decided before building; the rest are build-time ru
 3. **The first sign-up on a fresh host can be claimed by anyone who reaches it first.**
    *Fix:* creating the first owner needs a setup code shown on the machine (or is only
    allowed from loopback); later signup is invite-only.
+   On a host installed by Adaetum the setup code is the operator's recovery password, and
+   the host's access token is the same password. Phase 20 of first boot writes both
+   (`/etc/adaetum/agent-token` and `/var/lib/adaetum/auth/setup-code`, root only) from the
+   password that `task init` collected, because the password already opens the recovery
+   kit that holds every other secret. A password that is not 16 or more printable ASCII
+   characters (it travels in an HTTP header) is not used, and the host keeps the random
+   token and generated code it was installed with. Production media gets this only once
+   the release carries the change.
 4. **Passkeys do not follow the person between doors.** A passkey is tied to one
    hostname, and each host has its own name, probably with a self-signed certificate
    that browsers warn about. *Fix:* passwords first. Valid certificates for host names

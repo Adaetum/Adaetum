@@ -218,14 +218,20 @@ fi
 cat >/etc/systemd/system/adaetum-agent.service <<'UNIT'
 [Unit]
 Description=Adaetum host agent
-After=network-online.target
+After=network-online.target adaetum-auth.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
 Environment=TURSO_GO_CACHE_DIR=/var/lib/adaetum/cache
-ExecStart=/usr/local/bin/adaetum-agent serve -listen 0.0.0.0:8443 -data-dir /var/lib/adaetum -token-file /etc/adaetum/agent-token
+# Absent on production media. Development media (task init:dev) puts
+# ADAETUM_AGENT_ARGS here to turn on features of the bundled agent.
+EnvironmentFile=-/etc/adaetum/agent.env
+# Present only when the account sign-in service is installed (below): the socket and secret
+# the agent signs people in through. Without it the agent accepts only its access token.
+EnvironmentFile=-/etc/adaetum/auth.env
+ExecStart=/usr/local/bin/adaetum-agent serve -listen 0.0.0.0:28443 -data-dir /var/lib/adaetum -token-file /etc/adaetum/agent-token $ADAETUM_AGENT_ARGS $ADAETUM_AUTH_ARGS
 Restart=on-failure
 RestartSec=5
 PrivateTmp=true
@@ -239,66 +245,46 @@ if command -v restorecon >/dev/null 2>&1; then
 fi
 systemctl enable adaetum-agent.service
 
-# Console login banner: always tell whoever is at the keyboard where the agent
-# is. agetty prints every /etc/issue.d/*.issue above the login prompt, so a file
-# we own there never fights with the distro's /etc/issue. The addresses change
-# (DHCP, Tailscale joining later), so a timer rewrites the file; the port is read
-# from the agent's own unit so the banner cannot drift from what is served.
-cat >/usr/local/sbin/adaetum-agent-banner.sh <<'BANNER'
-#!/bin/bash
-# Writes /etc/issue.d/adaetum.issue with the URLs the agent answers on.
-# The agent serves HTTPS with a sign-in, so the banner says https and nothing
-# secret (no token) is ever printed here: the console is not a private place.
-set -u
-issue=/etc/issue.d/adaetum.issue
-port="$(sed -n 's/.*-listen [^ ]*:\([0-9][0-9]*\).*/\1/p' /etc/systemd/system/adaetum-agent.service 2>/dev/null | head -n1)"
-port="${port:-8443}"
-
-# LAN address: the source address of the default route.
-lan="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)"
-# Tailscale address, once the node has joined the tailnet.
-ts="$(ip -4 -o addr show dev tailscale0 2>/dev/null | sed -n 's/.* inet \([0-9.]*\)\/.*/\1/p' | head -n1)"
-
-tmp="$(mktemp)"
-{
-  echo "Adaetum host agent"
-  if [ -n "${lan}" ]; then echo "  On this network:  https://${lan}:${port}"; fi
-  if [ -n "${ts}" ]; then echo "  Over Tailscale:   https://${ts}:${port}"; fi
-  if [ -z "${lan}" ] && [ -z "${ts}" ]; then echo "  No network address yet; this updates every 30 seconds."; fi
-  echo
-} > "${tmp}"
-install -d -m 0755 /etc/issue.d
-install -m 0644 "${tmp}" "${issue}"
-rm -f "${tmp}"
-BANNER
-chmod 0755 /usr/local/sbin/adaetum-agent-banner.sh
-cat >/etc/systemd/system/adaetum-agent-banner.service <<'UNIT'
+# Account sign-in (adaetum/auth). A host signs people in with the accounts the cluster copies
+# to it, so the login still works when Kubernetes is down (agent/docs/recovery-login.md).
+# Only installed when the media carries the service. The agent switches it to a replica by
+# itself when the host joins a cluster, and the service remembers that.
+if [ -x /usr/local/bin/adaetum-auth ]; then
+  install -d -m 0700 /var/lib/adaetum/auth
+  cat >/etc/systemd/system/adaetum-auth.service <<'UNIT'
 [Unit]
-Description=Write the agent address into the console login banner
+Description=Adaetum account sign-in service
 After=network-online.target
 
 [Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/adaetum-agent-banner.sh
-UNIT
-cat >/etc/systemd/system/adaetum-agent-banner.timer <<'UNIT'
-[Unit]
-Description=Keep the console login banner's agent address current
-
-[Timer]
-OnBootSec=5s
-OnUnitActiveSec=30s
-AccuracySec=1s
+Type=simple
+User=root
+Environment=AUTH_STATE_DIR=/var/lib/adaetum/auth
+Environment=AUTH_SOCKET=/var/lib/adaetum/auth/auth.sock
+# Cookie flags only: the agent serves TLS on its port.
+Environment=AUTH_BASE_URL=https://localhost:28443
+Environment=AUTH_MODE=primary
+ExecStart=/usr/local/bin/adaetum-auth
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/adaetum
 
 [Install]
-WantedBy=timers.target
+WantedBy=multi-user.target
 UNIT
-if command -v restorecon >/dev/null 2>&1; then
-  restorecon /usr/local/sbin/adaetum-agent-banner.sh \
-    /etc/systemd/system/adaetum-agent-banner.service \
-    /etc/systemd/system/adaetum-agent-banner.timer || true
+  printf 'ADAETUM_AUTH_ARGS=-auth-socket /var/lib/adaetum/auth/auth.sock -auth-secret-file /var/lib/adaetum/auth/internal-secret\n' >/etc/adaetum/auth.env
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon /usr/local/bin/adaetum-auth /etc/systemd/system/adaetum-auth.service /etc/adaetum/auth.env || true
+  fi
+  systemctl enable adaetum-auth.service
 fi
-systemctl enable adaetum-agent-banner.timer || true
+
+# The console login banner (where the agent can be reached) is kept by the agent itself:
+# it rewrites /etc/issue.d/adaetum.issue as addresses change and redraws an idle login
+# prompt (internal/consolebanner). Nothing else writes that file.
 
 section_begin "git-install"
 echo "[BOOTSTRAP] Ensuring git is installed"

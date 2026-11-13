@@ -10,7 +10,6 @@ import (
 	"github.com/Adaetum/Adaetum/installer/diagnostics"
 	"github.com/Adaetum/Adaetum/installer/engine"
 	"github.com/Adaetum/Adaetum/installer/stages"
-	"github.com/Adaetum/Adaetum/installer/stages/providers"
 	"github.com/Adaetum/Adaetum/installer/sys"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -176,10 +175,11 @@ func (a *App) Start() string {
 		workspace, err = checkout.Prepare(a.ctx, root)
 		if err == nil {
 			workRoot = workspace.Root
-			// Reuse earlier sign-ins from .env unless the operator asked to start fresh.
-			// They are validated before use, so a stale one only costs a question.
+			// Reuse everything an earlier run made from .env unless the operator asked to
+			// start fresh. Sign-ins are validated before use, so a stale one only costs a
+			// question; generated values (Worker tokens, R2 credentials) must be reused.
 			if !clean {
-				if err = workspace.Carry(root, providers.ReusableEnvVars()...); err != nil {
+				if err = workspace.CarryAll(root); err != nil {
 					_ = workspace.Close()
 				}
 			}
@@ -227,6 +227,13 @@ func (a *App) Start() string {
 			}
 		}
 		if workspace != nil {
+			// Keep what this run generated: it is already on GitHub and the Worker.
+			if persistErr := workspace.Persist(root); persistErr != nil {
+				ui.Report(engine.Event{StepID: "finalize", Message: "Could not save the generated values to .env: " + persistErr.Error()})
+				if runErr == nil {
+					runErr = persistErr
+				}
+			}
 			if cleanupErr := workspace.Close(); cleanupErr != nil {
 				ui.Report(engine.Event{StepID: "finalize", Message: "Could not remove the temporary setup checkout: " + cleanupErr.Error()})
 				if runErr == nil {

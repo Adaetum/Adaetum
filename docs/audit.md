@@ -16,7 +16,7 @@ change, and attractive to open-source contributors.
 | Recovery repository | User's standalone private repository and break-glass bundle | Out-of-band configuration and recovery copy |
 | GitOps | Cluster-seeded Gitea plus Argo CD | Retained as the authoritative steady-state control pair |
 | Secrets | Local bootstrap files before Phase 40; OpenBao afterward | Retained; no secret values in profiles |
-| Operations | Homepage links to upstream UIs | Retained; Adaetum does not create a replacement console |
+| Operations | The Adaetum agent and the upstream UIs | Retained; Adaetum does not create a replacement console |
 
 ## Source-of-truth and generated files
 
@@ -79,7 +79,7 @@ cannot accidentally turn bootstrap logs into another credential store.
 
 External Secrets Operator and Reloader provide the common mechanism for the
 safe first class. OpenBao now reconciles delivery copies for external-dns,
-cloudflared, Homepage, Apprise, Argo CD repository and administrator access,
+cloudflared, Apprise, Argo CD repository and administrator access,
 Gitea admin/runner/registry/PostgreSQL values, Authentik, Grafana, and Rancher. Their exact paths
 and operator procedure are documented in
 [`pods/secrets/openbao/README.md`](../pods/secrets/openbao/README.md).
@@ -117,18 +117,6 @@ Remaining concerns are concrete rather than theoretical:
   runtime state.
 - The ingress VIP was reclassified as a ConfigMap because it is mutable network
   configuration, not a credential.
-- Homepage exposes Cloudflare and Tailscale as ordinary links, not API-backed
-  widgets. Its shared widget ExternalSecret therefore enumerates only its Argo
-  CD and Gitea tokens. Authentik, Cloudflare, and Tailscale are link/status
-  cards; their credentials are deliberately excluded rather than converted
-  into unnecessary dashboard identities. Grafana has a separate Viewer
-  identity with an application-first password coordinator, so its administrator
-  password is no longer copied to Homepage. New Gitea widget tokens are
-  restricted to the read-only notification, repository, and issue scopes
-  Homepage requires. Late reconciliation reads Gitea's token registry rather
-  than trusting token validity alone, replaces a broad legacy token, and
-  revokes superseded Adaetum-owned widget tokens only after the replacement is
-  delivered.
 - The GitHub push-mirror credential is stored at an application-owned OpenBao
   path and projected read-only into Gitea. Its repository hook reads the
   projected value for every push instead of persisting a credential on the
