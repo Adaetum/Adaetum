@@ -141,3 +141,14 @@ This Phase 20 design is successful when:
 - the doc explains that the local secret directory is how pre-OpenBao phases
   share state
 - the doc preserves the later handoff to OpenBao in Phase 40
+
+## Recovery access
+
+Phase 20 also seeds the host's way in from the operator's recovery password
+(`BOOTSTRAP_BACKUP_PASSPHRASE`, or its `_B64` form, from the first-boot runtime
+payload): `/etc/adaetum/agent-token` becomes the password, and when the sign-in
+service is installed `/var/lib/adaetum/auth/setup-code` does too, once. Both are
+root-only. The runtime payload is removed in Phase 99, so this cannot wait. A
+password that is not 16 or more printable ASCII characters is ignored and the host
+keeps its random token and generated code; an installed agent that rejects the
+new token is rolled back to the previous one.

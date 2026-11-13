@@ -440,4 +440,21 @@ describe("refusing bad copies", () => {
     expect(result.data.reason).toBe("primary_has_accounts");
     expect(await state(pod)).toEqual(before);
   });
+
+  test("a recovery password put in the file is the setup code, matched exactly, and never logged", async () => {
+    const dir = tempDir();
+    const file = join(dir, "setup-code");
+    const password = "Correct-Horse-Battery-staple 42";
+    await Bun.write(file, password + "\n");
+    const m = await machine("primary", { setupCodeFile: file });
+    expect(m.setup.ensure()).toBe(password);
+    expect(m.setup.isGenerated()).toBe(false);
+    const printed: string[] = [];
+    m.announce((line) => printed.push(line));
+    expect(printed.join("\n")).not.toContain(password);
+    const body = { name: "N", email: "n@example.test", password: PASSWORD };
+    // The case matters for a password: the same letters in upper case are wrong.
+    expect((await call(m, "POST", "/api/setup", { ...body, code: password.toUpperCase() })).status).toBe(403);
+    expect((await call(m, "POST", "/api/setup", { ...body, code: password })).status).toBe(201);
+  });
 });

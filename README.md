@@ -326,6 +326,12 @@ the first machine and boot it. On first run, setup installs missing tools and
 builds the window using a supported local package manager. ISO tools are bundled
 for supported platforms, so Docker is not required there.
 
+Setup asks you to choose one **recovery password** (at least 16 characters, typed
+on a standard keyboard). It opens the emergency recovery kit, and it is also how
+you get into a server directly: it is the access token on every host and the code
+that claims a server's first account, so you can sign in on a host even when the
+cluster is down. Keep your own copy somewhere safe and offline.
+
 You will need:
 
 - A supported package manager for any missing setup tools
