@@ -211,7 +211,7 @@ Ranked. Items 1 to 3 must be decided before building; the rest are build-time ru
    *Fix:* creating the first owner needs a setup code shown on the machine (or is only
    allowed from loopback); later signup is invite-only.
    On a host installed by Adaetum the setup code is the operator's recovery password, and
-   the host's access token is the same password. Phase 20 of first boot writes both
+   the host's access token is the same password. The first-boot playbook (`platform-bootstrap.yml`) writes both
    (`/etc/adaetum/agent-token` and `/var/lib/adaetum/auth/setup-code`, root only) from the
    password that `task init` collected, because the password already opens the recovery
    kit that holds every other secret. A password that is not 16 or more printable ASCII

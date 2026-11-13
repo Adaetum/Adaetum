@@ -287,7 +287,7 @@ func runCluster(args []string) {
 	fmt.Fprintf(os.Stderr, "cluster agent listening on https://%s\n", *listen)
 	fmt.Fprintln(os.Stderr, "certificate fingerprint (give this to `join -fingerprint`):", tlscert.Fingerprint(leaf))
 	publishEndpoint(tlscert.Fingerprint(leaf), *sshTarget)
-	if err := server.ListenAndServeTLS("", ""); err != nil {
+	if err := serveTLSUpgradingHTTP(server, ownCertificateName(certificates)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

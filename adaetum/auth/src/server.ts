@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { reconcileBreakGlass } from "./breakglass";
 import { createService } from "./service";
@@ -62,6 +62,10 @@ if (breakGlassDir) {
 
 const socket = process.env.AUTH_SOCKET;
 if (socket) {
+  // A socket file outlives its process (a restart, a reboot, a crash), and listening on a
+  // path that exists fails with EADDRINUSE. This service is the only thing that owns the
+  // path and runs once per machine, so whatever is left there is stale.
+  rmSync(socket, { force: true });
   Bun.serve({ unix: socket, fetch: service.fetch });
   chmodSync(socket, 0o600);
   console.error(`auth service listening on ${socket}`);

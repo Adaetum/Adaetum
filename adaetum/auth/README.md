@@ -33,7 +33,7 @@ bun src/server.ts              # development: loopback port 8787
 There is no default account, in development or anywhere else. While nobody has an account
 the service prints a first-run setup code (and keeps it in `AUTH_STATE_DIR/setup-code`);
 entering it on the sign-in page creates the first owner.
-On a host installed by Adaetum, first boot (Phase 20) puts the operator's recovery password in that
+On a host installed by Adaetum, first boot (the bootstrap playbook) puts the operator's recovery password in that
 file instead, so the password is the setup code. It is then matched exactly, never printed in the
 log, and used once. A generated code is matched without regard to case.
 

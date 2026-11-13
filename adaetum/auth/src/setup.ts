@@ -51,7 +51,7 @@ export class SetupCode {
     if (this.now() < this.lockedUntil) return "locked";
     const expected = Buffer.from(this.ensure());
     // A generated code is upper case and typed by hand, so it is compared case-insensitively.
-    // A seeded code (the operator's recovery password, see Phase 20) is compared exactly
+    // A seeded code (the operator's recovery password, written at first boot) is compared exactly
     // first, since its case matters and must not be loosened.
     if (matches(presented.trim(), expected) || matches(presented.trim().toUpperCase(), expected)) {
       this.wrong = 0;

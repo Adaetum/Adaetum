@@ -393,6 +393,18 @@
         mode: "0600"
         force: false
 
+    # The recovery password chosen in setup becomes this host's access token and its first-
+    # account setup code. It is only in the first-boot runtime payload, which Phase 99
+    # removes, so it is seeded here. no_log keeps the password out of Ansible's output.
+    - name: Seed this host's access token and setup code from the recovery password
+      ansible.builtin.command:
+        cmd: "{{ playbook_dir }}/../ansible-scripts/bootstrap/Phase-20/seed-recovery-access.sh"
+      environment:
+        BOOTSTRAP_BACKUP_PASSPHRASE: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_BACKUP_PASSPHRASE') }}"
+        BOOTSTRAP_BACKUP_PASSPHRASE_B64: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_BACKUP_PASSPHRASE_B64') }}"
+      changed_when: false
+      no_log: true
+
     - name: Capture Authentik bootstrap admin username when missing
       ansible.builtin.copy:
         content: "akadmin"

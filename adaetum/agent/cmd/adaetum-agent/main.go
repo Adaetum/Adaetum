@@ -242,7 +242,7 @@ func runServe(args []string) {
 		fmt.Fprintf(os.Stderr, "listening on https://%s (reachable from the network; token required)\n", *listen)
 		fmt.Fprintln(os.Stderr, "certificate fingerprint (SHA-256), to check on first visit:", tlscert.Fingerprint(leaf))
 		server.Handler = withHSTS(handler)
-		if err := server.ListenAndServeTLS("", ""); err != nil {
+		if err := serveTLSUpgradingHTTP(server, ownCertificateName(certificates)); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

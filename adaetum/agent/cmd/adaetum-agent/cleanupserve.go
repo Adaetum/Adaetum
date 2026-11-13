@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	stateDir      = "/var/lib/adaetum"
-	defaultToken  = "/etc/adaetum/agent-token"
+	stateDir     = "/var/lib/adaetum"
+	defaultToken = "/etc/adaetum/agent-token"
 	// Random tokens are 64 characters. The floor is 16 because a host's token may instead be
 	// the operator's recovery password (seeded at first boot), which setup already requires
 	// to be at least 16 characters and hard to guess.

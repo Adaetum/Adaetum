@@ -144,7 +144,7 @@ This Phase 20 design is successful when:
 
 ## Recovery access
 
-Phase 20 also seeds the host's way in from the operator's recovery password
+`platform-bootstrap.yml` also seeds the host's way in (with [`seed-recovery-access.sh`](seed-recovery-access.sh)) from the operator's recovery password
 (`BOOTSTRAP_BACKUP_PASSPHRASE`, or its `_B64` form, from the first-boot runtime
 payload): `/etc/adaetum/agent-token` becomes the password, and when the sign-in
 service is installed `/var/lib/adaetum/auth/setup-code` does too, once. Both are
