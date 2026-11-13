@@ -491,6 +491,9 @@ tasks:
           echo "[iso] DEVELOPMENT MEDIA: bundling an agent built from this checkout (not the pinned release)"
           bash tasks/scripts/build-dev-agent.sh "${host_agent_arch}" "${work_dir}/ks/adaetum-agent"
           printf 'ADAETUM_AGENT_ARGS=-allow-runs -run-on-start=host-readiness\n' >"${work_dir}/ks/adaetum-agent.env"
+          # The sign-in service lets a host sign people in with the accounts copied from the
+          # cluster. The release does not carry it yet, so only development media does.
+          bash tasks/scripts/build-dev-auth.sh "${host_agent_arch}" "${work_dir}/ks/adaetum-auth"
         else
           python3 tasks/scripts/fetch-host-agent.py --arch "${host_agent_arch}" \
             --output "${work_dir}/ks/adaetum-agent"

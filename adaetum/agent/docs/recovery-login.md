@@ -153,8 +153,12 @@ real service; the milestone scenario above is `TestTheRecoveryScenario`):
 
 **Not built:**
 
-- **Running the service**: a systemd unit and Ansible role for hosts, a container and manifest for
-  the pod, and a Linux build of the compiled binary. Today it is started by hand (`adaetum/auth/README.md`).
+- **Running the service on production media and through Ansible.** Hosts installed from development
+  media (`task init:dev`) get it: the kickstart installs `adaetum-auth` (compiled with Bun by
+  `tasks/scripts/build-dev-auth.sh`), its systemd unit, and the agent's `-auth-socket` flags, and the
+  host then copies the cluster's accounts (checked 2026-11-13: a joined host took the cluster's accounts
+  within seconds of the service starting). The release pipeline does not publish the service yet, so
+  production media has none, and no Ansible role installs it on an existing host.
 - **"Run commands" on a host at run time.** Step 6 of the scenario needs a host to let an owner turn
   the launcher on while the cluster is down. Today a host's switches are fixed when it starts, and
   `security-boundary.md` says so deliberately. Changing that is a security-policy decision, not

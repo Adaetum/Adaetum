@@ -218,7 +218,7 @@ fi
 cat >/etc/systemd/system/adaetum-agent.service <<'UNIT'
 [Unit]
 Description=Adaetum host agent
-After=network-online.target
+After=network-online.target adaetum-auth.service
 Wants=network-online.target
 
 [Service]
@@ -228,7 +228,10 @@ Environment=TURSO_GO_CACHE_DIR=/var/lib/adaetum/cache
 # Absent on production media. Development media (task init:dev) puts
 # ADAETUM_AGENT_ARGS here to turn on features of the bundled agent.
 EnvironmentFile=-/etc/adaetum/agent.env
-ExecStart=/usr/local/bin/adaetum-agent serve -listen 0.0.0.0:28443 -data-dir /var/lib/adaetum -token-file /etc/adaetum/agent-token $ADAETUM_AGENT_ARGS
+# Present only when the account sign-in service is installed (below): the socket and secret
+# the agent signs people in through. Without it the agent accepts only its access token.
+EnvironmentFile=-/etc/adaetum/auth.env
+ExecStart=/usr/local/bin/adaetum-agent serve -listen 0.0.0.0:28443 -data-dir /var/lib/adaetum -token-file /etc/adaetum/agent-token $ADAETUM_AGENT_ARGS $ADAETUM_AUTH_ARGS
 Restart=on-failure
 RestartSec=5
 PrivateTmp=true
@@ -241,6 +244,43 @@ if command -v restorecon >/dev/null 2>&1; then
   restorecon /usr/local/bin/adaetum-agent /etc/systemd/system/adaetum-agent.service || true
 fi
 systemctl enable adaetum-agent.service
+
+# Account sign-in (adaetum/auth). A host signs people in with the accounts the cluster copies
+# to it, so the login still works when Kubernetes is down (agent/docs/recovery-login.md).
+# Only installed when the media carries the service. The agent switches it to a replica by
+# itself when the host joins a cluster, and the service remembers that.
+if [ -x /usr/local/bin/adaetum-auth ]; then
+  install -d -m 0700 /var/lib/adaetum/auth
+  cat >/etc/systemd/system/adaetum-auth.service <<'UNIT'
+[Unit]
+Description=Adaetum account sign-in service
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=AUTH_STATE_DIR=/var/lib/adaetum/auth
+Environment=AUTH_SOCKET=/var/lib/adaetum/auth/auth.sock
+# Cookie flags only: the agent serves TLS on its port.
+Environment=AUTH_BASE_URL=https://localhost:28443
+Environment=AUTH_MODE=primary
+ExecStart=/usr/local/bin/adaetum-auth
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/adaetum
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  printf 'ADAETUM_AUTH_ARGS=-auth-socket /var/lib/adaetum/auth/auth.sock -auth-secret-file /var/lib/adaetum/auth/internal-secret\n' >/etc/adaetum/auth.env
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon /usr/local/bin/adaetum-auth /etc/systemd/system/adaetum-auth.service /etc/adaetum/auth.env || true
+  fi
+  systemctl enable adaetum-auth.service
+fi
 
 # The console login banner (where the agent can be reached) is kept by the agent itself:
 # it rewrites /etc/issue.d/adaetum.issue as addresses change and redraws an idle login

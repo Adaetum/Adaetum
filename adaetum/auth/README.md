@@ -51,6 +51,7 @@ before: the access token alone.
 
 ## Not done yet
 
-Packaging (a systemd unit and Ansible role for hosts, a container and manifest for the pod), a
-Linux build of the compiled binary, passkeys, and write-through of account changes made at a
+Publishing the compiled service in the release (development media builds it with
+`tasks/scripts/build-dev-auth.sh`; the pod runs the container image), an Ansible role for existing
+hosts, passkeys, and write-through of account changes made at a
 host to the cluster. See "Not built" in the design doc.
