@@ -483,7 +483,47 @@ func (f *flow) tailscale(ctx context.Context, existing platform.Profile) (string
 		}
 	}
 	f.say("Tailscale tag ownership and the SSH rule for cluster hosts are ready.")
+	if token != "" {
+		f.ensureTailnetHTTPS(ctx, token)
+	}
 	return tailnet, nil
+}
+
+// httpsSteps is shown whenever setup cannot turn the setting on itself.
+const httpsSteps = "Turn it on yourself: Tailscale admin console, DNS page, enable MagicDNS and then HTTPS Certificates. Until it is on, the cluster's tailnet links (agent, Argo CD, Rancher, Gitea) will not come up."
+
+// ensureTailnetHTTPS makes sure HTTPS certificates are on. Every Tailscale ingress in the
+// cluster needs them; without them the operator never assigns a hostname and the links
+// just spin. It changes an account-wide setting that lists the tailnet's machine names in
+// public certificate-transparency logs, so it asks first, and a silent run must say yes
+// explicitly. It never fails setup: first boot does not depend on it, only the links do.
+func (f *flow) ensureTailnetHTTPS(ctx context.Context, token string) {
+	on, known, err := f.s.API.TailnetHTTPS(ctx, token)
+	switch {
+	case err != nil:
+		f.say("Could not check whether Tailscale HTTPS certificates are on (" + err.Error() + "). " + httpsSteps)
+		return
+	case !known:
+		return // The API did not say; do not guess.
+	case on:
+		f.say("Tailscale HTTPS certificates are on.")
+		return
+	}
+	if err := engine.ApproveScreen(ctx, f.ui, engine.Screen{
+		ID: "tailnet-https", Default: "no", Title: "Turn on HTTPS for your tailnet?",
+		Intro:    "The cluster's private links (agent, Argo CD, Rancher, Gitea) are served over Tailscale HTTPS, which is off on your tailnet. Turning it on is a tailnet-wide setting and lists your machine names in public certificate-transparency logs.",
+		YesLabel: "Turn it on", NoLabel: "Not now",
+	}); err != nil {
+		if errors.Is(err, engine.ErrDeclined) {
+			f.say("Left Tailscale HTTPS off. " + httpsSteps)
+		}
+		return
+	}
+	if err := f.s.API.EnableTailnetHTTPS(ctx, token); err != nil {
+		f.say("Could not turn on Tailscale HTTPS: " + err.Error() + ". " + httpsSteps)
+		return
+	}
+	f.say("Tailscale HTTPS certificates are now on.")
 }
 
 func (f *flow) askTailscaleToken(ctx context.Context) (string, []string, error) {

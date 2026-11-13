@@ -124,3 +124,53 @@ func TestEmptyTailnetDoesNotTreatCustomSearchDomainAsTailnet(t *testing.T) {
 		t.Fatalf("%v %v", got, err)
 	}
 }
+
+func TestTailnetHTTPSReadsTheSettingAndNeverTreatsUnknownAsOff(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body      string
+		on, known bool
+	}{
+		"on":      {`{"httpsEnabled":true}`, true, true},
+		"off":     {`{"httpsEnabled":false}`, false, true},
+		"unknown": {`{"devicesApprovalOn":true}`, false, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var path, auth string
+			s := server(t, func(w http.ResponseWriter, r *http.Request) {
+				path, auth = r.URL.Path, r.Header.Get("Authorization")
+				fmt.Fprint(w, tc.body)
+			})
+			on, known, err := Client{TailscaleBase: s.URL}.TailnetHTTPS(context.Background(), "tok")
+			if err != nil || on != tc.on || known != tc.known {
+				t.Fatalf("on=%v known=%v err=%v", on, known, err)
+			}
+			if path != "/tailnet/-/settings" || auth != "Bearer tok" {
+				t.Fatalf("path=%q auth=%q", path, auth)
+			}
+		})
+	}
+}
+
+func TestEnableTailnetHTTPSWritesThenReadsBackAndExplainsARefusal(t *testing.T) {
+	enabled := false
+	s := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			enabled = true
+			return
+		}
+		fmt.Fprintf(w, `{"httpsEnabled":%v}`, enabled)
+	})
+	if err := (Client{TailscaleBase: s.URL}).EnableTailnetHTTPS(context.Background(), "tok"); err != nil || !enabled {
+		t.Fatalf("enabled=%v err=%v", enabled, err)
+	}
+
+	refused := server(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	if err := (Client{TailscaleBase: refused.URL}).EnableTailnetHTTPS(context.Background(), "tok"); !errors.Is(err, ErrRejected) {
+		t.Fatalf("a refusal was not reported as rejected: %v", err)
+	}
+
+	liar := server(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"httpsEnabled":false}`) })
+	if err := (Client{TailscaleBase: liar.URL}).EnableTailnetHTTPS(context.Background(), "tok"); err == nil {
+		t.Fatal("success was reported although the setting still reads off")
+	}
+}
