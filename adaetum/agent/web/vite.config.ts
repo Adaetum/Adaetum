@@ -12,7 +12,13 @@ export default defineConfig({
   // The build is embedded in the agent binary (internal/webui), so a host serves its
   // own interface with nothing else installed. The directory is git-ignored (any
   // directory named dist is); the Go package keeps a tracked placeholder beside it.
-  build: { outDir: "../internal/webui/ui/dist", emptyOutDir: true },
+  build: {
+    outDir: "../internal/webui/ui/dist",
+    emptyOutDir: true,
+    // Fonts stay separate files. Vite would otherwise inline small ones as data: URLs, which
+    // the page's Content-Security-Policy (font-src falls back to 'self') refuses.
+    assetsInlineLimit: (file) => (file.endsWith(".woff2") || file.endsWith(".woff") ? false : undefined),
+  },
   server: {
     // AGENT_URL points the dev server at another agent, for example a host agent
     // started with -listen 0.0.0.0:28443 (https, self-signed, hence secure: false).

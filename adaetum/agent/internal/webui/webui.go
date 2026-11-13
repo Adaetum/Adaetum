@@ -108,11 +108,12 @@ func notBuilt() http.Handler {
 
 // secureHeaders limits what the pages can do. The interface needs only its own
 // files and the agent's API; inline styles are allowed because the design system
-// sets some at run time.
+// sets some at run time. blob: images are the app logos, fetched with the login and shown
+// from the browser's memory (an <img> cannot send the token itself); an image cannot run script.
 func secureHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")

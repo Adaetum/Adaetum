@@ -62,6 +62,7 @@ func TestEveryResponseCarriesSecurityHeaders(t *testing.T) {
 	for _, path := range []string{"/", "/assets/app-abc.js", "/assets/gone.js"} {
 		headers := get(FromFS(built), "GET", path).Header()
 		if !strings.Contains(headers.Get("Content-Security-Policy"), "default-src 'self'") ||
+			!strings.Contains(headers.Get("Content-Security-Policy"), "img-src 'self' data: blob:") ||
 			headers.Get("X-Content-Type-Options") != "nosniff" || headers.Get("X-Frame-Options") != "DENY" {
 			t.Errorf("%s is missing security headers: %v", path, headers)
 		}
