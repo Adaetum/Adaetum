@@ -207,52 +207,10 @@ write_phase70_bootstrap_field() {
   fi
 }
 
-log_widget_field_phase70() {
-  local field="${1:-}"
-  local status="${2:-}"
-  local detail="${3:-}"
-  if [[ -n "${detail}" ]]; then
-    echo "[phase70] homepage field ${field}: ${status} (${detail})"
-  else
-    echo "[phase70] homepage field ${field}: ${status}"
-  fi
-}
-
-persist_widget_field_phase70() {
-  local field="${1:-}"
-  local value="${2:-}"
-  local openbao_token="${3:-}"
-  if [[ -z "${field}" || -z "${value}" ]]; then
-    return 0
-  fi
-  write_phase70_bootstrap_field "${field}" "${value}" "${openbao_token}"
-  persist_openbao_homepage_field "${field}" "${value}" "${openbao_token}"
-}
-
 service_cluster_ip_phase70() {
   local namespace="${1:-}"
   local service_name="${2:-}"
   bootstrap_service_address "${kubectl_bin}" "${namespace}" "${service_name}"
-}
-
-validate_argocd_widget_key_phase70() {
-  local token="${1:-}"
-  local service_host=""
-  local status=""
-
-  if [[ -z "${token}" ]]; then
-    return 1
-  fi
-  service_host="$(service_cluster_ip_phase70 argocd argocd-server)"
-  if [[ -z "${service_host}" ]]; then
-    return 1
-  fi
-  status="$(
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
-      -H "Authorization: Bearer ${token}" \
-      "http://${service_host}:80/api/v1/applications" 2>/dev/null || true
-  )"
-  [[ "${status}" == "200" ]]
 }
 
 validate_grafana_admin_password_phase70() {
@@ -273,30 +231,6 @@ validate_grafana_admin_password_phase70() {
       "http://${service_host}:80/api/admin/stats" 2>/dev/null || true
   )"
   [[ "${status}" == "200" ]]
-}
-
-validate_gitea_widget_auth_phase70() {
-  local token="${1:-}"
-  local service_host=""
-  local status=""
-
-  if [[ -z "${token}" ]]; then
-    return 1
-  fi
-  service_host="$(service_cluster_ip_phase70 gitea gitea-http)"
-  if [[ -z "${service_host}" ]]; then
-    return 1
-  fi
-  status="$(
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
-      -H "Authorization: token ${token}" \
-      "http://${service_host}:3000/api/v1/notifications?limit=1" 2>/dev/null || true
-  )"
-  if [[ "${status}" != "200" ]]; then
-    echo "[phase70] Gitea widget token validation returned HTTP ${status:-000}" >&2
-    return 1
-  fi
-  return 0
 }
 
 ensure_ansible_runner_pull_secret_phase70() {
@@ -533,14 +467,10 @@ verify_openbao_secret_delivery_phase70() {
   # instead of allowing later rollout waits to consume the run.
   bootstrap_wait_for_csi_secret_delivery \
     "${kubectl_bin}" observability grafana-openbao grafana || return 1
-  bootstrap_wait_for_external_secret_delivery \
-    "${kubectl_bin}" observability homepage-grafana-desired homepage-grafana-desired grafana || return 1
   bootstrap_wait_for_csi_secret_delivery \
     "${kubectl_bin}" observability apprise-openbao apprise || return 1
   bootstrap_wait_for_csi_secret_delivery \
     "${kubectl_bin}" observability ntfy-openbao ntfy || return 1
-  bootstrap_wait_for_csi_secret_delivery \
-    "${kubectl_bin}" homepage homepage-openbao homepage || return 1
   bootstrap_wait_for_csi_secret_delivery \
     "${kubectl_bin}" cloudflared cloudflared-openbao cloudflared || return 1
   bootstrap_wait_for_csi_secret_delivery \
@@ -599,112 +529,12 @@ reconcile_csi_runtime_rotations_phase70() {
   restart_csi_workload_phase70 observability grafana grafana-openbao 'app.kubernetes.io/name=grafana' grafana
   restart_csi_workload_phase70 observability apprise apprise-openbao 'app=apprise' apprise
   restart_csi_workload_phase70 observability ntfy ntfy-openbao 'app=ntfy' ntfy
-  restart_csi_workload_phase70 homepage homepage homepage-openbao 'app.kubernetes.io/name=homepage' homepage
   restart_csi_workload_phase70 cloudflared cloudflared cloudflared-openbao 'app=cloudflared' cloudflared
   restart_csi_workload_phase70 ingress external-dns external-dns-openbao 'app=external-dns' external-dns
   restart_csi_workload_phase70 ansible ansible-runner ansible-runner-openbao 'app=ansible-runner' ansible-runner
   restart_csi_workload_phase70 authentik authentik-server authentik-openbao 'app.kubernetes.io/component=server' authentik-server
   restart_csi_workload_phase70 authentik authentik-worker authentik-openbao 'app.kubernetes.io/component=worker' authentik-worker
   restart_csi_workload_phase70 gitea gitea gitea-openbao 'app.kubernetes.io/name=gitea' gitea
-}
-
-mint_argocd_widget_key_phase70() {
-  local admin_password=""
-  local token=""
-  local openbao_token="${1:-}"
-  local readonly_capability=""
-
-  if [[ -z "${kubectl_bin}" ]]; then
-    return 1
-  fi
-
-  admin_password="${HOMEPAGE_ARGOCD_WIDGET_KEY_PASSWORD:-${ARGOCD_ADMIN_PASSWORD:-}}"
-  if [[ -z "${admin_password}" ]]; then
-    admin_password="$(read_openbao_app_field argocd/admin password "${openbao_token}")"
-  fi
-  if [[ -z "${admin_password}" ]]; then
-    admin_password="$(read_phase70_bootstrap_field argocd_admin_password "${openbao_token}")"
-  fi
-  if [[ -z "${admin_password}" ]]; then
-    echo "[phase70] Argo CD widget token mint skipped: admin password unavailable" >&2
-    return 1
-  fi
-
-  if ! bootstrap_wait_for_deployment_rollout \
-    "${kubectl_bin}" argocd argocd-server argocd-server 'app.kubernetes.io/name=argocd-server' >&2; then
-    echo "[phase70] Argo CD widget token mint failed: argocd-server not ready in time" >&2
-    return 1
-  fi
-
-  readonly_capability="$("${kubectl_bin}" -n argocd get cm argocd-cm -o jsonpath='{.data.accounts\.readonly}' 2>/dev/null || true)"
-  if [[ "${readonly_capability}" != *"apiKey"* ]]; then
-    echo "[phase70] Argo CD widget token mint failed: readonly apiKey account not configured yet" >&2
-    return 1
-  fi
-
-  token="$(
-    "${kubectl_bin}" -n argocd exec -i deploy/argocd-server -- env \
-      ARGOCD_WIDGET_ADMIN_PASSWORD="${admin_password}" \
-      /bin/sh -lc '
-        argocd login 127.0.0.1:8080 --plaintext --username admin --password "$ARGOCD_WIDGET_ADMIN_PASSWORD" >/dev/null 2>&1 &&
-        argocd account generate-token --account readonly
-      ' 2>/dev/null | tr -d '\r\n'
-  )"
-
-  if [[ -z "${token}" ]]; then
-    echo "[phase70] Argo CD widget token mint failed: unable to generate readonly account token" >&2
-    return 1
-  fi
-
-  if ! validate_argocd_widget_key_phase70 "${token}"; then
-    echo "[phase70] Argo CD widget token mint failed: minted token did not pass API validation" >&2
-    return 1
-  fi
-
-  printf '%s' "${token}"
-}
-
-mint_gitea_widget_auth_phase70() {
-  local openbao_token="${1:-}"
-  local admin_username="${2:-}"
-  local admin_password="${3:-}"
-  local gitea_base_url="${4:-}"
-  local token=""
-
-  if [[ -z "${kubectl_bin}" ]]; then
-    return 1
-  fi
-
-  if [[ -z "${admin_username}" ]]; then
-    admin_username="gitea-admin"
-  fi
-  if [[ -z "${admin_password}" || -z "${gitea_base_url}" ]]; then
-    echo "[phase70] Gitea widget token mint failed: admin validation inputs unavailable" >&2
-    return 1
-  fi
-
-  if ! bootstrap_wait_for_deployment_rollout \
-    "${kubectl_bin}" gitea gitea gitea 'app.kubernetes.io/name=gitea' >&2; then
-    echo "[phase70] Gitea widget token mint failed: gitea deployment not ready in time" >&2
-    return 1
-  fi
-
-  if ! token="$(mint_gitea_widget_token \
-    "${gitea_base_url}" "${admin_username}" "${admin_password}")"; then
-    echo "[phase70] Gitea widget token mint failed: live Gitea API did not issue a token" >&2
-    return 1
-  fi
-  if ! gitea_widget_token_has_required_scopes \
-    "${gitea_base_url}" "${admin_username}" "${admin_password}" "${token}"; then
-    echo "[phase70] Gitea widget token mint failed: token registry did not confirm exact read-only scopes" >&2
-    return 1
-  fi
-  if ! validate_gitea_widget_auth_phase70 "${token}"; then
-    echo "[phase70] Gitea widget token mint failed: notifications API rejected the token" >&2
-    return 1
-  fi
-
-  printf '%s' "${token}"
 }
 
 resolve_grafana_admin_password_phase70() {
@@ -748,142 +578,6 @@ ensure_grafana_admin_password_phase70() {
   fi
 
   echo "[phase70] reconciled Grafana admin password to bootstrap/OpenBao value"
-}
-
-ensure_homepage_widget_secrets_phase70() {
-  local openbao_token=""
-  local argocd_widget_key=""
-  local gitea_widget_auth=""
-  local prior_argocd_widget_key=""
-  local prior_gitea_widget_auth=""
-  local gitea_admin_username=""
-  local gitea_admin_password=""
-  local gitea_service_host=""
-  local gitea_base_url=""
-  local secret_manifest=""
-  local homepage_pod=""
-  local failure=0
-
-  if [[ -z "${kubectl_bin}" ]]; then
-    echo "[phase70] kubectl not available; skipping Homepage widget reconcile" >&2
-    return 0
-  fi
-
-  if ! "${kubectl_bin}" get namespace homepage >/dev/null 2>&1; then
-    echo "[phase70] homepage namespace missing; skipping Homepage widget reconcile"
-    return 0
-  fi
-
-  if "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token >/dev/null 2>&1; then
-    openbao_token="$(
-      "${kubectl_bin}" -n "${OPENBAO_NAMESPACE}" get secret openbao-bootstrap-token \
-        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true
-    )"
-  fi
-
-  gitea_admin_username="$(read_openbao_app_field gitea/admin username "${openbao_token}")"
-  if [[ -z "${gitea_admin_username}" ]]; then
-    gitea_admin_username="$(read_phase70_bootstrap_field gitea_admin_username "${openbao_token}")"
-  fi
-  gitea_admin_username="${gitea_admin_username:-gitea-admin}"
-  gitea_admin_password="$(read_openbao_app_field gitea/admin password "${openbao_token}")"
-  if [[ -z "${gitea_admin_password}" ]]; then
-    gitea_admin_password="$(read_phase70_bootstrap_field gitea_admin_password "${openbao_token}")"
-  fi
-  gitea_service_host="$(service_cluster_ip_phase70 gitea gitea-http)"
-  if [[ -n "${gitea_service_host}" ]]; then
-    gitea_base_url="http://${gitea_service_host}:3000"
-  fi
-
-  prior_argocd_widget_key="$(read_openbao_app_field homepage/widgets HOMEPAGE_ARGOCD_WIDGET_KEY "${openbao_token}")"
-  argocd_widget_key="${prior_argocd_widget_key}"
-  if validate_argocd_widget_key_phase70 "${argocd_widget_key}"; then
-    log_widget_field_phase70 homepage_argocd_widget_key reused "validated from OpenBao"
-  else
-    if argocd_widget_key="$(mint_argocd_widget_key_phase70 "${openbao_token}")"; then
-      log_widget_field_phase70 homepage_argocd_widget_key minted "no valid stored credential; validated via Argo CD API"
-    else
-      argocd_widget_key=""
-      log_widget_field_phase70 homepage_argocd_widget_key invalid "no validated token available"
-      failure=1
-    fi
-  fi
-
-  prior_gitea_widget_auth="$(read_openbao_app_field homepage/widgets HOMEPAGE_GITEA_WIDGET_AUTH "${openbao_token}")"
-  gitea_widget_auth="${prior_gitea_widget_auth}"
-  if validate_gitea_widget_auth_phase70 "${gitea_widget_auth}" \
-    && gitea_widget_token_has_required_scopes \
-      "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_widget_auth}"; then
-    log_widget_field_phase70 homepage_gitea_widget_auth reused "validated read-only token from OpenBao"
-  else
-    if gitea_widget_auth="$(mint_gitea_widget_auth_phase70 \
-      "${openbao_token}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_base_url}")"; then
-      log_widget_field_phase70 homepage_gitea_widget_auth minted "no valid stored credential; validated via Gitea API"
-    else
-      gitea_widget_auth=""
-      log_widget_field_phase70 homepage_gitea_widget_auth invalid "no validated token available"
-      failure=1
-    fi
-  fi
-
-  if [[ -n "${argocd_widget_key}" ]] \
-    && ! persist_widget_field_phase70 homepage_argocd_widget_key "${argocd_widget_key}" "${openbao_token}"; then
-    log_widget_field_phase70 homepage_argocd_widget_key invalid "OpenBao write verification failed"
-    failure=1
-  fi
-  if [[ -n "${gitea_widget_auth}" ]] \
-    && ! persist_widget_field_phase70 homepage_gitea_widget_auth "${gitea_widget_auth}" "${openbao_token}"; then
-    log_widget_field_phase70 homepage_gitea_widget_auth invalid "OpenBao write verification failed"
-    failure=1
-  fi
-
-  if (( failure > 0 )); then
-    echo "[phase70] Homepage widget reconciliation failed before workload restart" >&2
-    return 1
-  fi
-
-  # A valid OpenBao value needs no restart. A minted replacement is consumed
-  # only by the next pod through homepage-openbao; never recreate a native
-  # delivery Secret from this reconciliation path.
-  if [[ "${argocd_widget_key}" != "${prior_argocd_widget_key}" || \
-        "${gitea_widget_auth}" != "${prior_gitea_widget_auth}" ]]; then
-    "${kubectl_bin}" -n homepage rollout restart deploy/homepage >/dev/null
-    if ! bootstrap_wait_for_deployment_rollout \
-      "${kubectl_bin}" homepage homepage homepage 'app.kubernetes.io/name=homepage'; then
-      echo "[phase70] Homepage restart did not become ready; diagnostics were captured" >&2
-    fi
-    homepage_pod="$("${kubectl_bin}" -n homepage get pods \
-      --selector='app.kubernetes.io/name=homepage' --sort-by=.metadata.creationTimestamp \
-      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}' \
-      2>/dev/null | awk -F '\t' '$2 == "" { print $1 }' | tail -n 1)"
-    if [[ -z "${homepage_pod}" ]]; then
-      echo "[phase70] Homepage restart produced no active replacement pod" >&2
-      return 1
-    fi
-    if ! bootstrap_wait_for_csi_secret_delivery \
-      "${kubectl_bin}" homepage homepage-openbao homepage "${homepage_pod}"; then
-      echo "[phase70] Homepage CSI credential delivery did not become ready" >&2
-      return 1
-    fi
-    echo "[phase70] restarted Homepage deployment after OpenBao widget reconciliation"
-  fi
-
-  if [[ -n "${gitea_widget_auth}" ]]; then
-    if revoke_stale_gitea_widget_tokens \
-      "${gitea_base_url}" "${gitea_admin_username}" "${gitea_admin_password}" "${gitea_widget_auth}"; then
-      log_widget_field_phase70 homepage_gitea_widget_auth revoked "removed superseded Homepage tokens"
-    else
-      log_widget_field_phase70 homepage_gitea_widget_auth invalid "could not prove stale-token revocation"
-      failure=1
-    fi
-  fi
-
-  if (( failure > 0 )); then
-    echo "[phase70] Homepage widget reconciliation failed validation for one or more critical fields" >&2
-    return 1
-  fi
-
-  echo "[phase70] reconciled Homepage widget secrets from validated live app state"
 }
 
 ensure_authentik_admin_password_phase70() {
@@ -1133,11 +827,6 @@ fi
 run_phase70_step "run GitOps realization checks" critical run_gitops_realization_checks_phase70
 if (( phase70_critical_failures > 0 )); then
   echo "[phase70] GitOps realization checks failed; stopping before secret-delivery reconciliation" >&2
-  exit 1
-fi
-run_phase70_step "reconcile Homepage widget secrets" critical ensure_homepage_widget_secrets_phase70
-if (( phase70_critical_failures > 0 )); then
-  echo "[phase70] Homepage widget reconciliation failed; stopping before workload secret verification" >&2
   exit 1
 fi
 if ! verify_openbao_secret_delivery_phase70; then

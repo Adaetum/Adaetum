@@ -68,21 +68,6 @@ An item is complete only when its acceptance criteria and required checks pass.
   all clients together.
   **Acceptance:** recovery tests prove that encryption keys are never blindly
   replaced and exercise interrupted rotation recovery.
-- [x] Remove unused provider credentials from Homepage. Cloudflare and
-  Tailscale are configured as links rather than API widgets, and Authentik is
-  also link/status-only, so its shared widget Secret now receives only the two
-  tokens its Argo CD and Gitea widgets consume. Validation rejects delivery of
-  those unused credentials through bootstrap phases or External Secrets; new
-  Gitea widget tokens are read-only.
-- [ ] Replace Homepage's Grafana administrator password with a dedicated Viewer
-  identity and migrate any preexisting broad Gitea widget token. **Acceptance:**
-  Homepage can read its configured metrics without holding an administrator
-  password or an `all`-scope Gitea token, and both credentials have tested
-  OpenBao-driven rotation and provider/application revocation paths.
-  **Current:** the dedicated Grafana Viewer and safe desired-to-active
-  coordinator are implemented. Gitea scope inspection, replacement, and
-  post-promotion revocation are also implemented. Live rotation and migration
-  evidence remain.
 
 ## P1 — supported platform alpha
 

@@ -163,8 +163,8 @@ func TestFirstBootRunsEveryChunkInOrderOnAHealthyMachine(t *testing.T) {
 	if got := strings.Join(names, ","); got != want {
 		t.Fatalf("steps\n got %s\nwant %s", got, want)
 	}
-	if len(m.written) != 21 {
-		t.Fatalf("%d secrets written, want 21", len(m.written))
+	if len(m.written) != 20 {
+		t.Fatalf("%d secrets written, want 20", len(m.written))
 	}
 }
 

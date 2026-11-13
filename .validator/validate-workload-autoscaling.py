@@ -22,12 +22,6 @@ TARGETS = {
         "autoscaling": "pods/observability/apprise/autoscaling.yaml",
         "container": "apprise",
     },
-    ("homepage", "homepage"): {
-        "app": "pods/portal/homepage.app.yaml",
-        "deployment": "pods/portal/homepage/deployment.yaml",
-        "autoscaling": "pods/portal/homepage/autoscaling.yaml",
-        "container": "homepage",
-    },
 }
 
 

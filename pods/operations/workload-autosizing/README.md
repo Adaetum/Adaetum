@@ -14,7 +14,7 @@ Adaetum splits automatic resource management into deliberately narrow owners:
 - Goldilocks is a read-only view of the VPA recommendations. Its controller is
   disabled so Git remains the only policy source of truth.
 
-The initial allowlist is Cloudflared, Apprise, and Homepage. Stateful workloads,
+The initial allowlist is Cloudflared and Apprise. Stateful workloads,
 singletons, storage services, node agents, bootstrap services, and cluster
 control-plane components remain excluded until their own availability contract
 proves that automatic scaling and voluntary eviction are safe.

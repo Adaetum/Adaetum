@@ -3527,7 +3527,6 @@ argocd_local_host=""
 gitea_external_host=""
 argocd_external_host=""
 registry_external_host=""
-homepage_external_host=""
 authentik_external_host=""
 alertmanager_external_host=""
 grafana_external_host=""
@@ -3544,7 +3543,6 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
   gitea_external_host="gitea.${CLUSTER_DOMAIN}"
   argocd_external_host="argocd.${CLUSTER_DOMAIN}"
   registry_external_host="registry.${CLUSTER_DOMAIN}"
-  homepage_external_host="home.${CLUSTER_DOMAIN}"
   gitea_local_host="gitea.${CLUSTER_LOCAL_DOMAIN}"
   argocd_local_host="argocd.${CLUSTER_LOCAL_DOMAIN}"
   authentik_external_host="authentik.${CLUSTER_DOMAIN}"
@@ -3553,7 +3551,7 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
   grafana_external_host="grafana.${CLUSTER_DOMAIN}"
   prometheus_external_host="prometheus.${CLUSTER_DOMAIN}"
 
-  external_dns_bootstrap_hosts="${gitea_external_host},${argocd_external_host},${registry_external_host},${authentik_external_host},${homepage_external_host},${alertmanager_external_host},${grafana_external_host},${prometheus_external_host}"
+  external_dns_bootstrap_hosts="${gitea_external_host},${argocd_external_host},${registry_external_host},${authentik_external_host},${alertmanager_external_host},${grafana_external_host},${prometheus_external_host}"
 
   echo "[phase60] ingress hostnames: external=${external_dns_bootstrap_hosts} local=${gitea_local_host},${argocd_local_host}"
   # The Authentik forward-auth ingresses use the auth-snippet annotation, and the RKE2
@@ -3565,11 +3563,11 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
   run_or_fail \
     "failed applying pods/ingress/nginx-controller-config.yaml" \
     "${kubectl_bin}" apply -f "${repo_root}/pods/ingress/nginx-controller-config.yaml"
-  snippet_probe="${repo_root}/pods/ingress/nginx-routing/homepage-public-ingress.yaml"
+  snippet_probe="${repo_root}/pods/ingress/nginx-routing/gitea-public-ingress.yaml"
   snippet_ready=0
-  # The probe ingress lives in the homepage namespace; without it there is nothing to
+  # The probe ingress lives in the gitea namespace; without it there is nothing to
   # check yet, and any ingress that needs snippets is skipped for the same reason.
-  if ! "${kubectl_bin}" get namespace homepage >/dev/null 2>&1; then
+  if ! "${kubectl_bin}" get namespace gitea >/dev/null 2>&1; then
     snippet_ready=1
   fi
   for _ in $(seq 1 30); do
@@ -3592,7 +3590,7 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
       -f "${repo_root}/pods/ingress/nginx-routing/gitea-ingress.yaml" \
       -f "${repo_root}/pods/ingress/nginx-routing/argocd-ingress.yaml" \
       -f "${repo_root}/pods/ingress/nginx-routing/registry-ingress.yaml"
-  for optional_ns in authentik homepage; do
+  for optional_ns in authentik; do
     if "${kubectl_bin}" get namespace "${optional_ns}" >/dev/null 2>&1; then
       echo "[phase60] applying optional ingress for namespace ${optional_ns}"
       case "${optional_ns}" in
@@ -3600,12 +3598,6 @@ if [[ -d "${repo_root}/pods/ingress" ]]; then
           run_or_fail \
             "failed applying pods/ingress/nginx-routing/authentik-ingress.yaml" \
             "${kubectl_bin}" apply -f "${repo_root}/pods/ingress/nginx-routing/authentik-ingress.yaml"
-          ;;
-        homepage)
-          run_or_fail \
-            "failed applying pods/ingress/nginx-routing/homepage-ingress.yaml" \
-            "${kubectl_bin}" apply -f "${repo_root}/pods/ingress/nginx-routing/homepage-ingress.yaml" \
-              -f "${repo_root}/pods/ingress/nginx-routing/homepage-public-ingress.yaml"
           ;;
       esac
     else

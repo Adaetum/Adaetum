@@ -1,4 +1,0 @@
-resources:
-  - external-secret.yaml
-  - homepage-external-secret.yaml
-  - homepage-viewer-rotation.yaml

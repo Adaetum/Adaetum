@@ -50,7 +50,7 @@ const (
 const (
 	artifactHubURL = "https://artifacthub.io"
 	dockerHubURL   = "https://hub.docker.com"
-	// The community dashboard-icons set (the one Homepage uses), for app logos only.
+	// The community dashboard-icons set (the common dashboard icon set), for app logos only.
 	iconsURL = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png"
 )
 

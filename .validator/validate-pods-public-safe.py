@@ -35,7 +35,6 @@ CHECK_PATHS = [
     REPO_ROOT / "pods" / "ingress" / "ingress-cluster-config.yaml",
     REPO_ROOT / "pods" / "ingress" / "observability-routing" / "observability-routing-cluster-config.yaml",
     REPO_ROOT / "pods" / "observability" / "ntfy" / "ntfy-cluster-config.yaml",
-    REPO_ROOT / "pods" / "portal" / "homepage" / "homepage-cluster-config.yaml",
 ]
 
 ENV_KEYS = (
@@ -53,8 +52,6 @@ CONFIG_KEYS = (
     "GITEA_CANONICAL_HOST",
     "ARGOCD_PUBLIC_HOST",
     "ARGOCD_LOCAL_HOST",
-    "HOMEPAGE_PUBLIC_HOST",
-    "HOMEPAGE_LOCAL_HOST",
     "ALERTMANAGER_PUBLIC_HOST",
     "ALERTMANAGER_LOCAL_HOST",
     "GRAFANA_PUBLIC_HOST",

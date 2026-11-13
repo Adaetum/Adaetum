@@ -84,9 +84,6 @@ var generated = []spec{
 	{name: "grafana_secret_key", bytes: 48},
 	{name: "ntfy_admin_password", bytes: 24},
 	{name: "ntfy_apprise_password", bytes: 32, urlSafe: true},
-	// Homepage uses its own Grafana Viewer, independent of the administrator, so either
-	// identity can rotate without widening access.
-	{name: "homepage_grafana_password", bytes: 24},
 	{name: "authentik_secret_key", bytes: 48},
 	{name: "authentik_postgresql_password", bytes: 24},
 	{name: "authentik_admin_password", bytes: 24},

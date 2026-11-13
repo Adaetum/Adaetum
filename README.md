@@ -194,7 +194,7 @@ depends on replicas, storage placement, and valid PodDisruptionBudgets.
 | GitOps and source control | Argo CD, Gitea, Gitea Actions |
 | Secrets, identity, and policy | OpenBao, External Secrets, Secrets Store CSI, Authentik, Kubewarden, Kubescape |
 | Networking and edge | Tailscale, ingress-nginx, external-dns, Cloudflare, cloudflared, kube-vip |
-| Operations | Homepage, Prometheus, Grafana, Alertmanager, Kured |
+| Operations | Prometheus, Grafana, Alertmanager, Kured |
 | Adaetum's own software | Host agent and web app (Go, React), sign-in service (Bun, Better Auth), embedding service |
 
 Adaetum is activation and integration code. Those upstream applications remain

@@ -86,26 +86,6 @@ spec:
                 name: authentik-server
                 port:
                   number: 9000
-    - host: home.example.local
-      http:
-        paths:
-          - path: /outpost.goauthentik.io
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 9000
-    - host: home.example.services
-      http:
-        paths:
-          - path: /outpost.goauthentik.io
-            pathType: Prefix
-            backend:
-              service:
-                name: authentik-server
-                port:
-                  number: 9000
     - host: alertmanager.example.local
       http:
         paths:

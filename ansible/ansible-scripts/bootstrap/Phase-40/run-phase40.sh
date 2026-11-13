@@ -1348,7 +1348,6 @@ ntfy_apprise_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/ntfy_appr
 if [[ -n "${ntfy_apprise_password_val}" ]]; then
   platform_kv_args+=("ntfy_apprise_password=${ntfy_apprise_password_val}")
 fi
-homepage_grafana_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/homepage_grafana_password")"
 authentik_admin_username_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/authentik_admin_username")"
 if [[ -n "${authentik_admin_username_val}" ]]; then
   platform_kv_args+=("authentik_admin_username=${authentik_admin_username_val}")
@@ -1498,11 +1497,6 @@ if [[ "${#platform_kv_args[@]}" -gt 0 ]]; then
       "admin_password=${ntfy_admin_password_val}" \
       "apprise_password=${ntfy_apprise_password_val}"
   fi
-  if [[ -n "${homepage_grafana_password_val}" ]]; then
-    seed_openbao_app_fields homepage/grafana "${root_token}" \
-      username=homepage \
-      "password=${homepage_grafana_password_val}"
-  fi
   if [[ -n "${tailscale_oauth_client_id_val}" && -n "${tailscale_oauth_client_secret_val}" ]]; then
     seed_openbao_app_fields ansible/tailscale "${root_token}" \
       "oauth_client_id=${tailscale_oauth_client_id_val}" \
@@ -1552,7 +1546,6 @@ fi
   --from-file=external-dns.hcl="${policy_dir}/external-dns.hcl" \
   --from-file=ansible-runner.hcl="${policy_dir}/ansible-runner.hcl" \
   --from-file=tailscale-operator.hcl="${policy_dir}/tailscale-operator.hcl" \
-  --from-file=homepage.hcl="${policy_dir}/homepage.hcl" \
   --from-file=grafana.hcl="${policy_dir}/grafana.hcl" \
   --from-file=authentik.hcl="${policy_dir}/authentik.hcl" \
   --from-file=gitea.hcl="${policy_dir}/gitea.hcl" \
