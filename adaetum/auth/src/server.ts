@@ -47,6 +47,13 @@ const service = await createService({
 // the machine that owns the accounts does this: a replica receives them from the cluster.
 const breakGlassDir = process.env.AUTH_BREAKGLASS_DIR;
 if (breakGlassDir) {
+  // The break-glass password is the operator's recovery password, so it also claims a fresh
+  // server here, as it does on a host. Only while nobody has an account: after that the
+  // code is never asked for, and nothing extra is left on disk.
+  const passwordFile = join(breakGlassDir, "password");
+  if (service.mode() === "primary" && service.store.countPeople() === 0 && existsSync(passwordFile)) {
+    service.setup.adopt(readFileSync(passwordFile, "utf8"));
+  }
   const reconcile = async () => {
     if (service.mode() !== "primary") return;
     try {

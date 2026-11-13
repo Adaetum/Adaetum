@@ -19,7 +19,7 @@ import (
 // left empty. Details of one machine come from that machine's own agent.
 //
 // With -ssh (development) the report is read from that remote cluster instead.
-func registerClusterReport(mux *http.ServeMux, sshTarget string) {
+func registerClusterReport(mux *http.ServeMux, sshTarget string, guard func(http.Handler) http.Handler) {
 	var inspector *inspect.Inspector
 	if sshTarget != "" {
 		inspector = newInspector(sshTarget)
@@ -28,12 +28,20 @@ func registerClusterReport(mux *http.ServeMux, sshTarget string) {
 	} else {
 		return // not in a cluster: the page keeps saying there is no report here
 	}
-	mux.HandleFunc("/api/v1/inspect", func(w http.ResponseWriter, r *http.Request) {
+	report := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(inspector.CollectCluster(ctx))
 	})
+	// The report names every node and workload, so it needs a login like the rest of the
+	// API. It is also what the page asks first: a 401 here is how the page learns to show
+	// the sign-in screen before anything else.
+	if guard != nil {
+		mux.Handle("/api/v1/inspect", guard(report))
+		return
+	}
+	mux.Handle("/api/v1/inspect", report)
 }
 
 // podCertificateIdentity is what the cluster agent's certificate covers when it runs in a

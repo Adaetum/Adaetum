@@ -269,6 +269,13 @@ ssh user@host sudo /tmp/adaetum-agent inspect
 Use `GOARCH=arm64` for ARM hosts. `sudo` is needed because the RKE2 kubeconfig is
 root-readable.
 
+To try a change on a development node without rebuilding the ISO, run
+`task dev:push -- [host] [agent|auth]` from the repository root. It builds the host agent
+and the sign-in service from this checkout, copies them to the node over SSH, restarts
+both services and reports whether they came up. With no host it uses the one online
+`node-*` machine on your tailnet. It replaces those two binaries only; the token, accounts
+and certificate stay. It is for development nodes: pods are not pushed this way.
+
 ## Testing approach
 
 Use the cheapest environment that cannot misrepresent the behavior under test.

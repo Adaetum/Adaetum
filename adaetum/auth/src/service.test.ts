@@ -457,4 +457,22 @@ describe("refusing bad copies", () => {
     expect((await call(m, "POST", "/api/setup", { ...body, code: password.toUpperCase() })).status).toBe(403);
     expect((await call(m, "POST", "/api/setup", { ...body, code: password })).status).toBe(201);
   });
+
+  test("an adopted password works beside the generated code, and a short one is refused", async () => {
+    const file = join(tempDir(), "setup-code");
+    const m = await machine("primary", { setupCodeFile: file });
+    const random = m.setup.ensure();
+    expect(m.setup.adopt("too short")).toBe(false);
+    const password = "Correct-Horse-Battery-staple 42";
+    expect(m.setup.adopt(password)).toBe(true);
+    // Nothing but the generated code is written to disk.
+    expect((await Bun.file(file).text()).trim()).toBe(random);
+    const body = { name: "N", email: "n@example.test", password: PASSWORD };
+    expect((await call(m, "POST", "/api/setup", { ...body, code: "WRONG-CODE-XXXX" })).status).toBe(403);
+    expect((await call(m, "POST", "/api/setup", { ...body, code: password })).status).toBe(201);
+    const other = await machine("primary", { setupCodeFile: join(tempDir(), "setup-code") });
+    const code = other.setup.ensure();
+    other.setup.adopt(password);
+    expect((await call(other, "POST", "/api/setup", { ...body, code })).status).toBe(201);
+  });
 });

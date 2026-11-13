@@ -1340,6 +1340,18 @@ if [[ -n "${grafana_secret_key_val}" ]]; then
 fi
 adaetum_owner_email_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/adaetum_owner_email")"
 adaetum_owner_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/adaetum_owner_password")"
+# The operator's recovery password is also the cluster agent's break-glass login and the code
+# that claims a fresh cluster agent (its auth service adopts this field as the setup code), so
+# one password works on every host and in the cluster. It opens the emergency kit, which holds
+# the generated value anyway. Without a usable password (16+ characters) the generated one stays.
+recovery_password_val="${BOOTSTRAP_BACKUP_PASSPHRASE:-}"
+if [[ -z "${recovery_password_val}" && -n "${BOOTSTRAP_BACKUP_PASSPHRASE_B64:-}" ]]; then
+  recovery_password_val="$(printf '%s' "${BOOTSTRAP_BACKUP_PASSPHRASE_B64}" | base64 -d 2>/dev/null || true)"
+fi
+if [[ "${#recovery_password_val}" -ge 16 ]]; then
+  adaetum_owner_password_val="${recovery_password_val}"
+fi
+unset recovery_password_val
 ntfy_admin_password_val="$(read_secret_file "${BOOTSTRAP_SECRET_DIR}/ntfy_admin_password")"
 if [[ -n "${ntfy_admin_password_val}" ]]; then
   platform_kv_args+=("ntfy_admin_password=${ntfy_admin_password_val}")

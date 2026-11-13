@@ -37,6 +37,17 @@ export function App() {
     document.title = issues > 0 ? `(${issues}) Adaetum` : "Adaetum";
   }, [report]);
 
+  // Signed out: only the sign-in screen. No sidebar, pages or status, so nothing about the
+  // server shows before someone proves who they are (see Login). The agent answers 401 to
+  // the report request to say so, which is why every agent, host or cluster, must guard it.
+  if (authRequired) {
+    return (
+      <main className="lock-screen" id="main">
+        <Login rejected={token !== ""} onSignedIn={refresh} />
+      </main>
+    );
+  }
+
   return (
     <AssistantProvider>
     <Shell
@@ -47,12 +58,9 @@ export function App() {
       refresh={refresh}
       location={location}
       intervalMs={REFRESH_INTERVAL_MS}
-      locked={authRequired}
       clusterOnly={clusterOnly}
     >
-      {authRequired ? (
-        <Login rejected={token !== ""} onSignedIn={refresh} />
-      ) : location.path === "cluster" ? (
+      {location.path === "cluster" ? (
         // The cluster view comes from the cluster agent, which has no host report, so
         // it must not wait for one. A host report, when there is one, adds "This server".
         <Cluster key={location.path} report={report} location={location} />

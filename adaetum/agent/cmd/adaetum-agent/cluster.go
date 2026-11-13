@@ -232,7 +232,7 @@ func runCluster(args []string) {
 			},
 		}).Register(mux)
 	}
-	registerClusterReport(mux, *sshTarget)
+	registerClusterReport(mux, *sshTarget, guard)
 	// Runs are a host agent's own work (they act on one machine), so the cluster agent has
 	// none; it answers the Runs page with that reason instead of a 404.
 	(&runsapi.API{Reason: "Runs are the work a server's own agent does on that server, so the cluster agent has none. Open a server's agent to see its runs.", RequireUser: guard}).Register(mux)

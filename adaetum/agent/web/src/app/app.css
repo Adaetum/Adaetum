@@ -87,6 +87,9 @@ body { margin: 0; }
 .status-dot.red { background: var(--red-9); }
 
 /* border-box so padding does not push the column past its grid cell. */
+/* The signed-out screen: just the sign-in card, centred, with none of the shell around it. */
+.lock-screen { box-sizing: border-box; min-height: 100vh; padding: var(--space-4); display: flex; align-items: center; justify-content: center; }
+.lock-screen > * { margin: 0 !important; width: 100%; }
 .content { box-sizing: border-box; padding: var(--space-6) var(--space-6) var(--space-9); min-width: 0; max-width: 1400px; }
 
 /* Radix callouts are translucent; a sticky one needs an opaque base or the

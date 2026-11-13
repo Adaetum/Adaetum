@@ -125,6 +125,12 @@ tasks:
     cmds:
       - go run ./cmd/adaetum-setup --apply --replay {{.CLI_ARGS}}
 
+  dev:push:
+    desc: "Build the agent and sign-in service from this checkout and install them on a dev node over SSH: task dev:push -- [host] [agent|auth]"
+    cmds:
+      - cmd: bash ./tasks/scripts/dev-push.sh {{.CLI_ARGS}}
+        platforms: [linux, darwin]
+
   init:dryrun:
     desc: Show read-only plans; pass -- --window to rehearse the full UI without checks or changes
     dir: installer

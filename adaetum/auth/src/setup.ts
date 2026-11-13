@@ -21,6 +21,7 @@ export class SetupCode {
   private code: string | null = null;
   private wrong = 0;
   private lockedUntil = 0;
+  private extra: Buffer | null = null;
 
   constructor(private readonly file: string | null, private readonly now: () => number = Date.now) {}
 
@@ -45,6 +46,18 @@ export class SetupCode {
     return this.code;
   }
 
+  // adopt adds a second code that works beside the generated one. The cluster's pod uses it
+  // for the operator's recovery password (delivered with the break-glass owner), so either
+  // that password or the code in the pod's log claims it. It is held in memory only, never
+  // written beside the generated code, and a short value is ignored: a setup code that is
+  // weak could be guessed at network speed.
+  adopt(code: string): boolean {
+    const chosen = code.trim();
+    if (chosen.length < 16) return false;
+    this.extra = Buffer.from(chosen);
+    return true;
+  }
+
   // check compares in constant time, and after a few wrong tries refuses everything for
   // a minute: a code that can be guessed at network speed is not a code.
   check(presented: string): CodeCheck {
@@ -53,7 +66,8 @@ export class SetupCode {
     // A generated code is upper case and typed by hand, so it is compared case-insensitively.
     // A seeded code (the operator's recovery password, written at first boot) is compared exactly
     // first, since its case matters and must not be loosened.
-    if (matches(presented.trim(), expected) || matches(presented.trim().toUpperCase(), expected)) {
+    const given = presented.trim();
+    if (matches(given, expected) || matches(given.toUpperCase(), expected) || (this.extra !== null && matches(given, this.extra))) {
       this.wrong = 0;
       return "ok";
     }
@@ -74,6 +88,7 @@ export class SetupCode {
   // consume removes the code once it has been used.
   consume(): void {
     this.code = null;
+    this.extra = null;
     if (this.file) rmSync(this.file, { force: true });
   }
 }
