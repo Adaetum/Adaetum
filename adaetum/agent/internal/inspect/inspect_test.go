@@ -3,6 +3,7 @@ package inspect
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -409,15 +410,15 @@ func TestParseWorkloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Workload{
-		{"Deployment", "apps", "web", 3, 2},
-		{"StatefulSet", "apps", "db", 1, 1}, // nil replicas defaults to 1
-		{"DaemonSet", "kube-system", "agent", 2, 2},
+		{Kind: "Deployment", Namespace: "apps", Name: "web", Desired: 3, Ready: 2},
+		{Kind: "StatefulSet", Namespace: "apps", Name: "db", Desired: 1, Ready: 1}, // nil replicas defaults to 1
+		{Kind: "DaemonSet", Namespace: "kube-system", Name: "agent", Desired: 2, Ready: 2},
 	}
 	if len(workloads) != len(want) {
 		t.Fatalf("got %+v", workloads)
 	}
 	for index := range want {
-		if workloads[index] != want[index] {
+		if !reflect.DeepEqual(workloads[index], want[index]) {
 			t.Fatalf("workload %d: got %+v, want %+v", index, workloads[index], want[index])
 		}
 	}
@@ -645,5 +646,20 @@ func TestOnlyReadOnlyProgramsAreAllowedForInspection(t *testing.T) {
 		if allowedCommands[name] {
 			t.Errorf("%s must not be allowed: inspection is read-only and fixed", name)
 		}
+	}
+}
+
+func TestWorkloadsCarryOnlyKnownAcceptedShortfalls(t *testing.T) {
+	data := `{"items":[{"kind":"Deployment","metadata":{"name":"a","namespace":"x","annotations":{"adaetum.io/accepted":" memory-limit, typo ,cpu-request,memory-limit"}},"spec":{},"status":{}},
+	{"kind":"Deployment","metadata":{"name":"b","namespace":"x"},"spec":{},"status":{}}]}`
+	workloads, err := parseWorkloads([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(workloads[0].Accepted, ","); got != "memory-limit,cpu-request" {
+		t.Fatalf("known words only, once each, in order: %q", got)
+	}
+	if workloads[1].Accepted != nil {
+		t.Fatalf("no annotation accepts nothing: %v", workloads[1].Accepted)
 	}
 }

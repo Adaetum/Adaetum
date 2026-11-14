@@ -183,6 +183,9 @@ export interface Workload {
   name: string;
   desired: number;
   ready: number;
+  // Sizing shortfalls the owner accepted (the adaetum.io/accepted annotation): still scored,
+  // shown in gray rather than as problems.
+  accepted?: string[];
 }
 
 export interface Pod {

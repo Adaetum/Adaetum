@@ -49,7 +49,7 @@ export function AppCards({ apps, autoscalers, history, onOpen, hrefOf, empty }: 
                       <Flex gap="3" align="center" mt="1">
                         <Radar sizing={sizing} />
                         <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>
-                          <Text size="2" weight="bold" color={sizing.tone === "gray" ? undefined : sizing.tone}>Setup {sizing.points}/100 · {sizing.grade}</Text>
+                          <Text size="2" weight="bold" color={sizing.tone === "gray" ? undefined : sizing.tone}>Setup {sizing.points}/100 · {sizing.grade}{sizing.acceptedPoints > 0 && <Text size="1" weight="regular" color="gray"> · {sizing.acceptedPoints} accepted</Text>}</Text>
                           <SectionChips sizing={sizing} />
                           {sizing.top[0] && <Text size="1" color={sizing.grade === "Good" ? "gray" : sizing.tone}>{sizing.top[0]}</Text>}
                         </Flex>

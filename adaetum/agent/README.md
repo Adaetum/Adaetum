@@ -114,6 +114,12 @@ appliances without internet access. It is read-only and organized as:
   the assistant the findings and suggested values; it never edits the cluster. Suggestions
   come from one reading, so they add missing values or raise tight ones and never shrink
   (`web/src/lib/sizing.ts` holds the weights).
+  A shortfall that is a choice (a chart that sets no limits, say) can be accepted with the
+  workload's own annotation `adaetum.io/accepted: memory-limit,cpu-request` (also
+  `memory-request`, `memory-ratio`, `over-provisioned`; unknown words are ignored). It still
+  costs points, but is listed in gray as accepted, kept out of the problems and suggestions,
+  and left out of the grade and colour. For a chart that is not ours, add the annotation with
+  a kustomize patch under `pods/`.
   The host agent records usage history (`internal/usagehistory`): every 5 minutes it
   reads each workload's CPU and memory from the metrics server and keeps one row per
   workload per hour (the busiest copy's peak and the average) for 14 days, in

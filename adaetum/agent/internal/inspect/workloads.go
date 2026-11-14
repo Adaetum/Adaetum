@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Workload is a Deployment, StatefulSet, or DaemonSet and how many of its
@@ -14,6 +15,38 @@ type Workload struct {
 	Name      string `json:"name"`
 	Desired   int    `json:"desired"`
 	Ready     int    `json:"ready"`
+	// Accepted names the sizing shortfalls a person has chosen to live with, from the
+	// workload's own adaetum.io/accepted annotation (see acceptedKeys). The score still counts
+	// them; the page shows them in gray instead of as problems.
+	Accepted []string `json:"accepted,omitempty"`
+}
+
+// acceptedAnnotation holds a comma-separated list of acceptedKeys. It lives on the workload
+// (the Deployment, StatefulSet or DaemonSet), so for a chart that is not ours it is added with
+// a kustomize patch in pods/, next to the thing it excuses.
+const acceptedAnnotation = "adaetum.io/accepted"
+
+// acceptedKeys is every shortfall that can be accepted. The page's sizing (web/src/lib/sizing.ts)
+// decides what each one covers; an unknown word is dropped here so a typo accepts nothing.
+var acceptedKeys = map[string]bool{
+	"memory-limit":     true, // no memory limit
+	"memory-request":   true, // no memory request
+	"cpu-request":      true, // no CPU request
+	"memory-ratio":     true, // memory limit far above the request
+	"over-provisioned": true, // reserves much more than it uses
+}
+
+func parseAccepted(annotations map[string]string) []string {
+	var keys []string
+	seen := map[string]bool{}
+	for _, word := range strings.Split(annotations[acceptedAnnotation], ",") {
+		word = strings.TrimSpace(word)
+		if acceptedKeys[word] && !seen[word] {
+			seen[word] = true
+			keys = append(keys, word)
+		}
+	}
+	return keys
 }
 
 // Pod is the subset of pod state needed to tell at a glance what is unhealthy.
@@ -51,8 +84,9 @@ type Pod struct {
 }
 
 type objectMeta struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
+	Name        string            `json:"name"`
+	Namespace   string            `json:"namespace"`
+	Annotations map[string]string `json:"annotations"`
 }
 
 // parseWorkloads reads `kubectl get deployments,statefulsets,daemonsets -o json`.
@@ -79,7 +113,7 @@ func parseWorkloads(data []byte) ([]Workload, error) {
 
 	workloads := []Workload{}
 	for _, item := range list.Items {
-		workload := Workload{Kind: item.Kind, Namespace: item.Metadata.Namespace, Name: item.Metadata.Name}
+		workload := Workload{Kind: item.Kind, Namespace: item.Metadata.Namespace, Name: item.Metadata.Name, Accepted: parseAccepted(item.Metadata.Annotations)}
 		switch item.Kind {
 		case "Deployment", "StatefulSet":
 			workload.Desired = 1

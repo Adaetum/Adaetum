@@ -94,7 +94,7 @@ export function ScorePanel({ sizing }: { sizing: Sizing }) {
       <Flex gap="4" align="center" wrap="wrap">
         <Radar sizing={sizing} size={132} />
         <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 200 }}>
-          <Heading size="6" color={sizing.tone === "gray" ? undefined : sizing.tone}>{sizing.points}/100 · {sizing.grade}</Heading>
+          <Heading size="6" color={sizing.tone === "gray" ? undefined : sizing.tone}>{sizing.points}/100 · {sizing.grade}{sizing.acceptedPoints > 0 && <Text size="2" weight="regular" color="gray"> · {sizing.acceptedPoints} points accepted</Text>}</Heading>
           <Text size="2" color="gray">How well this app is set up: four scores, one for each way it can be wrong.</Text>
           <Text size="1" color="gray">{basisText(sizing)}</Text>
         </Flex>
@@ -109,7 +109,7 @@ export function ScorePanel({ sizing }: { sizing: Sizing }) {
           <Flex key={section.key} direction="column" gap="1">
             <Flex justify="between" align="baseline">
               <Text size="2" weight="bold">{section.label}</Text>
-              <Text size="2" weight="bold" color={section.points === null ? undefined : toneOf(section.points)}>{section.points === null ? "n/a" : `${section.points}/100`}</Text>
+              <Text size="2" weight="bold" color={section.points === null ? undefined : toneOf(section.points + section.accepted)}>{section.points === null ? "n/a" : `${section.points}/100`}</Text>
             </Flex>
             <Text size="1" color="gray">{section.asks}</Text>
             {section.points === null ? (
@@ -121,6 +121,13 @@ export function ScorePanel({ sizing }: { sizing: Sizing }) {
             ) : (
               <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
                 {section.reasons.map((reason) => <li key={reason}><Text size="1">{reason}</Text></li>)}
+              </ul>
+            )}
+            {section.acceptedReasons.length > 0 && (
+              // Accepted on purpose (the workload's adaetum.io/accepted annotation): counted in the
+              // score, but not a problem to chase.
+              <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+                {section.acceptedReasons.map((reason) => <li key={reason}><Text size="1" color="gray">Accepted: {reason}</Text></li>)}
               </ul>
             )}
           </Flex>

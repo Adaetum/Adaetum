@@ -305,6 +305,7 @@ details > summary { cursor: pointer; }
 /* Sizing scorecard: a four-axis shape (Requests, Limits, Fit, Scaling). */
 .radar-ring { fill: none; stroke: var(--gray-a6); stroke-width: 1; }
 .radar-shape { stroke-width: 1.5; fill-opacity: 0.28; }
+.radar-accepted { fill: var(--gray-9); stroke: var(--gray-9); stroke-width: 1; stroke-dasharray: 3 2; fill-opacity: 0.18; }
 .radar-green { fill: var(--green-9); stroke: var(--green-9); }
 .radar-amber { fill: var(--amber-9); stroke: var(--amber-9); }
 .radar-red { fill: var(--red-9); stroke: var(--red-9); }
