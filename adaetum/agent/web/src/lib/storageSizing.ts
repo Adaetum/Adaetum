@@ -1,6 +1,7 @@
 import { Volume } from "../api";
 import { HistoryVolume } from "./historyApi";
 import { formatBytes } from "./format";
+import { DISK_WASTE, materiality } from "./waste";
 
 // "Is this volume the right size?" The two ways to be wrong are not equal. Too small is an
 // outage waiting to happen (writes fail when it fills), so it is scored hard. Too large is
@@ -74,14 +75,18 @@ export function sizeVolume(volume: Volume, recorded?: HistoryVolume): VolumeSizi
     else if (daysToFull < 60) lose(85, `At its recent pace (${formatBytes(growth!)} a day) it will be full ${when}.`);
   }
 
-  // ---- Too large (only worth noting from 2 GiB up, and not if it is filling) ----
+  // ---- Too large (only worth noting when the room a smaller volume would free is material, and not if it is filling) ----
   const projected90 = used + Math.max(growth ?? 0, 0) * 90;
   const lean = niceSize(Math.max(used * 3, projected90 * 1.5, GIB));
   const fillingFast = projected90 >= capacity * 0.5;
   if (capacity >= 2 * GIB && fullness < 0.15 && !fillingFast && lean < capacity) {
     const how = `It holds ${formatBytes(used)} in ${formatBytes(capacity)}`;
     const text = `${how}: that is far more than it needs. It uses no extra disk today, but it counts against what the cluster can schedule.`;
-    lose(fullness < 0.03 ? 50 : fullness < 0.08 ? 65 : 80, text);
+    // How hard to mark it depends on how much room is held back (see waste.ts): a few spare
+    // GiB cost nothing, and the mark grows to its full size as the waste does.
+    const base = fullness < 0.03 ? 50 : fullness < 0.08 ? 65 : 80;
+    const cost = (100 - base) * materiality(capacity - lean, DISK_WASTE);
+    if (cost > 0) lose(Math.round(100 - cost), text);
   }
 
   // ---- Health ----
@@ -105,7 +110,7 @@ export function sizeVolume(volume: Volume, recorded?: HistoryVolume): VolumeSizi
       newBytes: want,
       why: `${formatBytes(want)} leaves room for growth for a while. It can be made bigger in place, and cannot be made smaller afterwards${want < wanted ? "; if it keeps filling at this pace, grow it again later" : ""}.`,
     };
-  } else if (capacity >= 2 * GIB && fullness < 0.15 && !fillingFast && lean < capacity) {
+  } else if (capacity >= 2 * GIB && fullness < 0.15 && !fillingFast && lean < capacity && capacity - lean > DISK_WASTE.floor) {
     result.suggestion = {
       kind: "shrink",
       newBytes: lean,
