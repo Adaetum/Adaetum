@@ -61,7 +61,7 @@ export function AppPage({ card, cards, report, sizing, tab, onTab }: { card: App
         </Flex>
         <Flex gap="2" wrap="wrap">
           {address && <Button asChild size="2" variant="soft"><a href={`https://${address.host}`} target="_blank" rel="noreferrer noopener"><ExternalLink size={14} aria-hidden /> Open {address.host}</a></Button>}
-          {sizing && sizing.points < 100 && (
+          {sizing && !sizing.calculating && sizing.points < 100 && (
             <Button size="2" onClick={() => assistant.ask(fixAsk(card, sizing))}><MessageCircle size={14} aria-hidden /> Fix with assistant</Button>
           )}
         </Flex>

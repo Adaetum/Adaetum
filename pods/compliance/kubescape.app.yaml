@@ -19,7 +19,7 @@ source_helm_values: |
   nodeAgent:
     resources:
       requests:
-        cpu: 600m
+        cpu: 200m
         memory: 384Mi
       limits:
         cpu: null

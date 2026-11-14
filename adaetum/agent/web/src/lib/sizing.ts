@@ -1,7 +1,7 @@
 import { Autoscaler, Pod } from "../api";
 import { AppCard } from "./apps";
 import { formatBytes } from "./format";
-import { History, HistoryWorkload, TRUSTED_HOURS } from "./historyApi";
+import { History, HistoryWorkload, SETTLED_HOURS, TRUSTED_HOURS } from "./historyApi";
 import { StorageSizing, sizeStorage } from "./storageSizing";
 import { Tone } from "./status";
 import { CPU_WASTE, MEMORY_WASTE, materiality } from "./waste";
@@ -84,6 +84,10 @@ export interface Sizing {
   top: string[];
   // False when the metrics server gave nothing, so Fit could not be judged.
   measured: boolean;
+  // Set while the app has been recorded for less than SETTLED_HOURS: the score is not shown yet
+  // because start-up use would make it unrepresentative. Never set when there is no history at all
+  // (then the score is judged on the readings of right now, as before).
+  calculating?: { hoursLeft: number };
 }
 
 export const formatCpu = (millis: number): string => (millis >= 1000 ? `${(millis / 1000).toFixed(1)} cores` : `${Math.round(millis)}m`);
@@ -356,7 +360,8 @@ export function sizingFor(card: AppCard, autoscalers: Autoscaler[], history: His
       .sort((a, b) => b.name.length - a.name.length)[0];
 
   const workloads: WorkloadSizing[] = [];
-  for (const component of card.components) {
+  // Workloads owned by another project (Workload.ignored) are not ours to size, so they never score.
+  for (const component of card.components.filter((item) => !item.ignored)) {
     const pods = running.filter((pod) => owner(pod) === component);
     if (pods.length === 0) continue;
     const scaler = autoscalers.find(
@@ -391,6 +396,8 @@ export function sizingFor(card: AppCard, autoscalers: Autoscaler[], history: His
   const points = Math.round(applicable.reduce((sum, section) => sum + (section.points as number) * section.weight, 0) / totalWeight);
   const acceptedPoints = Math.min(100 - points, Math.round(applicable.reduce((sum, section) => sum + section.accepted * section.weight, 0) / totalWeight));
   const measured = running.some((pod) => pod.hasUsage);
+  const recordedHours = history ? Math.min(...workloads.map((workload) => workload.basis.hours)) : Infinity;
+  const calculating = recordedHours < SETTLED_HOURS ? { hoursLeft: SETTLED_HOURS - recordedHours } : undefined;
   // Grade and tone ignore the accepted shortfall: a person has chosen to live with it.
   const judgedPoints = points + acceptedPoints;
 
@@ -401,5 +408,5 @@ export function sizingFor(card: AppCard, autoscalers: Autoscaler[], history: His
     .slice(0, 2)
     .map((section) => section.reasons[0]);
 
-  return { points, acceptedPoints, grade: gradeOf(judgedPoints), tone: toneOf(judgedPoints), sections, workloads, storage, top, measured };
+  return { points, acceptedPoints, grade: gradeOf(judgedPoints), tone: toneOf(judgedPoints), sections, workloads, storage, top, measured, calculating };
 }

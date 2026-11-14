@@ -664,7 +664,7 @@ func TestWorkloadsCarryOnlyKnownAcceptedShortfalls(t *testing.T) {
 	}
 }
 
-func TestThirdPartyWorkloadsAreAcceptedAndOursAreNot(t *testing.T) {
+func TestThirdPartyWorkloadsAreIgnoredAndOursAreNot(t *testing.T) {
 	data := `{"items":[
 	{"kind":"DaemonSet","metadata":{"name":"longhorn-manager","namespace":"longhorn-system"},"spec":{},"status":{}},
 	{"kind":"Deployment","metadata":{"name":"rancher","namespace":"cattle-system"},"spec":{},"status":{}},
@@ -677,8 +677,8 @@ func TestThirdPartyWorkloadsAreAcceptedAndOursAreNot(t *testing.T) {
 	}
 	want := []bool{true, true, true, false, false}
 	for index, workload := range workloads {
-		if (len(workload.Accepted) > 0) != want[index] {
-			t.Errorf("%s/%s accepted=%v, want accepted=%v", workload.Namespace, workload.Name, workload.Accepted, want[index])
+		if workload.Ignored != want[index] || len(workload.Accepted) > 0 {
+			t.Errorf("%s/%s ignored=%v accepted=%v, want ignored=%v and nothing accepted", workload.Namespace, workload.Name, workload.Ignored, workload.Accepted, want[index])
 		}
 	}
 }

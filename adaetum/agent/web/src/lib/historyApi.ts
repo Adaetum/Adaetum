@@ -65,6 +65,10 @@ export const HISTORY_DAYS = 7;
 // History must span at least this many hours before it is trusted to say a value can be
 // made smaller: a shorter record can still catch an app on a quiet day.
 export const TRUSTED_HOURS = 48;
+// Until an app has been recorded for this long its score is "calculating": start-up work (loading
+// caches, replaying logs, first scans) makes the first hour or two of use unrepresentative, and a
+// score judged on it would flip as soon as the app settles.
+export const SETTLED_HOURS = 2;
 
 async function get<T>(path: string): Promise<T | null> {
   try {

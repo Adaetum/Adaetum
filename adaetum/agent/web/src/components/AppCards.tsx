@@ -45,7 +45,10 @@ export function AppCards({ apps, autoscalers, history, onOpen, hrefOf, empty }: 
                     <Text size="2" color={item.healthy ? "gray" : "red"}>
                       {item.healthy ? (item.instances.length === 0 && item.volumes.length === 0 ? "Nothing is running right now." : "Running normally.") : item.problem}
                     </Text>
-                    {sizing && (
+                    {sizing?.calculating && (
+                      <Text size="1" color="gray" title="Use right after start-up is not typical, so the score waits for the app to settle.">Calculating setup score… about {Math.ceil(sizing.calculating.hoursLeft * 60)} min left</Text>
+                    )}
+                    {sizing && !sizing.calculating && (
                       <Flex gap="3" align="center" mt="1">
                         <Radar sizing={sizing} />
                         <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>

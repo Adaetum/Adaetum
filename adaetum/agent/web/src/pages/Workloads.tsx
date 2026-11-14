@@ -56,7 +56,7 @@ export function Workloads({ report, location, refresh }: { report: Report; locat
       // The platform's own apps stay out of the way, unless one needs attention.
       .filter((card) => showSystem || !card.system || !card.healthy)
       .filter((card) => (!problemsOnly || !card.healthy) && (!needle || card.name.toLowerCase().includes(needle)))
-      .map((card) => ({ card, score: sizingFor(card, autoscalers, history)?.points ?? 101 }));
+      .map((card) => ({ card, score: (() => { const sized = sizingFor(card, autoscalers, history); return sized && !sized.calculating ? sized.points : 101; })() }));
     // Broken first, then the worst set-up first: the top of the page is where to look.
     return scored.sort((a, b) => Number(a.card.healthy) - Number(b.card.healthy) || a.score - b.score || a.card.name.localeCompare(b.card.name)).map((item) => item.card);
   }, [cards, showSystem, problemsOnly, needle, autoscalers, history]);

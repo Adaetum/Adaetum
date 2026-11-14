@@ -1491,6 +1491,9 @@ metadata:
   namespace: gitea
   annotations:
     secret.reloader.stakater.com/reload: gitea-actions-runner
+    # CI jobs run inside the docker container and use far more memory than the runner idles at,
+    # so a limit well above the request is deliberate, not a sizing mistake.
+    adaetum.io/accepted: memory-ratio,over-provisioned
 spec:
   replicas: 1
   selector:
@@ -1514,6 +1517,13 @@ spec:
           image: ${dind_image}
           securityContext:
             privileged: true
+          # Idle it uses ~55Mi; builds are what size the limit. No CPU limit (builds should not throttle).
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 2Gi
           env:
             - name: DOCKER_TLS_CERTDIR
               value: ""
@@ -1524,6 +1534,12 @@ spec:
               mountPath: /var/lib/docker
         - name: runner
           image: ${runner_image}
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
           env:
             - name: DOCKER_HOST
               value: unix:///var/run/docker.sock

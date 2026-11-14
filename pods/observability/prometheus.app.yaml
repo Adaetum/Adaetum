@@ -77,6 +77,15 @@ source_helm_values: |
         cpu: 10m
       limits:
         memory: 128Mi
+    # The config-reloader sidecar the operator adds to Prometheus and Alertmanager has no
+    # resources by default, which leaves those pods without a complete request or limit.
+    prometheusConfigReloader:
+      resources:
+        requests:
+          memory: 32Mi
+          cpu: 10m
+        limits:
+          memory: 64Mi
 
   kube-state-metrics:
     resources:

@@ -186,6 +186,8 @@ export interface Workload {
   // Sizing shortfalls the owner accepted (the adaetum.io/accepted annotation): still scored,
   // shown in gray rather than as problems.
   accepted?: string[];
+  // Installed by Adaetum but owned by another project (RKE2, Rancher, Longhorn...): never scored.
+  ignored?: boolean;
 }
 
 export interface Pod {

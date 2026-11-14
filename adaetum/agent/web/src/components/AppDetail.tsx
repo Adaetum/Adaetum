@@ -89,6 +89,13 @@ const amounts = (value: Amounts) => `${cpu(value.cpuMillis)} CPU · ${memory(val
 // (Workloads), so both always say the same thing.
 
 export function ScorePanel({ sizing }: { sizing: Sizing }) {
+  if (sizing.calculating) {
+    return (
+      <Callout.Root color="gray" size="1"><Callout.Icon><Info size={14} /></Callout.Icon>
+        <Callout.Text>Calculating the score. Use in the first hours after start-up is not typical, so this app is scored once it has been recorded for a while (about {Math.ceil(sizing.calculating.hoursLeft * 60)} more minutes).</Callout.Text>
+      </Callout.Root>
+    );
+  }
   return (
     <Flex direction="column" gap="4">
       <Flex gap="4" align="center" wrap="wrap">
