@@ -95,6 +95,13 @@ type Reason = { cost: number; text: string };
 const pct = (ratio: number) => `${Math.round(ratio * 100)}%`;
 const roundUp = (value: number, step: number) => Math.ceil(value / step) * step;
 const MI = 1 << 20;
+// Memory or CPU reserved under these is never called over-provisioned: the room that could be
+// handed back is too small to matter, and a request that small is the sensible floor for a tiny
+// sidecar (the suggestions below never go lower than about 32 MiB or 10m anyway). It only
+// silences the "reserves far more than it uses" side; being at or over a limit or request is
+// still flagged at any size.
+const SMALL_MEMORY = 64 * MI;
+const SMALL_CPU = 50; // millicores
 
 // Share of copies with a value, squared: half set up is worth a quarter.
 const credit = (values: (number | undefined)[]) => {
@@ -194,17 +201,17 @@ function sizeWorkload(name: string, kind: string, pods: Pod[], autoscaler: Autos
     const ratioOf = (used?: number, set?: number) => (used !== undefined && set ? used / set : null);
     // Memory against its limit: near it means being killed; far below means reserved for nothing.
     part(30, memLimit, ratioOf(usage.memoryBytes, limit.memoryBytes),
-      (r) => (r >= 0.9 ? 0 : r >= 0.8 ? 0.3 : r >= 0.7 ? 0.6 : r < 0.05 ? 0.3 : r < 0.15 ? 0.6 : r < 0.3 ? 0.85 : 1),
+      (r) => (r >= 0.9 ? 0 : r >= 0.8 ? 0.3 : r >= 0.7 ? 0.6 : limit.memoryBytes! < SMALL_MEMORY ? 1 : r < 0.05 ? 0.3 : r < 0.15 ? 0.6 : r < 0.3 ? 0.85 : 1),
       (r) => r >= 0.9 ? `Memory ${basis.kind === "history" ? "has reached" : "is at"} ${pct(r)} of its limit: it may be stopped and restarted.`
         : r >= 0.7 ? `Getting close to its memory limit (${pct(r)} used).`
         : `The memory limit (${formatMemory(limit.memoryBytes!)}) is far above ${basis.kind === "history" ? "the most it has used" : "what it uses"} (${formatMemory(usage.memoryBytes!)}).`);
     // Memory against its request: using more than reserved makes it first to be evicted.
     part(25, memRequest, ratioOf(typical?.memoryBytes, request.memoryBytes),
-      (r) => (r > 1.2 ? 0 : r > 1 ? 0.5 : r >= 0.6 ? 1 : r >= 0.3 ? 0.8 : r >= 0.15 ? 0.5 : 0.25),
+      (r) => (r > 1.2 ? 0 : r > 1 ? 0.5 : request.memoryBytes! < SMALL_MEMORY ? 1 : r >= 0.6 ? 1 : r >= 0.3 ? 0.8 : r >= 0.15 ? 0.5 : 0.25),
       (r) => r > 1 ? `It usually uses ${pct(r)} of the memory it reserved: it is first to be evicted when the server is short.`
         : `It reserves ${formatMemory(request.memoryBytes!)} but usually uses ${formatMemory(typical!.memoryBytes!)}: that room is wasted for everything else.`);
     part(25, cpuRequest, ratioOf(typical?.cpuMillis, request.cpuMillis),
-      (r) => (r > 1.5 ? 0.2 : r > 1 ? 0.6 : r >= 0.3 ? 1 : r >= 0.1 ? 0.7 : 0.5),
+      (r) => (r > 1.5 ? 0.2 : r > 1 ? 0.6 : request.cpuMillis! < SMALL_CPU ? 1 : r >= 0.3 ? 1 : r >= 0.1 ? 0.7 : 0.5),
       (r) => r > 1 ? `It usually uses ${pct(r)} of the CPU it reserved: it is relying on spare capacity.`
         : `It reserves ${formatCpu(request.cpuMillis!)} of CPU but usually uses ${formatCpu(typical!.cpuMillis!)}.`);
     part(20, cpuLimit, ratioOf(usage.cpuMillis, limit.cpuMillis),
@@ -253,20 +260,20 @@ function sizeWorkload(name: string, kind: string, pods: Pod[], autoscaler: Autos
     // only with a trusted record: one reading can catch an app idle (a media server only
     // works hard while transcoding).
     const missingOrTight = (have: number | undefined, used: number, want: number, tightAt: number) => (!have || used >= have * tightAt ? want : undefined);
-    const generous = (have: number | undefined, want: number, factor: number) => (have && basis.trusted && have > want * factor ? want : undefined);
-    suggestion.request.memoryBytes = missingOrTight(request.memoryBytes, typical.memoryBytes, memRequestWant, 1) ?? generous(request.memoryBytes, memRequestWant, 1.6);
-    suggestion.limit.memoryBytes = missingOrTight(limit.memoryBytes, usage.memoryBytes, memLimitWant, 0.7) ?? generous(limit.memoryBytes, memLimitWant, 2);
-    suggestion.request.cpuMillis = missingOrTight(request.cpuMillis, typical.cpuMillis, cpuRequestWant, 1) ?? generous(request.cpuMillis, cpuRequestWant, 2);
-    suggestion.limit.cpuMillis = missingOrTight(limit.cpuMillis, usage.cpuMillis, cpuLimitWant, 0.7) ?? generous(limit.cpuMillis, cpuLimitWant, 3);
+    const generous = (have: number | undefined, want: number, factor: number, floor = 0) => (have && have >= floor && basis.trusted && have > want * factor ? want : undefined);
+    suggestion.request.memoryBytes = missingOrTight(request.memoryBytes, typical.memoryBytes, memRequestWant, 1) ?? generous(request.memoryBytes, memRequestWant, 1.6, SMALL_MEMORY);
+    suggestion.limit.memoryBytes = missingOrTight(limit.memoryBytes, usage.memoryBytes, memLimitWant, 0.7) ?? generous(limit.memoryBytes, memLimitWant, 2, SMALL_MEMORY);
+    suggestion.request.cpuMillis = missingOrTight(request.cpuMillis, typical.cpuMillis, cpuRequestWant, 1) ?? generous(request.cpuMillis, cpuRequestWant, 2, SMALL_CPU);
+    suggestion.limit.cpuMillis = missingOrTight(limit.cpuMillis, usage.cpuMillis, cpuLimitWant, 0.7) ?? generous(limit.cpuMillis, cpuLimitWant, 3, SMALL_CPU);
     suggestion.note.push(
       basis.kind === "history"
         ? `Worked out from ${basis.hours} hours of recorded use (${basis.trusted ? "enough to trust" : "not yet enough to shrink anything"}): memory request just above the usual use, limit above the highest it reached; CPU request above the usual use.`
         : "Worked out from one reading of right now: it only adds missing values or raises tight ones.",
     );
     const stillGenerous = !basis.trusted && [
-      request.memoryBytes && request.memoryBytes > memRequestWant * 1.6,
-      limit.memoryBytes && limit.memoryBytes > memLimitWant * 2,
-      request.cpuMillis && request.cpuMillis > cpuRequestWant * 2,
+      request.memoryBytes && request.memoryBytes >= SMALL_MEMORY && request.memoryBytes > memRequestWant * 1.6,
+      limit.memoryBytes && limit.memoryBytes >= SMALL_MEMORY && limit.memoryBytes > memLimitWant * 2,
+      request.cpuMillis && request.cpuMillis >= SMALL_CPU && request.cpuMillis > cpuRequestWant * 2,
     ].some(Boolean);
     if (stillGenerous) suggestion.note.push("Some values look generous, but shrinking them needs about two days of recorded use: one reading can catch an app idle.");
   }

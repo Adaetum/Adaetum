@@ -58,6 +58,9 @@ tasks:
         printf '  %stask init:clean%s    Open the setup window ignoring saved credentials and values\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dev%s      Like init, but the ISO carries an agent built from this checkout\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dev:silent%s init:dev with no window, replaying saved credentials\n' "${c_task}" "${c_reset}"
+        printf '  %stask dev:push%s      Build the host agent and sign-in service from this checkout and install them on a dev node over SSH\n' "${c_task}" "${c_reset}"
+        printf '  %stask dev:push:pod%s  Build the cluster agent images from this checkout and roll the dev node pod onto them (pauses Argo CD)\n' "${c_task}" "${c_reset}"
+        printf '  %stask dev:push:all%s  Both of the above: update the host and the pod from this checkout\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun%s   Show every setup step and what it would do, changing nothing\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun -- --window%s  Rehearse the full setup flow in the guided window\n' "${c_task}" "${c_reset}"
         printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
@@ -126,9 +129,23 @@ tasks:
       - go run ./cmd/adaetum-setup --apply --replay {{.CLI_ARGS}}
 
   dev:push:
-    desc: "Build the agent and sign-in service from this checkout and install them on a dev node over SSH: task dev:push -- [host] [agent|auth]"
+    desc: "Build the host agent and sign-in service from this checkout and install them on a dev node over SSH: task dev:push -- [host] [agent|auth]"
     cmds:
       - cmd: bash ./tasks/scripts/dev-push.sh {{.CLI_ARGS}}
+        platforms: [linux, darwin]
+
+  dev:push:pod:
+    desc: "Build the cluster agent and sign-in images from this checkout and roll the pod onto them (pauses Argo CD): task dev:push:pod -- [host]"
+    cmds:
+      - cmd: bash ./tasks/scripts/dev-push.sh {{.CLI_ARGS}} pod
+        platforms: [linux, darwin]
+
+  dev:push:all:
+    desc: "dev:push then dev:push:pod: update the host and the pod from this checkout: task dev:push:all -- [host]"
+    cmds:
+      - cmd: bash ./tasks/scripts/dev-push.sh {{.CLI_ARGS}}
+        platforms: [linux, darwin]
+      - cmd: bash ./tasks/scripts/dev-push.sh {{.CLI_ARGS}} pod
         platforms: [linux, darwin]
 
   init:dryrun:

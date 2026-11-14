@@ -274,7 +274,12 @@ To try a change on a development node without rebuilding the ISO, run
 and the sign-in service from this checkout, copies them to the node over SSH, restarts
 both services and reports whether they came up. With no host it uses the one online
 `node-*` machine on your tailnet. It replaces those two binaries only; the token, accounts
-and certificate stay. It is for development nodes: pods are not pushed this way.
+and certificate stay. It is for development nodes.
+
+`task dev:push:pod -- [host]` does the same for the pod: it builds the cluster agent and
+sign-in images (needs Docker), loads them into the node and rolls the pod onto them. That
+pauses Argo CD, which would otherwise restore the pinned release, and prints how to resume
+it. `task dev:push:all -- [host]` runs both.
 
 ## Testing approach
 

@@ -3,18 +3,24 @@
 # on a running development node over SSH, so a change can be tried in about a minute instead
 # of rebuilding the ISO and reinstalling.
 #
-# Usage: dev-push.sh [host] [agent|auth]
+# Usage: dev-push.sh [host] [agent|auth|pod]
 #
 #   host   the node's name (for example node-54273.tailb05af2.ts.net). Left out, the one
 #          node on your tailnet whose name starts with "node-" is used.
 #   agent  push only the host agent;  auth  push only the sign-in service. Default: both.
+#   pod    instead, build the cluster agent and sign-in images from this checkout, load them
+#          into the node's container runtime and roll the cluster agent pod onto them. This
+#          pauses Argo CD's application controller, because it would put the released images
+#          straight back; restore it with the command printed at the end (the pod then returns
+#          to the pinned release). Needs Docker on this machine.
 #
 # Environment: ADAETUM_DEV_USER (default "ansible", the user Tailscale SSH lets in).
 #
 # This replaces two binaries and restarts their services, nothing else: the token, the
 # accounts, the certificate and every other file on the node are left as they are. It is for
-# a development node. Pods are not pushed this way (they come from the private repository
-# or a release), and a production host should be updated with the host-agent playbook.
+# a development node. Pods come from the private repository or a release, so the host words
+# do not touch them; use "pod" for that. A production host should be updated with the
+# host-agent playbook.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -22,15 +28,18 @@ user="${ADAETUM_DEV_USER:-ansible}"
 host=""
 want_agent=1
 want_auth=1
+want_pod=0
 for arg in "$@"; do
   case "${arg}" in
     agent) want_auth=0 ;;
     auth) want_agent=0 ;;
+    pod) want_pod=1 ;;
     -*) echo "unknown option: ${arg}" >&2; exit 2 ;;
     *) [ -z "${host}" ] || { echo "only one host can be given (got ${host} and ${arg})" >&2; exit 2; }; host="${arg}" ;;
   esac
 done
-if [ "${want_agent}" = 0 ] && [ "${want_auth}" = 0 ]; then
+if [ "${want_pod}" = 1 ]; then want_agent=0; want_auth=0; fi
+if [ "${want_pod}" = 0 ] && [ "${want_agent}" = 0 ] && [ "${want_auth}" = 0 ]; then
   echo "choose agent or auth, not both words; leave both out to push both" >&2
   exit 2
 fi
@@ -65,6 +74,34 @@ case "$(remote uname -m)" in
   aarch64|arm64) arch=arm64 ;;
   *) echo "unsupported processor on the node" >&2; exit 1 ;;
 esac
+
+if [ "${want_pod}" = 1 ]; then
+  command -v docker >/dev/null 2>&1 || { echo "pod needs Docker to build the images" >&2; exit 1; }
+  # A new tag every time, so the rollout always sees a change.
+  tag="dev-$(git -C "${root}" rev-parse --short HEAD)-$(date +%s)"
+  work="${root}/dist/dev-push"
+  mkdir -p "${work}"
+  for component in agent auth; do
+    docker build -q --platform "linux/${arch}" --build-arg "ADAETUM_VERSION=${tag}" -t "adaetum-${component}:${tag}" "${root}/adaetum/${component}" >/dev/null
+  done
+  echo "[dev-push] loading adaetum-agent and adaetum-auth:${tag} into the node's container runtime"
+  docker save "adaetum-agent:${tag}" "adaetum-auth:${tag}" | gzip \
+    | remote 'zcat | sudo /var/lib/rancher/rke2/bin/ctr --address /run/k3s/containerd/containerd.sock -n k8s.io images import - >/dev/null'
+  remote "sudo bash -s" -- "${tag}" <<'PODREMOTE'
+set -euo pipefail
+tag="$1"
+k() { /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml "$@"; }
+# Argo CD would reset the pod to the pinned release within seconds.
+k -n argocd scale statefulset argocd-application-controller --replicas=0
+agent="docker.io/library/adaetum-agent:${tag}"
+auth="docker.io/library/adaetum-auth:${tag}"
+k -n adaetum set image deploy/adaetum-cluster-agent "agent=${agent}" "initialize-credentials=${agent}" "auth=${auth}"
+k -n adaetum rollout status deploy/adaetum-cluster-agent --timeout=180s
+PODREMOTE
+  echo "[dev-push] cluster agent pod is running this checkout. Argo CD is paused; to put the pinned release back:"
+  echo "  ssh ${user}@${host} 'sudo /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml -n argocd scale statefulset argocd-application-controller --replicas=1'"
+  exit 0
+fi
 
 # The service is only pushed where it is installed: production media has none, and a
 # unit that is not there cannot be restarted.
