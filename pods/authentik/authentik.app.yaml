@@ -21,6 +21,12 @@ source_helm_values: |
         release: rancher-monitoring
 
   server:
+    resources:
+      requests:
+        memory: 640Mi
+        cpu: 100m
+      limits:
+        memory: 1Gi
     metrics:
       enabled: true
       serviceMonitor:
@@ -98,6 +104,12 @@ source_helm_values: |
       enabled: false
 
   worker:
+    resources:
+      requests:
+        memory: 384Mi
+        cpu: 100m
+      limits:
+        memory: 768Mi
     metrics:
       enabled: true
       serviceMonitor:
@@ -147,6 +159,13 @@ source_helm_values: |
 
   postgresql:
     enabled: true
+    primary:
+      resources:
+        requests:
+          memory: 192Mi
+          cpu: 50m
+        limits:
+          memory: 384Mi
     auth:
       existingSecret: authentik-postgresql
 destination_namespace: authentik

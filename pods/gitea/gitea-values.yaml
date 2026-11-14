@@ -7,6 +7,13 @@ podSecurityContext:
 strategy:
   type: Recreate
 
+resources:
+  requests:
+    memory: 192Mi
+    cpu: 25m
+  limits:
+    memory: 384Mi
+
 persistence:
   enabled: true
   accessModes:

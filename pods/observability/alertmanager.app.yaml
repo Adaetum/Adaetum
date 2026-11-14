@@ -5,6 +5,12 @@ source_repo_url: https://prometheus-community.github.io/helm-charts
 source_chart: alertmanager
 source_target_revision: "1.40.3"
 source_helm_values: |
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 10m
+    limits:
+      memory: 128Mi
   persistence:
     enabled: true
     storageClass: longhorn

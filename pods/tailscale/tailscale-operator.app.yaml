@@ -21,6 +21,12 @@ source_helm_values: |
   operatorConfig:
     defaultTags:
       - tag:k8s-operator
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 10m
+      limits:
+        memory: 128Mi
 
   proxyConfig:
     defaultTags: tag:k8s

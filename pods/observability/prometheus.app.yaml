@@ -70,8 +70,38 @@ source_helm_values: |
   kubeScheduler:
     enabled: false
 
+  prometheusOperator:
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 10m
+      limits:
+        memory: 128Mi
+
+  kube-state-metrics:
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 10m
+      limits:
+        memory: 128Mi
+
+  prometheus-node-exporter:
+    resources:
+      requests:
+        memory: 32Mi
+        cpu: 10m
+      limits:
+        memory: 64Mi
+
   prometheus:
     prometheusSpec:
+      resources:
+        requests:
+          memory: 1Gi
+          cpu: 100m
+        limits:
+          memory: 2Gi
       # Application charts own their monitor and rule resources. Discover them
       # cluster-wide instead of requiring this Helm release's label.
       serviceMonitorSelectorNilUsesHelmValues: false

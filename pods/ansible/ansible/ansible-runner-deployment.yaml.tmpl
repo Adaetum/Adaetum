@@ -24,6 +24,12 @@ spec:
         - name: ansible-runner
           image: __ANSIBLE_RUNNER_IMAGE__
           imagePullPolicy: Always
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 10m
+            limits:
+              memory: 256Mi
           env:
             - name: CRON_SCHEDULE
               value: "*/10 * * * *"

@@ -24,6 +24,12 @@ spec:
         - name: ansible-runner
           image: registry.adaetum.invalid/gitea-admin/ansible-runner:build-33d4e9a30497b504
           imagePullPolicy: Always
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 10m
+            limits:
+              memory: 256Mi
           env:
             - name: CRON_SCHEDULE
               value: "*/10 * * * *"

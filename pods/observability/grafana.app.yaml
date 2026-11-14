@@ -6,6 +6,13 @@ source_chart: grafana
 # Rotation relies on this chart's command override and persistent-volume shape.
 source_target_revision: "10.5.15"
 source_helm_values: |
+  resources:
+    requests:
+      memory: 192Mi
+      cpu: 25m
+    limits:
+      memory: 384Mi
+
   serviceMonitor:
     enabled: true
     labels:

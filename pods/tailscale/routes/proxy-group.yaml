@@ -9,3 +9,22 @@ spec:
   replicas: 2
   tags:
     - tag:k8s
+  proxyClass: adaetum-proxy
+---
+# What each proxy pod reserves. The operator creates them with a 1 MiB request, so the
+# scheduler thinks they are free while each uses about 40 MiB. A CPU request but no CPU
+# limit: a limit would only throttle a burst of traffic.
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyClass
+metadata:
+  name: adaetum-proxy
+spec:
+  statefulSet:
+    pod:
+      tailscaleContainer:
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 10m
+          limits:
+            memory: 128Mi
