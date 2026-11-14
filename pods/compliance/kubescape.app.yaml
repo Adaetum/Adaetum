@@ -12,6 +12,28 @@ source_helm_values: |
   # path for continuous scan results and UI integrations.
   clusterName: cluster
 
+  # Sized from observed use. The chart's defaults allow memory limits 2.5-8 times the request
+  # and cap CPU, which would throttle a scan; a CPU request but no CPU limit, and a memory limit
+  # of about twice the request. (null removes the chart's CPU limit.) kubevuln keeps the chart's
+  # sizing until usage history shows whether its large reservation is needed.
+  nodeAgent:
+    resources:
+      requests:
+        cpu: 600m
+        memory: 384Mi
+      limits:
+        cpu: null
+        memory: 768Mi
+
+  storage:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: null
+        memory: 512Mi
+
   capabilities:
     configurationScan: enable
     continuousScan: enable
@@ -29,6 +51,13 @@ source_helm_values: |
     vexGeneration: disable
 
   kubescape:
+    resources:
+      requests:
+        cpu: 400m
+        memory: 400Mi
+      limits:
+        cpu: null
+        memory: 800Mi
     serviceMonitor:
       # Chart 1.40.3 also applies these labels to the dedicated exporter's
       # ServiceMonitor. Do not scrape the scanner's /v1/metrics endpoint: it

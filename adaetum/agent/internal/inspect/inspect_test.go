@@ -663,3 +663,22 @@ func TestWorkloadsCarryOnlyKnownAcceptedShortfalls(t *testing.T) {
 		t.Fatalf("no annotation accepts nothing: %v", workloads[1].Accepted)
 	}
 }
+
+func TestThirdPartyWorkloadsAreAcceptedAndOursAreNot(t *testing.T) {
+	data := `{"items":[
+	{"kind":"DaemonSet","metadata":{"name":"longhorn-manager","namespace":"longhorn-system"},"spec":{},"status":{}},
+	{"kind":"Deployment","metadata":{"name":"rancher","namespace":"cattle-system"},"spec":{},"status":{}},
+	{"kind":"Deployment","metadata":{"name":"rke2-coredns-rke2-coredns","namespace":"kube-system"},"spec":{},"status":{}},
+	{"kind":"DaemonSet","metadata":{"name":"kube-vip-ds","namespace":"kube-system"},"spec":{},"status":{}},
+	{"kind":"Deployment","metadata":{"name":"grafana","namespace":"observability"},"spec":{},"status":{}}]}`
+	workloads, err := parseWorkloads([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []bool{true, true, true, false, false}
+	for index, workload := range workloads {
+		if (len(workload.Accepted) > 0) != want[index] {
+			t.Errorf("%s/%s accepted=%v, want accepted=%v", workload.Namespace, workload.Name, workload.Accepted, want[index])
+		}
+	}
+}

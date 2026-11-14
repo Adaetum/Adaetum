@@ -163,14 +163,6 @@
     # OpenBao Redis ownership and Reloader annotations depend on this chart
     # contract; upgrades require a rendered-secret review.
     argocd_chart_version: "10.1.4"
-    # What the Argo CD pods that set nothing reserve, from observed use (15-52 MiB) at about twice it.
-    # The repo server already sets its own, and the application controller is left to the chart.
-    argocd_resource_args: >-
-      --set server.resources.requests.memory=64Mi --set server.resources.requests.cpu=10m --set server.resources.limits.memory=256Mi
-      --set applicationSet.resources.requests.memory=96Mi --set applicationSet.resources.requests.cpu=10m --set applicationSet.resources.limits.memory=256Mi
-      --set notifications.resources.requests.memory=64Mi --set notifications.resources.requests.cpu=10m --set notifications.resources.limits.memory=192Mi
-      --set dex.resources.requests.memory=48Mi --set dex.resources.requests.cpu=10m --set dex.resources.limits.memory=128Mi
-      --set redis.resources.requests.memory=32Mi --set redis.resources.requests.cpu=10m --set redis.resources.limits.memory=128Mi
     argocd_enabled: "{{ (lookup('ansible.builtin.env', 'ARGOCD_ENABLED') | default('false', true)) | bool }}"
     cloudflared_namespace: "cloudflared"
     cloudflared_image: "cloudflare/cloudflared:2026.7.2@sha256:4f6655284ab3d252b7f28fedb19fe6c8fc82ee5b1295c20ac74d475e5398a52d"
@@ -1920,7 +1912,6 @@
           --set-string configs.secret.extra.server\\.secretkey="{{ argocd_server_secret_key }}" \
           --set configs.secret.argocdServerAdminPassword="{{ argocd_htpasswd.stdout | replace(':', '') }}" \
           --set redisSecretInit.enabled=false \
-          {{ argocd_resource_args }} \
           --set-string 'global.deploymentAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-redis' \
           --set-string 'global.statefulsetAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-redis' \
           --set-string 'server.deploymentAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-secret\,argocd-redis'
@@ -1952,7 +1943,6 @@
           --set-string configs.secret.extra.server\\.secretkey="{{ argocd_server_secret_key }}" \
           --set configs.secret.argocdServerAdminPassword="{{ argocd_htpasswd.stdout | replace(':', '') }}" \
           --set redisSecretInit.enabled=false \
-          {{ argocd_resource_args }} \
           --set-string 'global.deploymentAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-redis' \
           --set-string 'global.statefulsetAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-redis' \
           --set-string 'server.deploymentAnnotations.secret\\.reloader\\.stakater\\.com/reload=argocd-secret\,argocd-redis'

@@ -161,27 +161,39 @@ function sizeWorkload(name: string, kind: string, pods: Pod[], autoscaler: Autos
 
   // ---- Requests (100): memory set 50, CPU set 38, memory limit against the request 12 ----
   const requests: Reason[] = [];
-  let requestPoints = 50 * memRequest.credit + 38 * cpuRequest.credit;
+  // A missing request matters in proportion to how much the workload really uses (see waste.ts):
+  // the scheduler cannot go far wrong placing something that needs 20 MiB, and badly wrong placing
+  // something that needs 600. With no usage figure there is nothing to scale by, so it counts in full.
+  const requestWeight = {
+    memory: typical?.memoryBytes === undefined ? 1 : materiality(typical.memoryBytes, MEMORY_WASTE),
+    cpu: typical?.cpuMillis === undefined ? 1 : materiality(typical.cpuMillis, CPU_WASTE),
+  };
+  let requestPoints = 0;
   for (const [what, c, weight] of [["memory", memRequest, 50], ["cpu", cpuRequest, 38]] as const) {
-    if (c.share === 0) {
-      requests.push({
-        cost: weight,
-        key: what === "memory" ? "memory-request" : "cpu-request",
-        text: what === "memory" ? "No memory request: the scheduler can pack it onto a server without room for it." : "No CPU request: it gets only leftover CPU, and an autoscaler can't measure it.",
-      });
-    } else if (c.share < 1) {
-      requests.push({ cost: weight * (1 - c.credit), key: what === "memory" ? "memory-request" : "cpu-request", text: `Some copies have no ${noun(what)} request.` });
-    }
+    const cost = weight * (1 - c.credit) * requestWeight[what];
+    requestPoints += weight - cost;
+    if (cost <= 0) continue;
+    requests.push({
+      cost,
+      key: what === "memory" ? "memory-request" : "cpu-request",
+      text: c.share < 1 && c.share > 0
+        ? `Some copies have no ${noun(what)} request.`
+        : what === "memory" ? "No memory request: the scheduler can pack it onto a server without room for it." : "No CPU request: it gets only leftover CPU, and an autoscaler can't measure it.",
+    });
   }
   if (request.memoryBytes && limit.memoryBytes) {
     const ratio = limit.memoryBytes / request.memoryBytes;
-    const earned = ratio <= 1.5 ? 12 : ratio <= 2 ? 7 : ratio <= 4 ? 3 : 0;
+    // A limit up to twice the request is ordinary headroom; the points step down from there.
+    const earned = ratio <= 2 ? 12 : ratio <= 3 ? 8 : ratio <= 4 ? 4 : 0;
     requestPoints += earned;
     if (earned < 12) {
       requests.push({ cost: 12 - earned, key: "memory-ratio", text: `The memory limit is ${ratio.toFixed(1)}× the request: it can use far more than was reserved, so the server may run out of memory.` });
     }
   } else {
-    requests.push({ cost: 12, key: request.memoryBytes ? "memory-limit" : "memory-request", text: "Memory request and limit aren't both set, so how they relate can't be judged." });
+    // Missing request: as small as that request's own cost. Missing limit: in full.
+    const weight = request.memoryBytes ? 1 : requestWeight.memory;
+    requestPoints += 12 * (1 - weight);
+    if (weight > 0) requests.push({ cost: 12 * weight, key: request.memoryBytes ? "memory-limit" : "memory-request", text: "Memory request and limit aren't both set, so how they relate can't be judged." });
   }
 
   // ---- Fit (100): memory vs limit 30, memory vs request 25, CPU vs request 25, CPU vs limit 20 (only if one is set) ----
@@ -207,6 +219,9 @@ function sizeWorkload(name: string, kind: string, pods: Pod[], autoscaler: Autos
       const text = say(ratio);
       if (f < 1 && text) fit.push({ cost: weight * c.credit * (1 - f), key: waste && ratio < waste.below ? "over-provisioned" : undefined, text });
     };
+    // A request that is not set is not held against Fit either, by the same scaling as above.
+    if (memRequest.credit === 0) notApplicable += 25 * (1 - requestWeight.memory);
+    if (cpuRequest.credit === 0) notApplicable += 25 * (1 - requestWeight.cpu);
     if (memLimit.credit === 0 && accepted.has("memory-limit")) fitUnsetAccepted += 30;
     if (memRequest.credit === 0 && accepted.has("memory-request")) fitUnsetAccepted += 25;
     if (cpuRequest.credit === 0 && accepted.has("cpu-request")) fitUnsetAccepted += 25;
@@ -269,8 +284,10 @@ function sizeWorkload(name: string, kind: string, pods: Pod[], autoscaler: Autos
     // From one reading: use + a margin, which is a rougher guess.
     const memRequestWant = Math.max(32 * MI, roundUp((basis.kind === "history" ? Math.max(typical.memoryBytes * 1.1, (recorded?.memoryP95Peak ?? 0) * 1.05) : usage.memoryBytes * 1.25), 16 * MI));
     const memLimitWant = roundUp(Math.max(memRequestWant * 1.5, basis.kind === "history" ? usage.memoryBytes * 1.3 : 0), 16 * MI);
-    const cpuRequestWant = Math.max(10, roundUp(typical.cpuMillis * 1.5, 10));
-    const cpuLimitWant = Math.max(100, roundUp(Math.max(cpuRequestWant * 4, basis.kind === "history" ? usage.cpuMillis * 1.5 : 0), 50));
+    // CPU is shared back out, so it is sized close: a request a quarter above the usual use, and a
+    // limit (only offered where one already exists) at twice the busiest it reached.
+    const cpuRequestWant = Math.max(10, roundUp(typical.cpuMillis * 1.25, 10));
+    const cpuLimitWant = Math.max(100, roundUp(Math.max(cpuRequestWant * 2, usage.cpuMillis * 2), 50));
     // Add what is missing and raise what is too tight, always. Shrink what is generous
     // only with a trusted record: one reading can catch an app idle (a media server only
     // works hard while transcoding).
@@ -286,11 +303,20 @@ function sizeWorkload(name: string, kind: string, pods: Pod[], autoscaler: Autos
     if (accepted.has("memory-request") && !request.memoryBytes) suggestion.request.memoryBytes = undefined;
     if (accepted.has("cpu-request") && !request.cpuMillis) suggestion.request.cpuMillis = undefined;
     suggestion.limit.cpuMillis = limit.cpuMillis ? missingOrTight(limit.cpuMillis, usage.cpuMillis, cpuLimitWant, 0.7) : undefined;
-    suggestion.note.push(
-      basis.kind === "history"
-        ? `Worked out from ${basis.hours} hours of recorded use (${basis.trusted ? "enough to trust" : "not yet enough to shrink anything"}): memory request just above the usual use, limit above the highest it reached; CPU request above the usual use.`
-        : "Worked out from one reading of right now: it only adds missing values or raises tight ones.",
-    );
+    // Nothing is suggested unless it changes at least 100 MiB or 100m: a smaller difference is not
+    // worth anyone's time (the same floor the scoring uses for waste).
+    const worthIt = (have: number | undefined, want: number | undefined, floor: number) => (want !== undefined && Math.abs(want - (have ?? 0)) >= floor ? want : undefined);
+    suggestion.request.memoryBytes = worthIt(request.memoryBytes, suggestion.request.memoryBytes, MEMORY_WASTE.floor);
+    suggestion.limit.memoryBytes = worthIt(limit.memoryBytes, suggestion.limit.memoryBytes, MEMORY_WASTE.floor);
+    suggestion.request.cpuMillis = worthIt(request.cpuMillis, suggestion.request.cpuMillis, CPU_WASTE.floor);
+    suggestion.limit.cpuMillis = worthIt(limit.cpuMillis, suggestion.limit.cpuMillis, CPU_WASTE.floor);
+    if ([suggestion.request.memoryBytes, suggestion.limit.memoryBytes, suggestion.request.cpuMillis, suggestion.limit.cpuMillis].some((value) => value !== undefined)) {
+      suggestion.note.push(
+        basis.kind === "history"
+          ? `Worked out from ${basis.hours} hours of recorded use (${basis.trusted ? "enough to trust" : "not yet enough to shrink anything"}): memory request just above the usual use, limit above the highest it reached; CPU request a quarter above the usual use.`
+          : "Worked out from one reading of right now: it only adds missing values or raises tight ones.",
+      );
+    }
     const stillGenerous = !basis.trusted && [
       request.memoryBytes && request.memoryBytes - memRequestWant > MEMORY_WASTE.floor && request.memoryBytes > memRequestWant * 1.6,
       request.cpuMillis && request.cpuMillis - cpuRequestWant > CPU_WASTE.floor && request.cpuMillis > cpuRequestWant * 2,

@@ -36,6 +36,40 @@ var acceptedKeys = map[string]bool{
 	"over-provisioned": true, // reserves much more than it uses
 }
 
+// thirdPartyAccepted lists what Adaetum installs but cannot size: the Kubernetes distribution,
+// its network, storage and management layers. Their requests and limits belong to those projects'
+// own charts, so a gap there is accepted rather than reported as something to fix. It is an
+// explicit list (never a guess about what is "third party"), and it is deliberately narrow:
+// kube-system also holds Adaetum's own workloads, so only RKE2's own (rke2-*) count.
+var thirdPartyAccepted = []struct{ namespace, namePrefix string }{
+	{"longhorn-system", ""},
+	{"calico-system", ""},
+	{"tigera-operator", ""},
+	{"cattle-", ""}, // Rancher, Fleet, CAPI, system-upgrade-controller: any namespace with this prefix
+	{"kube-system", "rke2-"},
+}
+
+// allAcceptedKeys is every shortfall thirdPartyAccepted excuses.
+var allAcceptedKeys = []string{"memory-limit", "memory-request", "cpu-request", "memory-ratio", "over-provisioned"}
+
+func isThirdParty(namespace, name string) bool {
+	for _, rule := range thirdPartyAccepted {
+		matchesNamespace := namespace == rule.namespace || (strings.HasSuffix(rule.namespace, "-") && strings.HasPrefix(namespace, rule.namespace))
+		if matchesNamespace && strings.HasPrefix(name, rule.namePrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeAccepted is the workload's own annotation plus, for third-party workloads, everything.
+func mergeAccepted(namespace, name string, annotations map[string]string) []string {
+	if isThirdParty(namespace, name) {
+		return append([]string(nil), allAcceptedKeys...)
+	}
+	return parseAccepted(annotations)
+}
+
 func parseAccepted(annotations map[string]string) []string {
 	var keys []string
 	seen := map[string]bool{}
@@ -113,7 +147,7 @@ func parseWorkloads(data []byte) ([]Workload, error) {
 
 	workloads := []Workload{}
 	for _, item := range list.Items {
-		workload := Workload{Kind: item.Kind, Namespace: item.Metadata.Namespace, Name: item.Metadata.Name, Accepted: parseAccepted(item.Metadata.Annotations)}
+		workload := Workload{Kind: item.Kind, Namespace: item.Metadata.Namespace, Name: item.Metadata.Name, Accepted: mergeAccepted(item.Metadata.Namespace, item.Metadata.Name, item.Metadata.Annotations)}
 		switch item.Kind {
 		case "Deployment", "StatefulSet":
 			workload.Desired = 1

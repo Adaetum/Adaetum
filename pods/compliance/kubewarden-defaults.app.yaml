@@ -12,6 +12,12 @@ source_helm_values: |
   policyServer:
     enabled: true
     replicaCount: 1
+    # Sized from observed use (about 50 MiB) at roughly twice it; a CPU request but no CPU limit.
+    requests:
+      cpu: 10m
+      memory: 96Mi
+    limits:
+      memory: 192Mi
 
   recommendedPolicies:
     enabled: false

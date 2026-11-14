@@ -14,6 +14,18 @@ source_helm_values: |
     enable: true
     policyReporter: false
 
+  # The chart's defaults reserve 250m CPU for a controller that uses about 1m, and allow a
+  # memory limit nearly three times its request. A CPU request but no CPU limit: CPU is shared
+  # back out, and a limit would only throttle a burst. (null removes the chart's CPU limit.)
+  resources:
+    controller:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: null
+        memory: 256Mi
+
   telemetry:
     # Sidecar telemetry requires the OpenTelemetry Operator to inject and own
     # an OpenTelemetryCollector. Adaetum does not carry that additional

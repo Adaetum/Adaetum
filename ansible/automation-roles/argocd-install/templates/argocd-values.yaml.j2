@@ -42,6 +42,12 @@ server:
     type: ClusterIP
   metrics:
     enabled: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
 
 repoServer:
   metrics:
@@ -67,10 +73,41 @@ repoServer:
 applicationSet:
   metrics:
     enabled: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
 
 notifications:
   metrics:
     enabled: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 192Mi
+
+# What the pods that set nothing reserve, from observed use (15-52 MiB) at about twice it. A CPU
+# request but no CPU limit: CPU is shared back out, and a limit would only throttle a burst. The
+# repo server sets its own above; the application controller is left to the chart.
+dex:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 48Mi
+    limits:
+      memory: 128Mi
+
+redis:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
 
 # Adaetum provisions argocd-redis before Helm and later reconciles its `auth`
 # field from OpenBao. Disable the chart Job so it cannot become a competing
