@@ -1,0 +1,423 @@
+[
+ {
+  "title": "The dream",
+  "objective": "Set up the pain: you paying for several services.",
+  "shows": "An acolyte kneels before five altars; coins start flying out of them toward the glowing service relics."
+ },
+ {
+  "title": "Subscriptions drain money",
+  "objective": "You pay every month, and you are still at the mercy of the gods.",
+  "shows": "Coins stream out of the kneeling acolyte to the five altars, rings pulsing like monthly bills, while the purse chest drains."
+ },
+ {
+  "title": "Host it ourselves",
+  "objective": "Introduce the idea of owning the services.",
+  "shows": "The acolyte rises as the five services fly off their altars to a new altar of their own with an open book, which pops up; the coins stop and the purse recovers."
+ },
+ {
+  "title": "So easy to start",
+  "objective": "Getting started is so simple you wonder why everyone doesn't do it themselves.",
+  "shows": "Same hall and camera as the last shot: the home altar stands awake with its open book and the five services circling above it."
+ },
+ {
+  "title": "The catch",
+  "objective": "Then the problems arise: networking, security, updates, backups.",
+  "shows": "The same hall and altar: lightning strikes the five services one by one, fire takes hold, they flicker and drop out of the air and go dark until all five have failed, and the book's pages go dark with them. The acolyte steps back."
+ },
+ {
+  "title": "Laptop at home",
+  "objective": "Home hardware is a single point of failure.",
+  "shows": "The home altar with its open book and the five services floating above it; someone pulls the cable, the book's pages go dark, and the services dim and fall."
+ },
+ {
+  "title": "Virtual machines",
+  "objective": "VMs share one host, so they fail together.",
+  "shows": "Four machines on one wide stone plinth, two small altars and two books, each with its service relic above; the plinth turns red and shudders, and all four slump and go dark."
+ },
+ {
+  "title": "Rented server",
+  "objective": "A rented server survives your power cut but is still one machine (and costs monthly).",
+  "shows": "Coins fly to a distant data center, where one rented altar and its book stand with all five services crowding above it."
+ },
+ {
+  "title": "Failover by hand",
+  "objective": "Staying up yourself means assembling several machines, a load balancer, health checks and replicated storage.",
+  "shows": "Three shrines, a balancer, storage drums and cables assemble piece by piece; health blips and data replication begin."
+ },
+ {
+  "title": "Untested failover",
+  "objective": "A failover you have never tested is only a prayer.",
+  "shows": "Lightning strikes one shrine and fire takes hold; the balancer keeps sending requests to it and they pile up red."
+ },
+ {
+  "title": "Drift",
+  "objective": "Quick fixes pile up as patches, extra parts and sconces, so no two machines match the plan.",
+  "shows": "Five identical shrines gain riveted patches, bolted-on modules, candle sconces, cables and red runes while blue outlines of the plan stay put."
+ },
+ {
+  "title": "A ritual without a rite",
+  "objective": "One unreviewed change can topple everything, with no rehearsal and no way back.",
+  "shows": "Five app blocks form a ceremonial tower on an altar ringed with candles; an acolyte's staff pulls one block, the tower collapses, and the candles go out."
+ },
+ {
+  "title": "Kubernetes",
+  "objective": "Kubernetes is all-seeing and powerful, but built for engineering teams.",
+  "shows": "A many-eyed wheel of rings (angel-like) with the five apps orbiting it, towering over one small acolyte."
+ },
+ {
+  "title": "Single point of failure",
+  "objective": "Anything you only have one of is a single point of failure.",
+  "shows": "Requests flow through one server; it dies and requests pile up red in front of it."
+ },
+ {
+  "title": "Local high availability",
+  "objective": "Two machines at your altar cover for each other, so one failing doesn't stop you.",
+  "shows": "A chapel outline holds two shrines behind a balancer; one dies and traffic reroutes to the other."
+ },
+ {
+  "title": "Regional high availability",
+  "objective": "Add machines at a friend's altar, so one chapel falling doesn't stop you.",
+  "shows": "Your chapel and a friend's, each with two shrines; lightning strikes yours and fire takes it, and traffic reroutes to the friend's."
+ },
+ {
+  "title": "Global high availability",
+  "objective": "Optional failover into AWS, Google or Azure covers the loss of both homes.",
+  "shows": "A globe with two chapel markers and three standby clouds; both chapels fail, the clouds light up, and users' traffic switches to them."
+ },
+ {
+  "title": "The trade-off",
+  "objective": "Each level costs more and is harder to run, so choose the level you need.",
+  "shows": "Three rising steps (one site, one region, global) with growing coin stacks and cable tangles; a flag is planted on the middle step."
+ },
+ {
+  "title": "The machine god tends itself",
+  "objective": "Introduce a small cluster, your machine god, that patches itself, heals itself and keeps to the plan.",
+  "shows": "Three tidy nodes link up and share the five services."
+ },
+ {
+  "title": "Rolling updates",
+  "objective": "Updates go one machine at a time so the rest keep serving.",
+  "shows": "One node at a time turns amber with a gear; its apps step aside, then return."
+ },
+ {
+  "title": "Healing",
+  "objective": "Failed apps restart, and a dead machine's apps move to the others.",
+  "shows": "An app flashes red then green; a node goes dark and its apps arc to the others."
+ },
+ {
+  "title": "Staying on plan",
+  "objective": "Git holds the plan, and drift is pulled back.",
+  "shows": "A blueprint above the cluster; a drifting app is pulled back and its ring turns green."
+ },
+ {
+  "title": "What you see",
+  "objective": "One screen shows health, and you can appoint an AI oracle to fix problems.",
+  "shows": "A dashboard of green tiles with one amber, and a crystal orb with a watching eye on a tripod that sends a beam to the amber tile and turns it green."
+ },
+ {
+  "title": "Installer",
+  "objective": "A blank machine installs itself and joins the cluster.",
+  "shows": "An empty altar stands alone; its open book and service pop up as it comes alive, then it links to two other machines."
+ },
+ {
+  "title": "The payoff",
+  "objective": "Apps just run, you get your time back, and the money you were paying out stays yours.",
+  "shows": "You sit back on the couch with a striped tub of popcorn in your lap, tossing a kernel to your mouth every moment, in front of the five altars from the first scene; each now carries an open book with its service floating above, and the gold stack beside them is full."
+ },
+ {
+  "title": "The turn",
+  "objective": "Ask how Adaetum achieves all this.",
+  "shows": "The cluster stands alone on its dais; a crimson veil lifts to reveal a council of tool emblems waiting on altars in the dark behind it."
+ },
+ {
+  "title": "Wired, not invented",
+  "objective": "Adaetum invents nothing; it wires proven tools together.",
+  "shows": "Each tool's emblem lifts from its altar and flies to the cluster, where it links in with a glowing ring."
+ },
+ {
+  "title": "The council",
+  "objective": "Introduce the tour of each tool.",
+  "shows": "A sweep of light travels along the council of 17 emblems, lifting each one in turn."
+ },
+ {
+  "title": "The base: Rocky and Ansible",
+  "objective": "Introduce the foundation: the host OS Adaetum installs itself, and the tool that keeps hosts identical.",
+  "shows": "A glowing request leaves the Rocky mountain emblem and arrives at Ansible's scroll of red steps; both light on their altars."
+ },
+ {
+  "title": "The cluster and its storage: RKE2 and Longhorn",
+  "objective": "Show Kubernetes and the storage that keeps data safe across machines.",
+  "shows": "The request travels from the RKE2 helm to the Longhorn cow-bell emblem; both light on altars."
+ },
+ {
+  "title": "The plan: Gitea and Argo CD",
+  "objective": "Show Git as the source of truth and the tool that makes the cluster match it.",
+  "shows": "The request travels from Gitea's repository emblem to Argo CD's orange ship wheel; both light."
+ },
+ {
+  "title": "Secrets: OpenBao and External Secrets",
+  "objective": "Explain where secrets live and how apps receive only their own.",
+  "shows": "The request travels from the OpenBao vault emblem to the External Secrets emblem; both light."
+ },
+ {
+  "title": "Identity and policy: Authentik and Kubewarden",
+  "objective": "Show single sign-on and the policy checks on every change.",
+  "shows": "The request travels from Authentik's key emblem to Kubewarden's shield; both light."
+ },
+ {
+  "title": "Certificates and the front door",
+  "objective": "Show automatic certificate renewal and the single ingress.",
+  "shows": "The request travels from cert-manager's seal to the ingress gate emblem; both light."
+ },
+ {
+  "title": "Reach: Tailscale and cloudflared",
+  "objective": "Contrast private access over the Tailscale VPN with public access through cloudflared, which opens no ports.",
+  "shows": "The camera glides along the row of tool altars: Tailscale's triangle emblem holds the frame for 2.5 seconds, then Cloudflared's cloud emblem."
+ },
+ {
+  "title": "Watching and patching: Prometheus and Kured",
+  "objective": "Show monitoring and safe, one-at-a-time patching.",
+  "shows": "The request travels from Prometheus's flame emblem to Kured's hourglass; both light."
+ },
+ {
+  "title": "The Adaetum agent",
+  "objective": "Introduce the agent and the web app on top.",
+  "shows": "One emblem, the Adaetum agent, lights on its altar while the request pulses above it."
+ },
+ {
+  "title": "What happens when",
+  "objective": "Introduce the scenarios: what happens when things go wrong.",
+  "shows": "The cluster stands as lightning flashes on both sides."
+ },
+ {
+  "title": "A machine dies",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "Lightning strikes a machine on both sides. On the left it goes dark and its service falls; on the right its service hops to a neighbour and a green check appears.",
+  "seconds": 6.0
+ },
+ {
+  "title": "A disk fails",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "Red cracks race across a machine on both sides; the left one goes dark, the right one is covered by a copy on its neighbour.",
+  "seconds": 6.0
+ },
+ {
+  "title": "An app crashes",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "A service flickers red on both sides; on the left nobody notices and it dies, on the right it restarts and glows green.",
+  "seconds": 6.0
+ },
+ {
+  "title": "A bad change goes out",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "A red block drops onto the machine on both sides; the left breaks, the right reverts and recovers.",
+  "seconds": 6.0
+ },
+ {
+  "title": "Someone edits by hand",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "A wrench appears over a machine; on the left it drifts and breaks, on the right it is put back to plan.",
+  "seconds": 6.0
+ },
+ {
+  "title": "A certificate expires",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "A clock races over a machine; the left runs out and fails, the right renews in time.",
+  "seconds": 6.0
+ },
+ {
+  "title": "A password leaks",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "A golden key spills drips over a machine; the left is compromised, the right rotates it and recovers.",
+  "seconds": 6.0
+ },
+ {
+  "title": "Updates are due",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "An amber gear turns over a machine; the left goes down for patching, the right patches quietly and stays up.",
+  "seconds": 6.0
+ },
+ {
+  "title": "The vault restarts",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "A padlock shakes over a machine; the left stays sealed and fails, the right unseals itself.",
+  "seconds": 6.0
+ },
+ {
+  "title": "You add a machine",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "On the right a new machine pops up and links to the others by itself; on the left the lone machine sits half-lit.",
+  "seconds": 6.0
+ },
+ {
+  "title": "You remove a machine",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "On the right a machine hands its service to another and fades away; on the left pulling the plug darkens it.",
+  "seconds": 6.0
+ },
+ {
+  "title": "An attacker comes knocking",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "Three dark figures approach on both sides; on the left they reach the machine, on the right they bounce off a green shield.",
+  "seconds": 6.0
+ },
+ {
+  "title": "The cluster is lost",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "Every light goes out; the left stays dark, the right rebuilds one machine at a time from the plan.",
+  "seconds": 6.0
+ },
+ {
+  "title": "A provider has an outage",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "A cloud with a red cross hangs over a machine; the left depends on it and fails, the right keeps running.",
+  "seconds": 6.0
+ },
+ {
+  "title": "An app gets busy",
+  "objective": "Show what goes wrong, how the usual way ends, and how Adaetum puts it right, in one split scene.",
+  "shows": "A crowd rushes a machine; the left is overwhelmed, the right adds copies of the service.",
+  "seconds": 6.0
+ },
+ {
+  "title": "How it starts",
+  "objective": "Introduce how Adaetum starts: setup and first boot.",
+  "shows": "An acolyte at a desk with a tome, the three provider monuments far behind, and a blank shrine waiting."
+ },
+ {
+  "title": "task init: eight steps",
+  "objective": "One command, eight steps.",
+  "shows": "Eight stepping stones light up along a path as a glowing orb hops from one to the next."
+ },
+ {
+  "title": "Step one: private recovery repository",
+  "objective": "A standalone private repository, never a fork.",
+  "shows": "The plan scroll flies into a locked library tower; a padlock closes and a struck-out fork appears."
+ },
+ {
+  "title": "Step two: scoped keys",
+  "objective": "Authorize Cloudflare and Tailscale with narrow keys.",
+  "shows": "Two keys fly out to the Cloudflare cloud and the Tailscale web and return as small keys with a lapis band."
+ },
+ {
+  "title": "Step three: one public file",
+  "objective": "Two choices go into one public file with no secrets.",
+  "shows": "A domain globe and a tailnet web merge into a scroll with an open ring; a red key bounces off."
+ },
+ {
+  "title": "Step four: the installer image",
+  "objective": "Find and verify the Rocky Linux installer.",
+  "shows": "A disc flies to a green verification ring beside the Rocky mountain and a check mark appears."
+ },
+ {
+  "title": "Steps five to eight: publish and build",
+  "objective": "Validate, publish, build the installer, test delivery.",
+  "shows": "Scrolls fly to the library tower, the cloud chest and the providers; workflow gears turn and a disc forms on a forge."
+ },
+ {
+  "title": "The three accounts",
+  "objective": "Show what each outside account does in one beat: GitHub, Cloudflare, Tailscale.",
+  "shows": "The hall with the library tower and turning workflow gears and a mirror tower on the left, the cloud with DNS signposts and a tunnel ring in the middle, and the tailnet web waking four shrines on the right."
+ },
+ {
+  "title": "Credential lifetimes, and how secrets travel",
+  "objective": "Show the three credential lifetimes, and state that secrets never appear on a command line.",
+  "shows": "A fading hourglass key, a steady torch key and a candle key burning down."
+ },
+ {
+  "title": "Write it to USB and boot",
+  "objective": "Make the USB, boot a blank machine, and leave.",
+  "shows": "A disc becomes a USB that flies to a blank shrine, which wakes as the acolyte walks away."
+ },
+ {
+  "title": "The installer fetches its payload",
+  "objective": "Say that the installer carries no fixed payload: it reaches out at install time for the current one, so config changes are picked up.",
+  "shows": "A bare USB sends requests out to the chest in the cloud, whose config panel changes colour over time; packages come back carrying the current config and land in the USB.",
+  "seconds": 6.0
+ },
+ {
+  "title": "First reboot: clock, network, tailnet",
+  "objective": "Wait for a clock and network, then join the tailnet.",
+  "shows": "A clock syncs, a cable reaches a router, and a key arrives to light a tailnet ring."
+ },
+ {
+  "title": "Start or join",
+  "objective": "Join an existing cluster, never start a second.",
+  "shows": "A scanning ring finds existing shrines and a green link forms; a second cluster is struck out."
+ },
+ {
+  "title": "Nine numbered phases",
+  "objective": "Download the bundle, then run nine phases.",
+  "shows": "A bundle flies from the cloud to the shrine and nine rungs of a ladder light one by one."
+ },
+ {
+  "title": "Building the platform",
+  "objective": "Build the platform, then start the vault.",
+  "shows": "The helm wheel, horns, seal, archway and vault door rise around the shrine in turn."
+ },
+ {
+  "title": "Secrets move into the vault",
+  "objective": "Move secrets from temporary files into the vault.",
+  "shows": "A pile of scrolls flies into the vault and burns away while a crown moves from the pile to the vault."
+ },
+ {
+  "title": "Argo CD and Gitea",
+  "objective": "Install Argo CD and Gitea, then link them.",
+  "shows": "A ship and a tree rise on altars and a pulse travels along a line from Gitea to Argo CD."
+ },
+ {
+  "title": "Proof before moving on",
+  "objective": "Prove GitOps works before continuing.",
+  "shows": "A commit flies from the Git tree to the shrine, an app updates, a check appears and a gate lifts."
+ },
+ {
+  "title": "Recovery kit and burn",
+  "objective": "Export the recovery kit, then destroy the bootstrap authority.",
+  "shows": "A chest is padlocked while the scaffolding, crown and scrolls burn away."
+ },
+ {
+  "title": "Several roads to a cluster",
+  "objective": "Introduce the five options and the fact that we will compare them by question, not by feature list.",
+  "shows": "You at a fork under six signposts, with a monument at the end of each road."
+ },
+ {
+  "title": "What comes in the box",
+  "objective": "Show who ships integrated GitOps, secrets, identity, policy and monitoring, and who leaves it to you.",
+  "shows": "Five roads side by side, each ending at its monument with an unlit lantern in front: do it yourself, managed cloud, OpenShift, Talos with Omni, Adaetum. OpenShift and Adaetum light green with checks; do it yourself and Talos light red with crosses."
+ },
+ {
+  "title": "What it costs",
+  "objective": "Compare licensing and ongoing cost without claiming a number for Adaetum's sizing.",
+  "shows": "Five roads side by side, each ending at its monument with an unlit lantern in front: do it yourself, managed cloud, OpenShift, Talos with Omni, Adaetum. OpenShift and managed cloud light amber; Adaetum lights green with a check."
+ },
+ {
+  "title": "Who you call",
+  "objective": "Be honest that Adaetum has community support only.",
+  "shows": "Five roads side by side, each ending at its monument with an unlit lantern in front: do it yourself, managed cloud, OpenShift, Talos with Omni, Adaetum. OpenShift and Talos light green with checks; Adaetum lights red with a cross."
+ },
+ {
+  "title": "How mature",
+  "objective": "State plainly where Adaetum is not yet at parity: early, one OS, one node at install.",
+  "shows": "Five roads side by side, each ending at its monument with an unlit lantern in front: do it yourself, managed cloud, OpenShift, Talos with Omni, Adaetum. OpenShift and Talos light green with checks; Adaetum lights amber."
+ },
+ {
+  "title": "Adaetum",
+  "objective": "State what Adaetum is in one line: a normal host, an integrated stack, config you own.",
+  "shows": "The full temple with emblems rising around the cluster, a plan scroll and a chest, with a green check."
+ },
+ {
+  "title": "Choose your road",
+  "objective": "Choose the road that fits you.",
+  "shows": "You walk up the road toward the Adaetum temple as a golden light beam rises."
+ },
+ {
+  "title": "Close",
+  "objective": "The summary: standard parts, a guided start, and a rebuildable plan.",
+  "shows": "The camera pulls far back from the temple as all 17 tool emblems circle it."
+ },
+ {
+  "title": "Complexity down, control kept",
+  "objective": "Complexity goes down; control stays with you.",
+  "shows": "A lever lowers a cloud of complexity while you hold a golden key under a huge gold A banner."
+ }
+]

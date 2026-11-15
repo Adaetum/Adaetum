@@ -1,0 +1,101 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Product demo player</title>
+<style>
+body{margin:0;background:#0b1118;color:#dbe6f2;font:14px system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px}
+canvas{width:min(960px,100%);height:auto;aspect-ratio:960/544;border-radius:6px}
+#bar{width:min(960px,100%);display:flex;gap:10px;align-items:center}
+#bar input{flex:1}button{padding:6px 14px;font:inherit}
+#obj{width:min(960px,100%);background:#122232;border-left:4px solid #4f8dff;border-radius:4px;padding:10px 14px;display:flex;flex-direction:column;gap:3px}
+#objhead{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#7fa8e8}
+#objgoal{font-size:18px;font-weight:600;color:#f1f6fb}
+#objshows{font-size:14px;color:#9fb2c6}
+#eps{width:min(960px,100%);display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+#eps button{padding:4px 9px;font-size:12px;background:#16212d;color:#c9d6e4;border:1px solid #2a3a4a;border-radius:3px;cursor:pointer}
+#eps button.on{background:#7a4fd0;color:#fff;border-color:#a98bff}
+#eps label{font-size:12px;color:#8fa3b8;margin-left:auto;cursor:pointer}
+#chap{width:min(960px,100%);display:flex;gap:3px}
+#chap button{padding:5px 4px;font-size:12px;line-height:1.2;background:#16212d;color:#9fb2c6;border:1px solid #2a3a4a;border-radius:3px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
+#chap button b{color:#dbe6f2;margin-right:4px}
+#chap button.on{background:#2b5fb4;color:#fff;border-color:#4f8dff}
+#chap button.on b{color:#fff}
+#strip{width:min(960px,100%);display:flex;flex-wrap:wrap;gap:4px}
+#strip button{padding:3px 8px;font-size:12px;background:#16212d;color:#9fb2c6;border:1px solid #2a3a4a;border-radius:3px;cursor:pointer}
+#strip button.on{background:#2b5fb4;color:#fff;border-color:#4f8dff}
+#stage{position:relative;width:min(960px,100%)}
+#stage canvas{display:block;width:100%}
+#cap{position:absolute;left:6%;right:6%;bottom:6%;text-align:center;font-size:clamp(15px,2.4vw,24px);line-height:1.3;font-weight:600;color:#fff;text-shadow:0 0 3px #000,0 0 6px #000,0 1px 2px #000;pointer-events:none;min-height:1.3em}
+#cap span{background:rgba(0,0,0,.55);padding:2px 10px;border-radius:4px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+#cap:empty{display:none}
+#ccl{display:flex;gap:6px;align-items:center;color:#8fa3b8;font-size:13px;cursor:pointer}
+#info{font-variant-numeric:tabular-nums;color:#8fa3b8;min-width:11em;text-align:right}
+</style></head><body>
+<div id="obj"><div id="objhead"></div><div id="objgoal"></div><div id="objshows"></div></div>
+<div id="eps"></div>
+<div id="chap"></div>
+<div id="bar"><button id="play">Play</button><input id="scrub" type="range" min="0" max="1" step="0.001" value="0"><span id="info"></span><label id="ccl"><input type="checkbox" id="cc" checked>subtitles</label></div>
+<div id="strip"></div>
+<audio id="a" preload="auto"></audio>
+<script type="module">
+import './case/main.js';
+const D=124/24, lines = await (await fetch('narration.json')).json(), N=lines.length, objs = await (await fetch('objectives.json')).json();
+// Shots are 124 frames (5.17 s) unless objectives.json gives them a 'seconds' value (up to 6 s, the longest clip the video model takes). START/DUR hold each shot's start and length.
+const DUR=lines.map((_,i)=>(objs[i]&&objs[i].seconds)||D), START=[]; let ACC=0; DUR.forEach(d=>{START.push(ACC); ACC+=d;}); const TOTAL=ACC;
+const shotAt=t=>{ for(let i=N-1;i>0;i--) if(t>=START[i]-1e-6) return i; return 0; };
+const endOf=n=>n<N?START[n]:TOTAL;   // end time of the 1-based shot n
+// The renderer appends its canvas to <body>; wrap it so the subtitle sits over the video. Subtitles live only here, never in the 3D scenes.
+const stage=document.createElement('div'); stage.id='stage'; const cv=document.querySelector('canvas'); cv.before(stage); stage.append(cv);
+const cap=document.createElement('div'); cap.id='cap'; stage.append(cap);
+const ccBox=document.getElementById('cc'); try{ ccBox.checked=localStorage.getItem('cc')!=='0'; }catch(e){}
+ccBox.onchange=()=>{ try{localStorage.setItem('cc',ccBox.checked?'1':'0');}catch(e){} show(a.currentTime); };
+// Split a shot's line into short phrases, shown one at a time in proportion to their length across the shot.
+const phrases=line=>{ const parts=(line.match(/[^.,;:!?]+[.,;:!?]*/g)||[line]).map(x=>x.trim()).filter(Boolean), out=[]; for(const x of parts){ if(out.length&&(out[out.length-1].length+x.length<30)) out[out.length-1]+=' '+x; else out.push(x);} return out; };
+const phraseAt=(line,f)=>{ const ph=phrases(line), tot=ph.reduce((n,x)=>n+x.length,0); let acc=0; for(const x of ph){ acc+=x.length; if(f<=acc/tot+1e-9) return x; } return ph[ph.length-1]||''; };
+const a=document.getElementById('a'), scrub=document.getElementById('scrub'), play=document.getElementById('play'), info=document.getElementById('info');
+// The dev server has no Range support, which makes streamed audio unseekable (it jumps back to 0). A blob URL is fully seekable.
+// If the narration has not been built yet (audio/ is not in git), play on a silent track of the same length so the player still works.
+const silent=()=>{ const sr=8000, n=Math.ceil(TOTAL*sr), b=new Uint8Array(44+n).fill(128), v=new DataView(b.buffer), w=(o,t)=>[...t].forEach((c,i)=>b[o+i]=c.charCodeAt(0)); w(0,'RIFF'); v.setUint32(4,36+n,true); w(8,'WAVEfmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true); v.setUint32(24,sr,true); v.setUint32(28,sr,true); v.setUint16(32,1,true); v.setUint16(34,8,true); w(36,'data'); v.setUint32(40,n,true); return new Blob([b],{type:'audio/wav'}); };
+try { const r=await fetch('audio/narration.mp3'); if(!r.ok) throw new Error(r.status); a.src=URL.createObjectURL(await r.blob()); }
+catch(e){ console.warn('no narration audio (run build_audio.py); playing silently'); a.src=URL.createObjectURL(silent()); }
+await new Promise(r => { a.onloadedmetadata = r; if (a.readyState >= 1) r(); });
+const strip=document.getElementById('strip');
+// Film sections, in play order. 'from' and 'to' are 1-based shot numbers.
+const CHAPTERS=[
+ {k:'P1',name:'The dream',from:1,to:25},
+ {k:'A',name:'The turn',from:26,to:28},
+ {k:'B',name:'The team',from:29,to:37},
+ {k:'C',name:'What happens when',from:38,to:53},
+ {k:'E',name:'How it starts',from:54,to:72},
+ {k:'D',name:'Compared',from:73,to:79},
+ {k:'F',name:'The close',from:80,to:81}];
+// Episodes: self-contained videos that also play back to back as the full film. 'from' and 'to' are 1-based shot numbers.
+const EPISODES=[
+ {n:1,name:'Stop renting your stack',from:1,to:5},
+ {n:2,name:'Where could it live?',from:6,to:12},
+ {n:3,name:'Kubernetes and staying up',from:13,to:18},
+ {n:4,name:'The machine that tends itself',from:19,to:25},
+ {n:5,name:'Wired, not invented',from:26,to:37},
+ {n:6,name:'When things break and change',from:38,to:46},
+ {n:7,name:'Security, growth, disaster',from:47,to:53},
+ {n:8,name:'Setting it up',from:54,to:72},
+ {n:9,name:'Is it right for you?',from:73,to:81}];
+const epOf=s=>EPISODES.find(e=>s+1>=e.from&&s+1<=e.to);
+const epBox=document.getElementById('eps');
+const epBtns=EPISODES.map(e=>{const b=document.createElement('button'); b.textContent=`${e.n}. ${e.name}`; b.title=`shots ${e.from}-${e.to}, ${(endOf(e.to)-START[e.from-1]).toFixed(0)} s`; b.onclick=()=>{const t=START[e.from-1]; a.currentTime=t; show(t);}; epBox.appendChild(b); return b;});
+const stopLbl=document.createElement('label'); stopLbl.innerHTML='<input type="checkbox" id="stopEp"> stop at end of episode'; epBox.appendChild(stopLbl);
+const chapOf=s=>CHAPTERS.find(c=>s+1>=c.from&&s+1<=c.to)||CHAPTERS[0];
+const chapBox=document.getElementById('chap');
+const chapBtns=CHAPTERS.map(c=>{const b=document.createElement('button'); b.style.flex=`${c.to-c.from+1} 1 0`; b.innerHTML=`<b>${c.k==='P1'?'1':c.k}</b>${c.name}`; b.title=`${c.name}: shots ${c.from}-${c.to}`; b.onclick=()=>{const t=START[c.from-1]; a.currentTime=t; show(t);}; chapBox.appendChild(b); return b;});
+const btns=lines.map((_,i)=>{const b=document.createElement('button'); b.textContent=i+1; b.title=(objs[i]||{}).title||''; b.onclick=()=>{const t=START[i]; a.currentTime=t; show(t);}; strip.appendChild(b); return b;});
+scrub.max=TOTAL;
+function show(t){
+  window.reconstruction.seek(t);
+  const s=shotAt(t);
+  const ob=objs[s]||{}; document.getElementById('objhead').textContent=`${chapOf(s).k==='P1'?'Part 1':'Chapter '+chapOf(s).k}, ${chapOf(s).name} · Shot ${s+1}: ${ob.title||''}`; document.getElementById('objgoal').textContent=ob.objective||''; document.getElementById('objshows').textContent=ob.shows?`On screen: ${ob.shows}`:''; btns.forEach((b,i)=>b.classList.toggle('on',i===s)); epBtns.forEach((b,i)=>b.classList.toggle('on',EPISODES[i]===epOf(s))); chapBtns.forEach((b,i)=>b.classList.toggle('on',CHAPTERS[i]===chapOf(s)));
+  scrub.value=t; info.textContent=`shot ${s+1}/${N}  ${t.toFixed(1)} / ${TOTAL.toFixed(1)} s`; { const f=Math.min(1,Math.max(0,(t-START[s])/DUR[s])); cap.innerHTML=''; if(ccBox.checked&&lines[s]){ const sp=document.createElement('span'); sp.textContent=phraseAt(lines[s],f); cap.append(sp); } }
+}
+let raf=null;
+function tick(){ { const e=epOf(shotAt(a.currentTime)); if(document.getElementById('stopEp').checked && e && a.currentTime>=endOf(e.to)-.02 && !a.paused){ a.pause(); a.currentTime=endOf(e.to)-.03; } } show(Math.min(a.currentTime,TOTAL-.01)); if(!a.paused) raf=requestAnimationFrame(tick); else play.textContent='Play'; }
+play.onclick=()=>{ if(a.paused){ if(a.currentTime>=TOTAL-.1) a.currentTime=0; a.play(); play.textContent='Pause'; tick(); } else { a.pause(); play.textContent='Play'; } };
+scrub.oninput=()=>{ a.currentTime=+scrub.value; show(+scrub.value); };
+a.onended=()=>{ play.textContent='Play'; };
+show(0);
+</script></body></html>

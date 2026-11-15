@@ -1,0 +1,9 @@
+# generated or downloaded, never committed
+audio/*
+!audio/narration.mp3
+h3/
+models/
+piper_voices/
+.espeak-ng-data/
+assets/
+__pycache__/
