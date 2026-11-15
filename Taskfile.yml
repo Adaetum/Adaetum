@@ -61,6 +61,7 @@ tasks:
         printf '  %stask dev:push%s      Build the host agent and sign-in service from this checkout and install them on a dev node over SSH\n' "${c_task}" "${c_reset}"
         printf '  %stask dev:push:pod%s  Build the cluster agent images from this checkout and roll the dev node pod onto them (pauses Argo CD)\n' "${c_task}" "${c_reset}"
         printf '  %stask dev:push:all%s  Both of the above: update the host and the pod from this checkout\n' "${c_task}" "${c_reset}"
+        printf '  %stask videos:serve%s Start the local Three.js video player\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun%s   Show every setup step and what it would do, changing nothing\n' "${c_task}" "${c_reset}"
         printf '  %stask init:dryrun -- --window%s  Rehearse the full setup flow in the guided window\n' "${c_task}" "${c_reset}"
         printf '  %stask iso:download%s  Download and verify the selected Rocky 10 Minimal installer ISO\n' "${c_task}" "${c_reset}"
@@ -147,6 +148,23 @@ tasks:
         platforms: [linux, darwin]
       - cmd: bash ./tasks/scripts/dev-push.sh {{.CLI_ARGS}} pod
         platforms: [linux, darwin]
+
+  videos:serve:
+    desc: Start the local Three.js video player at http://127.0.0.1:8001/player.html
+    dir: videos
+    cmds:
+      - |
+        set -eu
+        player_url="http://127.0.0.1:8001/player.html"
+        if lsof -nP -iTCP:8001 -sTCP:LISTEN >/dev/null 2>&1; then
+          if curl --fail --silent "${player_url}" | grep -Fq '<title>Product demo player</title>'; then
+            printf 'Video player is already running: %s\n' "${player_url}"
+            exit 0
+          fi
+          printf 'Port 8001 is already in use by another application. Stop it, then run task videos:serve again.\n' >&2
+          exit 1
+        fi
+        python3 serve.py
 
   init:dryrun:
     desc: Show read-only plans; pass -- --window to rehearse the full UI without checks or changes
