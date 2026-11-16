@@ -30,6 +30,10 @@ type API struct {
 	Enabled func() (bool, string)
 	// Who names the signed-in person making the request, or "" for the access token.
 	Who func(*http.Request) string
+	// ClusterRead, when set, also serves the run list at /api/v1/cluster/runs to the
+	// cluster agent, which signs its requests instead of signing in. It must be the
+	// cluster's read-only guard: nothing but listing is reachable through it.
+	ClusterRead func(http.Handler) http.Handler
 }
 
 const maxRequestBody = 16 * 1024
@@ -45,6 +49,9 @@ func (api *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/runs/capabilities", api.capabilities)
 	mux.Handle("GET /api/v1/runs/procedures", user(http.HandlerFunc(api.procedures)))
 	mux.Handle("GET /api/v1/runs", user(http.HandlerFunc(api.list)))
+	if api.ClusterRead != nil {
+		mux.Handle("GET /api/v1/cluster/runs", api.ClusterRead(http.HandlerFunc(api.list)))
+	}
 	mux.Handle("POST /api/v1/runs", user(http.HandlerFunc(api.start)))
 	mux.Handle("GET /api/v1/runs/{id}", user(http.HandlerFunc(api.get)))
 	mux.Handle("POST /api/v1/runs/{id}/retry", user(http.HandlerFunc(api.retry)))

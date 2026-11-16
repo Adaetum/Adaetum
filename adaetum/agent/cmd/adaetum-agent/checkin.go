@@ -3,14 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/Adaetum/Adaetum/agent/internal/accounts"
 	"github.com/Adaetum/Adaetum/agent/internal/identity"
 	"github.com/Adaetum/Adaetum/agent/internal/membership"
 	"github.com/Adaetum/Adaetum/agent/internal/store"
+	"github.com/Adaetum/Adaetum/agent/internal/tlscert"
 )
 
 // Release builds set this with -ldflags so fleet comparisons reflect the
@@ -39,7 +42,7 @@ const (
 // It returns the function that stops it and the open database (nil when there is none),
 // so other parts of the agent that keep their history there, such as the run engine,
 // share this one handle rather than opening the file a second time.
-func startHostIdentity(dataDir, sshTarget string, auth *accounts.Client) (func(), *store.Store) {
+func startHostIdentity(dataDir, sshTarget string, auth *accounts.Client, endpoint func() *membership.Endpoint) (func(), *store.Store) {
 	noop := func() {}
 	if dataDir == "" {
 		return noop, nil
@@ -67,7 +70,11 @@ func startHostIdentity(dataDir, sshTarget string, auth *accounts.Client) (func()
 		defer func() { done <- struct{}{} }()
 		hostname, _ := os.Hostname()
 		record := func() {
-			if _, err := db.Append(ctx, membership.CheckInKind, membership.CheckInPayload{Hostname: hostname, Version: agentVersion}); err != nil && ctx.Err() == nil {
+			payload := membership.CheckInPayload{Hostname: hostname, Version: agentVersion}
+			if endpoint != nil {
+				payload.Endpoint = endpoint()
+			}
+			if _, err := db.Append(ctx, membership.CheckInKind, payload); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "cannot record a check-in:", err)
 			}
 		}
@@ -131,4 +138,34 @@ func clusterTransport(dataDir, hostID string) membership.Transport {
 	}
 	fmt.Fprintf(os.Stderr, "sending events to the cluster agent at %s\n", link.URL)
 	return &membership.HTTPTransport{Link: link, HostID: hostID, Key: key}
+}
+
+// hostEndpoint says where this host's agent can be reached, for the check-in. It is read
+// each time because the self-made certificate is remade when the host's addresses change,
+// and the cluster agent pins whatever it was last told. It returns nil for an agent that
+// is not listening beyond its own machine (no certificate), which has nothing to report.
+func hostEndpoint(certificates *tlscert.Manager, listen string) func() *membership.Endpoint {
+	if certificates == nil {
+		return nil
+	}
+	_, portText, err := net.SplitHostPort(listen)
+	port, _ := strconv.Atoi(portText)
+	if err != nil || port == 0 {
+		return nil
+	}
+	return func() *membership.Endpoint {
+		_, leaf, err := certificates.Current()
+		if err != nil {
+			return nil
+		}
+		endpoint := &membership.Endpoint{Port: port, Fingerprint: tlscert.KeyPin(leaf)}
+		// The certificate lists every address on every interface, which is exactly what
+		// the host answers to. Loopback and link-local are of no use to another machine.
+		for _, ip := range leaf.IPAddresses {
+			if !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() {
+				endpoint.Addresses = append(endpoint.Addresses, ip.String())
+			}
+		}
+		return endpoint
+	}
 }

@@ -77,6 +77,10 @@ spec:
             - http
             - -embedder-url
             - http://adaetum-embed.adaetum.svc/embed
+            # The TLS key every host pins is also kept in OpenBao (see internal/openbao). The
+            # agent starts without it and syncs once OpenBao is configured.
+            - -openbao-url
+            - http://openbao.openbao.svc.cluster.local:8200
           envFrom:
             - configMapRef: {name: adaetum-agent-cluster-config}
           env:
@@ -114,6 +118,15 @@ spec:
             exec:
               command: ["/bin/sh", "-ec", "test -S /data/auth/auth.sock"]
             periodSeconds: 5
+          # A dead sign-in service leaves its socket file behind, so the readiness check above
+          # would still pass; asking it a question over the socket is what shows it is alive.
+          livenessProbe:
+            exec:
+              command: ["bun", "-e", "const r = await fetch('http://localhost/api/auth/ok', {unix: '/data/auth/auth.sock'}); process.exit(r.ok ? 0 : 1)"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

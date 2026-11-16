@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Adaetum/Adaetum/agent/internal/automation"
+)
 
 // A restarted pod has a new name and IP; its certificate must not, or every host that pinned
 // the fingerprint loses the cluster agent.
@@ -28,5 +35,26 @@ func TestPodCertificateIdentityIsTheServiceNotThePod(t *testing.T) {
 	}
 	if _, ok := podCertificateIdentity(func(string) string { return "" }); ok {
 		t.Fatal("outside a pod the machine's own identity stays")
+	}
+}
+
+// The Automation page must work on the cluster agent: the runner's Deployment comes from
+// Kubernetes, and what lives inside the runner pod reports why it cannot be read instead of
+// failing the whole page.
+func TestClusterAutomationReportsWhatItCannotRead(t *testing.T) {
+	deployments := `{"items":[{"metadata":{"name":"ansible-runner"},"spec":{"replicas":1,"template":{"spec":{"containers":[{"name":"ansible-runner","image":"r/ansible-runner:1"}]}}},"status":{"readyReplicas":1}}]}`
+	pods := `{"items":[{"metadata":{"name":"ansible-runner-abc"},"spec":{"nodeName":"n"},"status":{"phase":"Running"}}]}`
+	source := clusterAutomationSource{get: func(_ context.Context, resources string, _ ...string) ([]byte, error) {
+		if resources == "pods" {
+			return []byte(pods), nil
+		}
+		return []byte(deployments), nil
+	}}
+	got := (&automation.Collector{Source: source, Now: time.Now}).Collect(context.Background())
+	if !got.Runner.Found || got.Runner.Pod == nil || got.Runner.Pod.Phase != "Running" {
+		t.Fatalf("the runner should come from Kubernetes: %+v", got.Runner)
+	}
+	if len(got.Errors) == 0 || !strings.Contains(got.Errors[0], "cannot read inside the runner pod") {
+		t.Fatalf("what is inside the pod should say why it is missing: %v", got.Errors)
 	}
 }

@@ -9,6 +9,7 @@ import { LaunchCard } from "../components/ansible/LaunchCard";
 import { RunPanel } from "../components/ansible/RunPanel";
 import { Run as LaunchedRun, listRuns, useCapabilities } from "../lib/ansibleApi";
 import { DataTable } from "../components/DataTable";
+import { RunsPanel } from "../components/runs/RunsPanel";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import {
@@ -80,6 +81,9 @@ function Content({ data, now, location }: { data: AutomationOverview; now: Date;
         </Section>
       ))}
       <Launcher location={location} now={now} />
+      <Section title="Runs" note="Work the agents do on servers, step by step. Each step checks the real system first, so a run that stopped can be tried again.">
+        <RunsPanel location={location} />
+      </Section>
       <Advanced>
         <AdvancedBlock title="History" note="Each time the automation ran on its own timer, newest first.">
           <DataTable

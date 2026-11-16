@@ -337,6 +337,9 @@ type HostSummary struct {
 	// are empty when it has none.
 	LastCheckIn *time.Time `json:"lastCheckIn,omitempty"`
 	Version     string     `json:"version,omitempty"`
+	// Endpoint is where the host said its agent can be reached. It is for the cluster
+	// agent's own calls (fleet runs) and is not sent to the page.
+	Endpoint *membership.Endpoint `json:"-"`
 }
 
 // Hosts lists every registered host, newest enrollment first.
@@ -377,11 +380,10 @@ func (r *Registry) Hosts(ctx context.Context) ([]HostSummary, error) {
 		}
 		seen := time.UnixMilli(at).UTC()
 		hosts[index].LastCheckIn = &seen
-		var parsed struct {
-			Version string `json:"version"`
-		}
+		var parsed membership.CheckInPayload
 		_ = json.Unmarshal([]byte(payload), &parsed)
 		hosts[index].Version = parsed.Version
+		hosts[index].Endpoint = parsed.Endpoint
 	}
 	return hosts, nil
 }

@@ -23,9 +23,9 @@ func TestEachRunnerReadIsOneFixedCommandInsideTheRunnerPod(t *testing.T) {
 		command string
 	}{
 		{"log", ReadRunLog, "", "tail -c 400000 /var/log/ansible-cron.log"},
-		{"list", ReadPlaybookList, "", "ls /opt/adaetum/ansible/playbooks"},
-		{"head", ReadPlaybookHead, "day2.yml", "head -n 40 /opt/adaetum/ansible/playbooks/day2.yml"},
-		{"profile", ReadPlatformProfile, "", "cat /opt/adaetum/platform.yaml"},
+		{"list", ReadPlaybookList, "", "ls /ansible/ansible/playbooks"},
+		{"head", ReadPlaybookHead, "day2.yml", "head -n 40 /ansible/ansible/playbooks/day2.yml"},
+		{"profile", ReadPlatformProfile, "", "cat /ansible/platform.yaml"},
 	}
 	for _, c := range cases {
 		inspector, calls := recorder("ok")

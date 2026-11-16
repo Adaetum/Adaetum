@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Adaetum/Adaetum/agent/internal/cluster"
 	"github.com/Adaetum/Adaetum/agent/internal/inspect"
 	"github.com/Adaetum/Adaetum/agent/internal/policy"
 	"github.com/Adaetum/Adaetum/agent/internal/runs"
@@ -295,5 +296,45 @@ func TestARunResumedAtStartIsNotStartedASecondTime(t *testing.T) {
 	list := listRuns(t, mux)
 	if len(list) != 1 || list[0].RunID != "run_old" || list[0].State != runs.StateRunning {
 		t.Fatalf("the resumed run should be the only one: %+v", list)
+	}
+}
+
+// The cluster agent has no sign-in on a host, so its read route carries its own check and
+// is not closed by the login wall; everything else under /api still is.
+func TestTheClusterReadRouteBypassesTheLoginWallButOnlyForItsOwnCheck(t *testing.T) {
+	mux := http.NewServeMux()
+	noBoard := func() *policy.Switchboard { return nil }
+	deny := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "cluster check", http.StatusUnauthorized) })
+	}
+	_, stop := setupRuns(mux, openHostStore(t), &runsConfig{clusterRead: deny}, "", nil, nil, noBoard)
+	defer stop()
+	login := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "login wall", http.StatusUnauthorized) })
+	}
+	wall := requireLogin(mux, login)
+
+	for path, want := range map[string]string{"/api/v1/cluster/runs": "cluster check", "/api/v1/runs": "login wall"} {
+		recorder := httptest.NewRecorder()
+		wall.ServeHTTP(recorder, httptest.NewRequest("GET", path, nil))
+		if got := strings.TrimSpace(recorder.Body.String()); got != want {
+			t.Errorf("%s was answered by %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestTheClusterAutomationRouteIsNotBehindTheLoginWallEither(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(cluster.ClusterAutomationPath, func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("its own check")) })
+	mux.HandleFunc("/api/v1/automation", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("open")) })
+	wall := requireLogin(mux, func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "login wall", http.StatusUnauthorized) })
+	})
+	for path, want := range map[string]string{cluster.ClusterAutomationPath: "its own check", "/api/v1/automation": "login wall"} {
+		recorder := httptest.NewRecorder()
+		wall.ServeHTTP(recorder, httptest.NewRequest("GET", path, nil))
+		if got := strings.TrimSpace(recorder.Body.String()); got != want {
+			t.Errorf("%s was answered by %q, want %q", path, got, want)
+		}
 	}
 }

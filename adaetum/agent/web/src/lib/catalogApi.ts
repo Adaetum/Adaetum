@@ -73,3 +73,14 @@ export function searchCatalog(query: string, signal?: AbortSignal): Promise<Cata
 export function previewInstall(entry: CatalogEntry, signal?: AbortSignal): Promise<AppPreview> {
   return read(`/api/v1/catalog/preview?${new URLSearchParams({ kind: entry.kind, id: entry.id })}`, signal);
 }
+
+// A hand-picked app the page offers before anyone searches. Its details are read from the
+// public source when the page opens; `why` is the one-line reason it is suggested.
+export interface Recommendation extends CatalogEntry {
+  why: string;
+}
+
+export async function fetchRecommended(signal?: AbortSignal): Promise<Recommendation[]> {
+  const body = await read<{ apps: Recommendation[] }>("/api/v1/catalog/recommended", signal);
+  return body.apps ?? [];
+}

@@ -131,13 +131,13 @@ func (c *Collector) Collect(ctx context.Context) Overview {
 	}
 
 	if playbooks, err := c.collectPlaybooks(ctx, pod); err != nil {
-		fail("playbooks", err)
+		fail("playbooks", fmt.Errorf("the runner pod could not list its playbooks; its image may not include the repository (%w)", err))
 	} else {
 		overview.Playbooks = playbooks
 	}
 
 	if profile, err := c.Source.ReadRunnerPod(ctx, pod, inspect.ReadPlatformProfile, ""); err != nil {
-		fail("platform profile", err)
+		fail("platform profile", fmt.Errorf("the runner pod has no platform.yaml to read; its image may not include the repository (%w)", err))
 	} else if declared, err := ParseDeclared(profile); err != nil {
 		fail("platform profile", err)
 	} else {

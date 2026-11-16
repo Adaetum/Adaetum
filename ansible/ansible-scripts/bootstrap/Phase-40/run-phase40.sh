@@ -1563,6 +1563,7 @@ fi
   --from-file=gitea.hcl="${policy_dir}/gitea.hcl" \
   --from-file=adaetum-agent-gitops.hcl="${policy_dir}/adaetum-agent-gitops.hcl" \
   --from-file=adaetum-agent-owner.hcl="${policy_dir}/adaetum-agent-owner.hcl" \
+  --from-file=adaetum-agent-tls.hcl="${policy_dir}/adaetum-agent-tls.hcl" \
   --from-file=mcp-credentials.hcl="${policy_dir}/mcp-credentials.hcl" \
   --from-file=mcp-argocd.hcl="${policy_dir}/mcp-argocd.hcl" \
   --from-file=mcp-grafana.hcl="${policy_dir}/mcp-grafana.hcl" \

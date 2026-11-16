@@ -28,6 +28,9 @@ type runsConfig struct {
 	// atStart names procedures the agent starts itself whenever it starts (for
 	// example host-readiness).
 	atStart string
+	// clusterRead lets this host's cluster agent list its runs (read-only); nil when this
+	// host has no database to join with.
+	clusterRead func(http.Handler) http.Handler
 }
 
 func addRunsFlags(flags *flag.FlagSet) *runsConfig {
@@ -146,7 +149,7 @@ func setupRuns(mux *http.ServeMux, db *store.Store, cfg *runsConfig, tokenFile s
 		}
 	}
 	api := &runsapi.API{
-		Manager: manager, RequireUser: guard, Who: personName,
+		Manager: manager, RequireUser: guard, Who: personName, ClusterRead: cfg.clusterRead,
 		// Asked on every request: the Security page's switch when there is one, else
 		// the startup flag. Reading and cancelling are never gated by it.
 		Enabled: func() (bool, string) {

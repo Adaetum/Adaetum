@@ -10,6 +10,10 @@ tailscale_cluster_tag="${TAILSCALE_CLUSTER_TAG:-}"
 ansible_user="${ANSIBLE_USER:-}"
 ansible_python="${ANSIBLE_PYTHON_INTERPRETER:-}"
 ssh_common_args="${ANSIBLE_SSH_COMMON_ARGS:-}"
+# Cron starts jobs with an almost empty environment, so everything run-ansible and build-inventory
+# read has to be written into the cron file. Without the key below the runner would quietly fall back
+# to treating its own container as the node (see build-inventory).
+local_ssh_key="${ANSIBLE_LOCAL_SSH_KEY:-}"
 
 cat >/etc/cron.d/ansible-runner <<EOF
 SHELL=/bin/sh
@@ -22,6 +26,7 @@ TAILSCALE_CLUSTER_TAG=${tailscale_cluster_tag}
 ANSIBLE_USER=${ansible_user}
 ANSIBLE_PYTHON_INTERPRETER=${ansible_python}
 ANSIBLE_SSH_COMMON_ARGS=${ssh_common_args}
+ANSIBLE_LOCAL_SSH_KEY=${local_ssh_key}
 ${schedule} root /usr/local/bin/run-ansible >>/var/log/ansible-cron.log 2>&1
 EOF
 

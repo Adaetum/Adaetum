@@ -276,6 +276,39 @@ by default.
 No. Install is always a single node, and you add more later when the first one
 is stable.
 
+### What hardware does a node need?
+
+The minimum runs the platform and a few small apps. On it you will want to turn
+things off to make room, so treat it as a floor, not a target. Apps with large
+data (photos, files) are what use up memory and disk first.
+
+| | Cores | Processor (roughly) | Memory | Disk |
+| --- | --- | --- | --- | --- |
+| Minimum | 4 | Core i3, Ryzen 3 | 16 GB | 256 GB |
+| Recommended | 6 | Core i5, Ryzen 5 | 24 GB or more | 512 GB |
+| Preferred | 8 or more | Core i7 or better, Ryzen 7 or better | 32 GB or more | 1 TB |
+
+The processor column is a rough guide to the class of chip, not a requirement:
+use the core count, and a recent generation (the development machine's chip is
+from 2018).
+
+**Network:** 1 GbE is enough, and it is what the development machine uses. Nodes
+that share a local network get more from a faster link as that group grows.
+From about four machines on the same LAN, consider a 2.5 GbE adapter for each
+one; inexpensive USB ones cost around $10 and give the cluster's own traffic
+between nodes more room. With a smaller local group, or most nodes remote, it
+matters much less and you can skip it.
+
+For reference, the development machine is a single virtual machine on ESXi with
+8 virtual cores on an Intel Core i7-8700T (2.4 GHz, an older 35 W desktop-class
+processor), about 14 GB of memory and a 62 GB disk. It runs the full platform
+(about 45 Argo CD applications, 116 pods). It runs, but it is very tight:
+memory is nearly all used and the disk is about 77% full. The processor is
+the least strained: load averages were about 1.5 to 4.5 on 8 cores, and
+CPU use was around 45% when sampled, higher while pods were starting. That is below even
+the minimum above on memory and disk, so expect to turn things off on anything
+that small.
+
 ### What accounts and tools do I need?
 
 A GitHub, Cloudflare and Tailscale account, which setup walks you through

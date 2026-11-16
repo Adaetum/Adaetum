@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // API serves the explorer. Both routes only read public sources and change nothing,
@@ -15,7 +16,10 @@ type API struct {
 	// DB, when set, keeps logo lookups across restarts (see Migrations). Optional.
 	DB *sql.DB
 
-	logos logoCache
+	logos       logoCache
+	recommended recommendedCache
+	// Now is the clock for the recommendation cache; tests replace it.
+	Now func() time.Time
 }
 
 func (api *API) Register(mux *http.ServeMux) {
@@ -24,6 +28,7 @@ func (api *API) Register(mux *http.ServeMux) {
 		user = func(next http.Handler) http.Handler { return next }
 	}
 	mux.Handle("GET /api/v1/catalog/search", user(http.HandlerFunc(api.search)))
+	mux.Handle("GET /api/v1/catalog/recommended", user(http.HandlerFunc(api.recommendedApps)))
 	mux.Handle("GET /api/v1/catalog/preview", user(http.HandlerFunc(api.preview)))
 	mux.Handle("GET /api/v1/catalog/logo", user(http.HandlerFunc(api.logo)))
 }
@@ -42,6 +47,18 @@ func (api *API) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+func (api *API) recommendedApps(w http.ResponseWriter, r *http.Request) {
+	now := api.Now
+	if now == nil {
+		now = time.Now
+	}
+	apps, notes := api.recommended.get(r.Context(), api.client(), now)
+	if apps == nil {
+		apps = []Recommendation{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"apps": apps, "notes": notes})
 }
 
 func (api *API) preview(w http.ResponseWriter, r *http.Request) {

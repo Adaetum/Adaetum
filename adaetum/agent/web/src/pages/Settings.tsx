@@ -9,6 +9,7 @@ import { Memory } from "./Memory";
 import { People } from "./People";
 import { Profile } from "./Profile";
 import { Security } from "./Security";
+import { Tailnet } from "./Tailnet";
 
 const TABS = [
   { id: "general", label: "General" },
@@ -17,6 +18,7 @@ const TABS = [
   { id: "ai-model", label: "AI model" },
   { id: "memory", label: "Memory" },
   { id: "embedding", label: "Embedding" },
+  { id: "tailnet", label: "Tailnet" },
   { id: "security", label: "Security" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
@@ -41,6 +43,7 @@ export function Settings({ location }: { location: AppLocation }) {
           {tab === "ai-model" && <AiModel />}
           {tab === "memory" && <Memory />}
           {tab === "embedding" && <Embedding />}
+          {tab === "tailnet" && <Tailnet />}
           {tab === "security" && <Security />}
         </SettingsSection.Provider>
       </Tabs.Root>

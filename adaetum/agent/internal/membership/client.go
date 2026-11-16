@@ -3,10 +3,8 @@ package membership
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/Adaetum/Adaetum/agent/internal/identity"
 	"github.com/Adaetum/Adaetum/agent/internal/store"
+	"github.com/Adaetum/Adaetum/agent/internal/tlscert"
 )
 
 // Link is a host's saved connection to its cluster agent. It holds no secret: the
@@ -27,7 +26,8 @@ import (
 type Link struct {
 	// URL of the cluster agent, e.g. https://cluster-agent.example:8443.
 	URL string `json:"url"`
-	// Fingerprint is the cluster agent certificate's SHA-256, which the host
+	// Fingerprint pins the cluster agent: the SHA-256 of its certificate's public key (or, on
+	// links made before key pins, of the whole certificate), which the host
 	// requires on every connection. The cluster agent makes its own certificate, so
 	// there is no authority to ask; the operator pins the fingerprint printed when
 	// the cluster agent starts, once, when the host joins.
@@ -85,8 +85,7 @@ func (l Link) client() *http.Client {
 					if len(raw) == 0 {
 						return errors.New("the cluster agent presented no certificate")
 					}
-					sum := sha256.Sum256(raw[0])
-					if hex.EncodeToString(sum[:]) != want {
+					if !tlscert.PinMatches(want, raw[0]) {
 						return errors.New("the cluster agent's certificate does not match the pinned fingerprint")
 					}
 					return nil

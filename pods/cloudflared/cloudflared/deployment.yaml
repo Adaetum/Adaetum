@@ -36,7 +36,10 @@ spec:
         - name: cloudflared
           image: cloudflare/cloudflared:2026.7.2@sha256:4f6655284ab3d252b7f28fedb19fe6c8fc82ee5b1295c20ac74d475e5398a52d
           imagePullPolicy: IfNotPresent
-          args: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
+          # http2 over TCP 7844, not the default QUIC over UDP. Many networks (including the dev
+          # ESXi one) drop UDP to Cloudflare's edge; "auto" then waits through QUIC retries with
+          # growing back-off before falling back, so a new replica stays not-ready for minutes.
+          args: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--metrics", "0.0.0.0:2000", "run"]
           env:
             # This delivery Secret is created by cloudflared-openbao's CSI
             # mount, never by ESO or a bootstrap writer.
@@ -67,6 +70,19 @@ spec:
             - name: metrics
               containerPort: 2000
               protocol: TCP
+          # /ready answers 200 only while the tunnel has a live connection to Cloudflare. It is
+          # also the liveness check, with a long tolerance: a restart cannot fix an outage
+          # elsewhere, but a wedged connector should not stay wedged.
+          readinessProbe:
+            httpGet: {path: /ready, port: metrics}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /ready, port: metrics}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
       volumes:
         - name: cloudflared-openbao
           csi:

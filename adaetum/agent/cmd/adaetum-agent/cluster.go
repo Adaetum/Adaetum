@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"github.com/Adaetum/Adaetum/agent/internal/identity"
 	"github.com/Adaetum/Adaetum/agent/internal/membership"
 	"github.com/Adaetum/Adaetum/agent/internal/memory"
+	"github.com/Adaetum/Adaetum/agent/internal/openbao"
 	"github.com/Adaetum/Adaetum/agent/internal/policy"
 	"github.com/Adaetum/Adaetum/agent/internal/releases"
 	"github.com/Adaetum/Adaetum/agent/internal/runsapi"
@@ -80,6 +82,8 @@ func runCluster(args []string) {
 	assistantKeyFile := flags.String("assistant-key-file", "", "file holding the AI service API key (mode 600); else ANTHROPIC_API_KEY (anthropic) or ASSISTANT_API_KEY (others)")
 	securityAudit := flags.String("security-audit", defaultSecurityAudit, "record of every change to the Security settings (changes are refused if it cannot be written)")
 	hostSSHAudit := flags.String("host-ssh-audit", defaultHostAccessAudit, "record of every command run through the override")
+	openbaoURL := flags.String("openbao-url", "", "OpenBao's address: keeps this agent's TLS key there, so rebuilding the pod or losing its volume does not change the key every host pinned (empty: the key stays on this agent's own volume)")
+	openbaoRole := flags.String("openbao-role", "adaetum-agent-tls", "the OpenBao Kubernetes-auth role this agent signs in as, for -openbao-url")
 	sshTarget := flags.String("ssh", "", "DEVELOPMENT: list the cluster's servers by reading this host over SSH (read-only)")
 	auth := addAuthFlags(flags)
 	_ = flags.Parse(args)
@@ -168,6 +172,7 @@ func runCluster(args []string) {
 	defer stopHost()
 
 	registerSecurity(mux, board, guard)
+	registerTailnetHTTPS(mux, *securityAudit, guard)
 	// Memory: remembered facts, an embedding queue drained in the background, and
 	// recall by meaning with a keyword fallback. Nothing waits on the embedder.
 	startup := memory.Config{Kind: memory.KindBuiltin}
@@ -233,9 +238,26 @@ func runCluster(args []string) {
 		}).Register(mux)
 	}
 	registerClusterReport(mux, *sshTarget, guard)
+	// The cluster agent's own calls to its servers' agents (the Runs and Automation pages reach
+	// out when they load). Requests are signed with this agent's TLS certificate key, the one
+	// every joined host pinned (membership/callback.go); the certificate is made further down.
+	var certificates *tlscert.Manager
+	hostCaller := &cluster.HostCaller{
+		Registry: registry,
+		Sign: func(r *http.Request, hostID string) error {
+			cert, err := certificates.GetCertificate(nil)
+			if err != nil {
+				return err
+			}
+			return membership.SignAsCluster(r, cert, hostID, time.Now())
+		},
+	}
+	(&cluster.FleetRuns{Hosts: hostCaller, RequireUser: guard}).Register(mux)
+	registerClusterAutomation(mux, *sshTarget, guard, hostCaller)
 	// Runs are a host agent's own work (they act on one machine), so the cluster agent has
-	// none; it answers the Runs page with that reason instead of a 404.
-	(&runsapi.API{Reason: "Runs are the work a server's own agent does on that server, so the cluster agent has none. Open a server's agent to see its runs.", RequireUser: guard}).Register(mux)
+	// none; it answers the Runs page with that reason instead of a 404, and the page then
+	// asks /api/v1/fleet/runs (below) for the servers' runs.
+	(&runsapi.API{Reason: "Runs are the work a server's own agent does on that server, so the cluster agent has none of its own. The runs on each server are listed instead.", RequireUser: guard}).Register(mux)
 	mux.Handle("/api/", api.Handler())
 	mux.Handle("/", webui.Handler())
 
@@ -269,9 +291,20 @@ func runCluster(args []string) {
 	}
 	assistantAPI.Register(mux)
 
-	certificates := tlscert.NewManager(filepath.Join(*dataDir, "tls"))
+	certificates = tlscert.NewManager(filepath.Join(*dataDir, "tls"))
 	if identity, ok := podCertificateIdentity(os.Getenv); ok {
 		certificates.Identity = identity
+	}
+	// Ask OpenBao for the key BEFORE the first certificate is made or announced. After a lost
+	// volume this is what brings back the key every host pinned, instead of briefly serving
+	// (and publishing) a new one. If OpenBao is not ready, the key on disk is used as before.
+	if *openbaoURL != "" {
+		certificates.Source = &openbao.KeyStore{Addr: *openbaoURL, Role: *openbaoRole}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if _, err := certificates.SyncKey(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "tls key: OpenBao is not ready, using the key on this agent's volume:", err)
+		}
+		cancel()
 	}
 	_, leaf, err := certificates.Current()
 	if err != nil {
@@ -285,8 +318,11 @@ func runCluster(args []string) {
 		TLSConfig:         &tls.Config{GetCertificate: certificates.GetCertificate, MinVersion: tls.VersionTLS12},
 	}
 	fmt.Fprintf(os.Stderr, "cluster agent listening on https://%s\n", *listen)
-	fmt.Fprintln(os.Stderr, "certificate fingerprint (give this to `join -fingerprint`):", tlscert.Fingerprint(leaf))
-	publishEndpoint(tlscert.Fingerprint(leaf), *sshTarget)
+	// Hosts pin the certificate's KEY, so the certificate can be remade without cutting them off.
+	fmt.Fprintln(os.Stderr, "key pin (give this to `join -fingerprint`):", tlscert.KeyPin(leaf))
+	fmt.Fprintln(os.Stderr, "certificate fingerprint (SHA-256), to check on first visit in a browser:", tlscert.Fingerprint(leaf))
+	publishEndpoint(tlscert.KeyPin(leaf), *sshTarget)
+	startKeySync(certificates, *openbaoURL, *sshTarget)
 	if err := serveTLSUpgradingHTTP(server, ownCertificateName(certificates)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -391,4 +427,44 @@ func assistantKey(file string, env ...string) (key, reason string) {
 		}
 	}
 	return "", "no API key: pass -assistant-key-file or set " + strings.Join(env, " or ") + "."
+}
+
+// keySyncEvery is how often the agent compares its TLS key with OpenBao's. OpenBao is not
+// configured until after this agent first starts, so this is also how soon after that the key
+// is first stored; a rotation is picked up within the same time.
+var keySyncEvery = 5 * time.Minute
+
+// startKeySync keeps this agent's TLS key in step with OpenBao (see tlscert.Manager.SyncKey and
+// internal/openbao). It never stops the agent: OpenBao being absent, sealed or not yet set up is
+// reported once per distinct reason and retried. When the key changes, hosts are told the new
+// pin the same way as at startup.
+func startKeySync(certificates *tlscert.Manager, url, sshTarget string) {
+	if url == "" {
+		return
+	}
+	certificates.OnKeyChanged = func(leaf *x509.Certificate) {
+		fmt.Fprintln(os.Stderr, "tls key: switched to the key held in OpenBao; new key pin:", tlscert.KeyPin(leaf))
+		publishEndpoint(tlscert.KeyPin(leaf), sshTarget)
+	}
+	go func() {
+		last := "?" // so the first outcome, good or bad, is always said once
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_, err := certificates.SyncKey(ctx)
+			cancel()
+			message := ""
+			if err != nil {
+				message = err.Error()
+			}
+			if message != last {
+				last = message
+				if message != "" {
+					fmt.Fprintln(os.Stderr, "tls key: not synced with OpenBao yet (will keep trying):", message)
+				} else {
+					fmt.Fprintln(os.Stderr, "tls key: in step with OpenBao")
+				}
+			}
+			time.Sleep(keySyncEvery)
+		}
+	}()
 }

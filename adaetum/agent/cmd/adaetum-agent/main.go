@@ -44,7 +44,9 @@ import (
 
 	"github.com/Adaetum/Adaetum/agent/internal/automation"
 	"github.com/Adaetum/Adaetum/agent/internal/catalog"
+	"github.com/Adaetum/Adaetum/agent/internal/cluster"
 	"github.com/Adaetum/Adaetum/agent/internal/inspect"
+	"github.com/Adaetum/Adaetum/agent/internal/membership"
 	"github.com/Adaetum/Adaetum/agent/internal/policy"
 	"github.com/Adaetum/Adaetum/agent/internal/tlscert"
 	"github.com/Adaetum/Adaetum/agent/internal/webui"
@@ -148,8 +150,28 @@ func runServe(args []string) {
 	guard := combinedGuard(accessToken, authClient)
 
 	inspector := newInspector(*sshTarget)
-	stopHost, hostDB := startHostIdentity(*dataDir, *sshTarget, authClient)
+	// The self-made certificate is made before anything needs it: the host tells its
+	// cluster agent where it can be reached (and the certificate to pin) in each check-in.
+	var certificates *tlscert.Manager
+	if exposed {
+		certificates = tlscert.NewManager(*tlsDir)
+	}
+	stopHost, hostDB := startHostIdentity(*dataDir, *sshTarget, authClient, hostEndpoint(certificates, *listen))
 	defer stopHost()
+	var clusterRead func(http.Handler) http.Handler
+	if hostDB != nil {
+		// The cluster agent may read this host's runs and automation, and only read them. Its
+		// request is accepted only when signed by the certificate this host pinned when it joined.
+		clusterRead = (&membership.ClusterVerifier{
+			Link: func() (membership.Link, bool) {
+				link, joined, err := membership.LoadLink(*dataDir)
+				return link, joined && err == nil
+			},
+			HostID: hostDB.HostID(),
+			Now:    time.Now,
+		}).Guard
+		runsCfg.clusterRead = clusterRead
+	}
 	mux := http.NewServeMux()
 	if *historyDir == "" {
 		*historyDir = *dataDir
@@ -202,12 +224,18 @@ func runServe(args []string) {
 	// Automation is read-only: runner state, run history, playbooks, and the
 	// policies platform.yaml declares.
 	automationCollector := &automation.Collector{Source: inspector, Now: time.Now}
-	mux.HandleFunc("/api/v1/automation", func(w http.ResponseWriter, r *http.Request) {
+	automationHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(automationCollector.Collect(ctx))
 	})
+	mux.Handle("/api/v1/automation", automationHandler)
+	if clusterRead != nil {
+		// The cluster agent cannot read inside the runner pod, so it asks a server's agent,
+		// which can, for the same report (read-only; see membership/callback.go).
+		mux.Handle(cluster.ClusterAutomationPath, clusterRead(automationHandler))
+	}
 
 	// The web interface is served by the agent itself, so a host is usable with
 	// nothing else installed. It is the catch-all route; the API routes above are
@@ -232,7 +260,6 @@ func runServe(args []string) {
 	server := &http.Server{Addr: *listen, ReadHeaderTimeout: 5 * time.Second}
 	if exposed {
 		// The login (token and/or account) only travels over TLS.
-		certificates := tlscert.NewManager(*tlsDir)
 		_, leaf, err := certificates.Current()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "cannot make a certificate, so the agent will not listen beyond this machine:", err)

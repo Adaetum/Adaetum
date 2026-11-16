@@ -1,9 +1,9 @@
 import { Badge, Button, Callout, Card, Code, Flex, Heading, Text, TextField } from "@radix-ui/themes";
 import { CircleAlert, CircleCheck, MessageCircle, Search, TriangleAlert } from "lucide-react";
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { AppLogo } from "../components/AppLogo";
 import { PageHeader } from "../components/PageHeader";
-import { AppPreview, CatalogEntry, CatalogResults, PreviewFlag, previewInstall, searchCatalog } from "../lib/catalogApi";
+import { AppPreview, CatalogEntry, CatalogResults, PreviewFlag, Recommendation, fetchRecommended, previewInstall, searchCatalog } from "../lib/catalogApi";
 import { AuthRequiredError, useToken } from "../lib/auth";
 import { plural } from "../lib/format";
 import { Login } from "./Login";
@@ -24,6 +24,16 @@ export function Explore() {
   const [previewing, setPreviewing] = useState<string | null>(null);
   // A newer action replaces an older one, so a slow answer never overwrites a fresh one.
   const latest = useRef(0);
+  // Suggestions shown before anyone searches. They are a nicety: if they cannot be loaded (or
+  // sign-in is needed) the page just shows the search box, and searching explains any problem.
+  const [suggested, setSuggested] = useState<Recommendation[]>([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchRecommended(controller.signal)
+      .then((apps) => { if (!controller.signal.aborted) setSuggested(apps); })
+      .catch(() => { /* optional */ });
+    return () => controller.abort();
+  }, [token]);
 
   const fail = (err: unknown) => {
     if (err instanceof AuthRequiredError) setNeedsSignIn(true);
@@ -92,6 +102,18 @@ export function Explore() {
 
           <div aria-live="polite">{preview && <Preview preview={preview} onClose={() => setPreview(null)} />}</div>
 
+          {!results && suggested.length > 0 && (
+            <section aria-label="Popular apps">
+              <Heading size="3" as="h2">Popular to start with</Heading>
+              <Text size="2" color="gray" as="p" mb="2">A few well-known apps people run at home. Not sure what to search for? Start here.</Text>
+              <Flex direction="column" gap="2">
+                {suggested.map((entry) => (
+                  <Result key={entry.id} entry={entry} why={entry.why} busy={previewing === entry.id} onPreview={() => show(entry)} />
+                ))}
+              </Flex>
+            </section>
+          )}
+
           {results && (
             <>
               {results.notes?.map((note) => (
@@ -140,7 +162,7 @@ function Section({ title, help, entries, previewing, onPreview }: { title: strin
   );
 }
 
-function Result({ entry, busy, onPreview }: { entry: CatalogEntry; busy: boolean; onPreview: () => void }) {
+function Result({ entry, busy, onPreview, why }: { entry: CatalogEntry; busy: boolean; onPreview: () => void; why?: string }) {
   const assistant = useAssistant();
   const ask = `I'm thinking of adding ${entry.name} (${entry.kind === "chart" ? "Helm chart" : "container image"} ${entry.id} from ${entry.source}). Is it a good choice, and what would adding it involve?`;
   return (
@@ -172,7 +194,8 @@ function Result({ entry, busy, onPreview }: { entry: CatalogEntry; busy: boolean
             </Button>
           </Flex>
         </Flex>
-        {entry.description && <Text size="2" style={{ overflowWrap: "anywhere" }}>{entry.description}</Text>}
+        {why && <Text size="2" weight="medium">{why}</Text>}
+        {entry.description && <Text size="2" color={why ? "gray" : undefined} style={{ overflowWrap: "anywhere" }}>{entry.description}</Text>}
         <Text size="1"><a href={entry.page} target="_blank" rel="noreferrer noopener">Read more on {entry.source} (opens a new tab)</a></Text>
       </Flex>
     </Card>

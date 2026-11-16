@@ -275,7 +275,62 @@ export async function cancelRun(id: string): Promise<void> {
   if (!response.ok) throw await failure(response, "Could not stop the run");
 }
 
+// One server's runs, as the cluster agent read them from that server just now.
+export interface ServerRuns {
+  hostId: string;
+  hostname: string;
+  runs: RunSnapshot[];
+  error?: string;
+}
+
+// The cluster agent has no runs of its own; it reaches out to each server when asked.
+// null means this agent does not offer that (a host agent), which is not an error.
+export async function fetchFleetRuns(signal?: AbortSignal): Promise<ServerRuns[] | null> {
+  const response = await authedFetch("/api/v1/fleet/runs", { signal, quiet: true });
+  if (response.status === 404) return null;
+  if (!response.ok) throw await failure(response, "Could not read the servers' runs");
+  return (await response.json()).servers ?? [];
+}
+
 // ---- hooks -----------------------------------------------------------------
+
+export interface FleetRunsState {
+  servers: ServerRuns[] | null;
+  error: string | null;
+  loading: boolean;
+  refresh: () => void;
+}
+
+// useFleetRuns reads every server's runs when the page opens and again on Refresh. It
+// does not poll: each read makes the cluster call every server, so it is asked for.
+export function useFleetRuns(enabled: boolean): FleetRunsState {
+  const [servers, setServers] = useState<ServerRuns[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    setLoading(true);
+    fetchFleetRuns(controller.signal)
+      .then((list) => {
+        if (controller.signal.aborted) return;
+        setServers(list);
+        setError(null);
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [enabled, tick]);
+
+  const refresh = useCallback(() => setTick((n) => n + 1), []);
+  return { servers, error, loading, refresh };
+}
 
 export interface RunsOverview {
   capabilities: RunCapabilities | null;

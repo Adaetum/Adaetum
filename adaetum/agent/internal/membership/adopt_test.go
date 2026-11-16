@@ -94,3 +94,22 @@ func TestAdoptionRefusesANodeNameThatIsNotAKubernetesName(t *testing.T) {
 		t.Fatalf("a hostile name was used: %v", f.annotated)
 	}
 }
+
+func TestAJoinedNodeNoticesWhenTheClusterAgentsCertificateChanged(t *testing.T) {
+	f := &fakeKube{data: map[string]string{"url": "https://10.43.1.2:8444", "fingerprint": "AA:BB:CC"}}
+	a := Adopter{Kube: f}
+	current := Link{URL: "https://10.43.1.2:8444", Fingerprint: "aabbcc"}
+
+	if _, moved, err := a.Moved(context.Background(), current); err != nil || moved {
+		t.Fatalf("an unchanged endpoint is not a move: moved=%v err=%v", moved, err)
+	}
+	f.data["fingerprint"] = "DD:EE:FF"
+	next, moved, err := a.Moved(context.Background(), current)
+	if err != nil || !moved || next.Fingerprint != "ddeeff" {
+		t.Fatalf("a changed certificate must be picked up: %+v moved=%v err=%v", next, moved, err)
+	}
+	f.getErr = errors.New("kube down")
+	if _, moved, err := a.Moved(context.Background(), current); err == nil || moved {
+		t.Fatal("an unreadable ConfigMap must not change the pin")
+	}
+}

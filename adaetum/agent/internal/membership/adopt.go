@@ -87,6 +87,27 @@ func (a Adopter) Adopt(ctx context.Context, hostID, hostname, publicKey string) 
 	return link, result, nil
 }
 
+// Moved says whether the cluster agent now publishes a different address or certificate than
+// the link this host saved. The certificate changes when the cluster agent is rebuilt or its
+// identity changes; the host's pin then refuses it, and without this the host would stay cut
+// off until someone joined it again by hand. The new value is read the same way adoption reads
+// it (the node's own Kubernetes credentials), so a refreshed pin is exactly as trustworthy as
+// the first one; a host that is not a node has no such credentials and never calls this.
+func (a Adopter) Moved(ctx context.Context, current Link) (Link, bool, error) {
+	data, err := a.Kube.ConfigMapData(ctx, EndpointNamespace, EndpointConfigMap)
+	if err != nil {
+		return Link{}, false, err
+	}
+	if data["url"] == "" || data["fingerprint"] == "" {
+		return Link{}, false, errors.New("the cluster agent's published address is incomplete")
+	}
+	next := Link{URL: data["url"], Fingerprint: NormalizeFingerprint(data["fingerprint"])}
+	if next.URL == current.URL && next.Fingerprint == NormalizeFingerprint(current.Fingerprint) {
+		return current, false, nil
+	}
+	return next, true, nil
+}
+
 // ownNode finds this machine's Node by short name: Kubernetes names nodes in lower case and
 // a host name may carry a domain.
 func (a Adopter) ownNode(ctx context.Context, hostname string) (string, error) {

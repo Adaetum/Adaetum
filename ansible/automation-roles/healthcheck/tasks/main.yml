@@ -129,6 +129,8 @@
 
 - name: Check kube API health
   ansible.builtin.command: "{{ healthcheck_kubectl_cmd }} get --raw=/healthz"
+  environment:
+    KUBECONFIG: "{{ healthcheck_kubeconfig }}"
   register: health_kube
   changed_when: false
   failed_when: false
@@ -142,6 +144,8 @@
     --all-namespaces
     --selector=release=rancher-monitoring
     --output=json
+  environment:
+    KUBECONFIG: "{{ healthcheck_kubeconfig }}"
   register: health_monitor_resources
   changed_when: false
   when:
@@ -175,6 +179,8 @@
       - get
       - >-
         --raw=/api/v1/namespaces/observability/services/http:prometheus-operated:9090/proxy/api/v1/targets?state=active
+  environment:
+    KUBECONFIG: "{{ healthcheck_kubeconfig }}"
   register: health_adaetum_prometheus_targets
   changed_when: false
   until: >-
@@ -235,6 +241,8 @@
   ansible.builtin.command: >-
     {{ healthcheck_kubectl_cmd }} --namespace cattle-monitoring-system
     get service rancher-monitoring-prometheus --output=name
+  environment:
+    KUBECONFIG: "{{ healthcheck_kubeconfig }}"
   register: health_rancher_prometheus_service
   changed_when: false
   failed_when: false
@@ -249,6 +257,8 @@
       - get
       - >-
         --raw=/api/v1/namespaces/cattle-monitoring-system/services/http:rancher-monitoring-prometheus:9090/proxy/api/v1/targets?state=active
+  environment:
+    KUBECONFIG: "{{ healthcheck_kubeconfig }}"
   register: health_rancher_prometheus_targets
   changed_when: false
   until: >-

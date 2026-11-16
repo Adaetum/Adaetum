@@ -5,7 +5,6 @@ export const ROUTES = [
   { id: "workloads", label: "Workloads" },
   { id: "explore", label: "Find apps" },
   { id: "automation", label: "Automation" },
-  { id: "runs", label: "Runs" },
   { id: "cluster", label: "Cluster" },
   { id: "settings", label: "Settings" },
 ] as const;
@@ -33,7 +32,8 @@ function parse(hash: string): AppLocation {
   const [rawPath, query = ""] = hash.replace(/^#\/?/, "").split("?");
   // "fleet" was the Cluster page's old name, and the assistant used to be a page: keep
   // old links and bookmarks landing somewhere sensible.
-  const wanted = rawPath === "fleet" ? "cluster" : rawPath === "assistant" ? "overview" : rawPath;
+  // "runs" was its own page; it now lives inside Automation, so old links land there.
+  const wanted = rawPath === "fleet" ? "cluster" : rawPath === "assistant" ? "overview" : rawPath === "runs" ? "automation" : rawPath;
   const path = ROUTES.find((route) => route.id === wanted)?.id ?? "overview";
   return { path, params: new URLSearchParams(query) };
 }

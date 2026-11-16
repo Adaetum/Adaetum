@@ -22,6 +22,11 @@ healthcheck_dns_name: "tailscale.com"
 healthcheck_ping_target: "1.1.1.1"
 healthcheck_cpu_load_max_per_core: 1.5
 healthcheck_check_kube_api: true
+# kubectl is a bare binary on an RKE2 server: without a kubeconfig it dials localhost:8080 and
+# every cluster check fails. The scheduled runner reaches the node as the ansible user and
+# becomes root, with none of the environment a login shell would have set up, so the check
+# names the kubeconfig itself. A caller that passes its own kubectl_cmd may still carry its own.
+healthcheck_kubeconfig: /etc/rancher/rke2/rke2.yaml
 healthcheck_check_observability: true
 # Prometheus discovers newly reconciled monitor resources asynchronously. Keep
 # the healthcheck strict, but allow the controllers a bounded convergence

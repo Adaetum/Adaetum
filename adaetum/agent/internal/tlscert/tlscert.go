@@ -13,6 +13,7 @@
 package tlscert
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -128,11 +129,50 @@ func Fingerprint(cert *x509.Certificate) string {
 	return strings.Join(parts, ":")
 }
 
+// KeyPin is what other agents pin: the SHA-256 of the certificate's public key, as lowercase
+// hex. It is the key, not the certificate, so remaking the certificate (new addresses, nearing
+// expiry) while keeping the key leaves every pin valid. See Manager.make.
+func KeyPin(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(sum[:])
+}
+
+// PinMatches says whether a presented certificate (DER) is the one a pin names. A pin is
+// either the key pin above or, for links made before key pins existed, the SHA-256 of the
+// whole certificate. Both are accepted so an upgrade never cuts a host off; the two are
+// hashes of different data, so one pin cannot be mistaken for the other.
+func PinMatches(pin string, der []byte) bool {
+	if pin == "" {
+		return false
+	}
+	whole := sha256.Sum256(der)
+	if hex.EncodeToString(whole[:]) == pin {
+		return true
+	}
+	cert, err := x509.ParseCertificate(der)
+	return err == nil && KeyPin(cert) == pin
+}
+
+// KeySource is a second home for the private key (OpenBao in the cluster agent), so the key
+// outlives the volume the certificate is kept on and can be rotated in one place.
+type KeySource interface {
+	// Get returns the stored key as PEM; found is false when the source is reachable but
+	// holds none yet. An error means "could not tell", never "there is none".
+	Get(ctx context.Context) (pem []byte, found bool, err error)
+	Put(ctx context.Context, pem []byte) error
+}
+
 // Manager keeps a certificate current for the identity it is asked for.
 type Manager struct {
 	Dir      string
 	Identity func() Identity
 	Now      func() time.Time
+	// Source, when set, makes the source's key the key (see SyncKey). The agent works
+	// without it, and without reaching it: the key on disk is always a complete fallback.
+	Source KeySource
+	// OnKeyChanged is told, after SyncKey has switched to a different key and remade the
+	// certificate, so the agent can announce the new pin to its hosts.
+	OnKeyChanged func(*x509.Certificate)
 
 	mu        sync.Mutex
 	current   *tls.Certificate
@@ -198,9 +238,15 @@ func (m *Manager) make(id Identity, now time.Time) (*tls.Certificate, *x509.Cert
 	if len(id.Names) == 0 && len(id.IPs) == 0 {
 		return nil, nil, errors.New("this host has no name or address to put in a certificate")
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, nil, err
+	// Keep the key the agent already has. Other agents pin the key (KeyPin), so a certificate
+	// remade for new addresses must carry the same one; a new key is made only the first time,
+	// or when the stored one is unusable.
+	key := m.existingKey()
+	if key == nil {
+		var err error
+		if key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
+			return nil, nil, err
+		}
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
 	if err != nil {
@@ -241,6 +287,103 @@ func (m *Manager) make(id Identity, now time.Time) (*tls.Certificate, *x509.Cert
 		return nil, nil, err
 	}
 	return m.load()
+}
+
+// SyncKey makes Source and the key on disk agree, with Source winning:
+//
+//   - Source holds a key that is not the one on disk: adopt it (rotation, or recovery after
+//     the volume was lost), write it to disk as the offline fallback, and remake the
+//     certificate with it. OnKeyChanged then fires.
+//   - Source holds none: it is seeded with the key this agent already has (made first if need
+//     be), so the first agent to run defines the key and later ones recover it.
+//   - Source cannot be reached: nothing changes. This is normal while OpenBao is not set up yet.
+//
+// Network calls happen here, never while a client is connecting, so a slow OpenBao cannot
+// stall a handshake.
+func (m *Manager) SyncKey(ctx context.Context) (changed bool, err error) {
+	if m.Source == nil {
+		return false, nil
+	}
+	remote, found, err := m.Source.Get(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		if _, _, err := m.Current(); err != nil { // makes a key if there is none yet
+			return false, err
+		}
+		local := m.existingKey()
+		if local == nil {
+			return false, errors.New("there is no key to store")
+		}
+		pemBytes, err := encodeKey(local)
+		if err != nil {
+			return false, err
+		}
+		return false, m.Source.Put(ctx, pemBytes)
+	}
+
+	block, _ := pem.Decode(remote)
+	var key *ecdsa.PrivateKey
+	if block != nil {
+		key, _ = x509.ParseECPrivateKey(block.Bytes)
+	}
+	if key == nil || key.Curve != elliptic.P256() {
+		return false, errors.New("the key held in the key source is not a usable P-256 key, so it was ignored")
+	}
+
+	m.mu.Lock()
+	local := m.existingKey()
+	if local != nil && local.Equal(key) {
+		m.mu.Unlock()
+		return false, nil
+	}
+	if err := os.MkdirAll(m.Dir, 0o700); err != nil {
+		m.mu.Unlock()
+		return false, err
+	}
+	pemBytes, _ := encodeKey(key)
+	if err := writeFile(filepath.Join(m.Dir, keyFile), pemBytes, 0o600); err != nil {
+		m.mu.Unlock()
+		return false, err
+	}
+	// The certificate on disk no longer matches the key, so the next Current remakes it.
+	m.checkedAt = time.Time{}
+	m.mu.Unlock()
+
+	_, leaf, err := m.Current()
+	if err != nil {
+		return true, err
+	}
+	if m.OnKeyChanged != nil {
+		m.OnKeyChanged(leaf)
+	}
+	return true, nil
+}
+
+func encodeKey(key *ecdsa.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), nil
+}
+
+// existingKey returns the stored private key, or nil if there is none or it cannot be used.
+func (m *Manager) existingKey() *ecdsa.PrivateKey {
+	data, err := os.ReadFile(filepath.Join(m.Dir, keyFile))
+	if err != nil {
+		return nil
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil || key.Curve != elliptic.P256() {
+		return nil
+	}
+	return key
 }
 
 // writeFile replaces path atomically so a crash cannot leave half a file.

@@ -45,17 +45,31 @@ spec:
               value: "example.ts.net"
             - name: TAILSCALE_CLUSTER_TAG
               value: "tag:cluster"
+            # Inside this pod "local" would mean the container, so the node it runs on is
+            # managed over SSH to loopback with this per-node key (see build-inventory).
+            - name: ANSIBLE_LOCAL_SSH_KEY
+              value: "/run/adaetum-ssh/id_ed25519"
           volumeMounts:
             - name: ansible-data
               mountPath: /ansible
             - name: day2-secrets
               mountPath: /run/secrets/adaetum
               readOnly: true
+            - name: runner-ssh
+              mountPath: /run/adaetum-ssh
+              readOnly: true
       volumes:
         - name: ansible-data
           hostPath:
             path: /opt/ansible-runner
             type: Directory
+        # Made on each node when it installs (ks-src ... 22-ansible-bundle-flow). Created empty
+        # if missing so an older node still starts the pod; the inventory then skips the local
+        # node instead of acting on the container.
+        - name: runner-ssh
+          hostPath:
+            path: /var/lib/adaetum/runner-ssh
+            type: DirectoryOrCreate
         - name: day2-secrets
           csi:
             driver: secrets-store.csi.k8s.io

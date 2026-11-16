@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Adaetum/Adaetum/agent/internal/accounts"
+	"github.com/Adaetum/Adaetum/agent/internal/cluster"
 	"github.com/Adaetum/Adaetum/agent/internal/identity"
 	"github.com/Adaetum/Adaetum/agent/internal/membership"
 )
@@ -67,7 +68,9 @@ func requireLogin(next http.Handler, guard func(http.Handler) http.Handler) http
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		isAPI := path == "/api" || strings.HasPrefix(path, "/api/")
-		public := path == "/api/auth-state" || path == "/api/setup" || strings.HasPrefix(path, "/api/auth/")
+		// The cluster agent's read route is not open: it carries its own check (a signature
+		// from the certificate this host pinned), because the cluster has no sign-in here.
+		public := path == "/api/auth-state" || path == "/api/setup" || strings.HasPrefix(path, "/api/auth/") || path == cluster.ClusterRunsPath || path == cluster.ClusterAutomationPath
 		if isAPI && !public {
 			guarded.ServeHTTP(w, r)
 			return

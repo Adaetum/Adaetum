@@ -16,6 +16,12 @@ ansible_python="${ANSIBLE_PYTHON_INTERPRETER:-/usr/bin/python3}"
 ssh_common_args="${ANSIBLE_SSH_COMMON_ARGS:--o StrictHostKeyChecking=no}"
 ssh_probe_timeout="${TAILSCALE_SSH_PROBE_TIMEOUT_SECONDS:-4}"
 
+# Set only inside the runner pod (see the Deployment). There the pod shares its node's network but
+# not its filesystem or processes, so the node must be reached over SSH to loopback with this key;
+# "ansible_connection: local" would manage the container instead. Unset when this script runs on
+# the node itself (break-glass), where local really is the node.
+runner_ssh_key="${ANSIBLE_LOCAL_SSH_KEY:-}"
+
 local_hostname="$(hostname -s)"
 local_fqdn="$(hostname -f 2>/dev/null || true)"
 ssh_probe_cmd=""
@@ -39,9 +45,25 @@ write_inventory() {
   # has no key for the runner and rejects it. The local node is therefore
   # managed directly instead of over SSH.
   write_local_connection() {
-    if is_local_host "$1"; then
+    is_local_host "$1" || return 0
+    if [ -n "${runner_ssh_key}" ]; then
+      printf "          ansible_host: '127.0.0.1'\n" >>"${out_file}"
+      printf "          ansible_connection: 'ssh'\n" >>"${out_file}"
+      printf "          ansible_ssh_private_key_file: '%s'\n" "$(yaml_squote "${runner_ssh_key}")" >>"${out_file}"
+      # The key is the only credential offered, and loopback host keys are not worth pinning.
+      printf "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o BatchMode=yes'\n" >>"${out_file}"
+    else
       printf "          ansible_connection: 'local'\n" >>"${out_file}"
     fi
+  }
+
+  # In the pod, a node with no usable key is left out and said so, never run as "local".
+  skip_unmanageable_local_host() {
+    if [ -n "${runner_ssh_key}" ] && is_local_host "$1" && [ ! -r "${runner_ssh_key}" ]; then
+      echo "[ansible-runner] not managing $1: its runner SSH key ${runner_ssh_key} is missing (the node creates it when it installs)" >&2
+      return 0
+    fi
+    return 1
   }
 
   printf "all:\n" >"${out_file}"
@@ -52,6 +74,7 @@ write_inventory() {
   printf "    servers:\n" >>"${out_file}"
   printf "      hosts:\n" >>"${out_file}"
   for host in ${server_hosts}; do
+    skip_unmanageable_local_host "${host}" && continue
     printf "        %s:\n" "${host}" >>"${out_file}"
     printf "          ansible_python_interpreter: '%s'\n" "$(yaml_squote "${ansible_python}")" >>"${out_file}"
     printf "          rke2_role: 'server'\n" >>"${out_file}"
@@ -60,6 +83,7 @@ write_inventory() {
   printf "    agents:\n" >>"${out_file}"
   printf "      hosts:\n" >>"${out_file}"
   for host in ${agent_hosts}; do
+    skip_unmanageable_local_host "${host}" && continue
     printf "        %s:\n" "${host}" >>"${out_file}"
     printf "          ansible_python_interpreter: '%s'\n" "$(yaml_squote "${ansible_python}")" >>"${out_file}"
     printf "          rke2_role: 'agent'\n" >>"${out_file}"

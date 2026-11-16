@@ -8,7 +8,20 @@ leaking does not open the others. Code: `internal/identity`, `internal/cluster`,
 |---|---|---|
 | **User to agent** (host or cluster) | A person | Their own account (email and password, see [recovery login](recovery-login.md)) when the agent is started with `-auth-socket`, or the access token (`token create`) sent as `Authorization: Bearer`. The token always works and never depends on the auth service; it is the emergency way in. The UI keeps it in the browser tab only. Required for every `/api` call whenever the agent listens beyond loopback, always over HTTPS. |
 | **Host to cluster agent** (machine to machine) | A specific enrolled host | The host has its own Ed25519 key. Every request is signed (method, path, body, timestamp, one-time nonce). The cluster stores only the public key, so nothing it holds can impersonate a host. |
+| **Cluster agent to host** (read-only) | The cluster agent the host joined | The cluster signs each request with the certificate key it serves HTTPS with; the host accepts it only if that certificate hashes to the fingerprint it pinned when it joined. The signature covers the method, path, the target host, a timestamp and a one-time nonce. Only read routes use it (`GET /api/v1/cluster/runs`, which feeds the cluster's Runs page); nothing it reaches can change a host. The address and certificate to call come from the host's own signed check-in. |
 | **Enrollment** (becoming known) | An operator allowed this host to join | A one-time join token, minted by a signed-in person, valid up to 7 days, stored only as a hash. |
+
+## The cluster agent's TLS key
+
+Hosts pin the cluster agent's TLS **key** (not its certificate), so the certificate can be remade
+for new addresses or renewed without cutting anyone off. The agent keeps that key in two places:
+its own volume (always, so it works with OpenBao down) and OpenBao at
+`secret/apps/adaetum/cluster-agent-tls`, readable by this agent alone (policy and role
+`adaetum-agent-tls`). OpenBao wins: after losing the volume the agent comes back with the same
+key, and an operator rotates it by writing a new P-256 key (PEM, field `key`) to that path. The
+agent adopts it within five minutes and publishes the new pin; joined cluster nodes re-pin within
+two more, and anything they could not send meanwhile waits in their outbox. OpenBao is set up
+after the cluster agent first starts, so the agent seeds it with the key it already has.
 
 ## Trust: who is allowed to join
 

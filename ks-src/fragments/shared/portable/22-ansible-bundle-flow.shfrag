@@ -73,6 +73,55 @@ if [ -d /opt/ansible-runner/ansible/ansible-scripts ]; then
   chmod 0755 /opt/ansible-runner/ansible/ansible-scripts/build-inventory 2>/dev/null || true
 fi
 
+# The ansible-runner pod mounts this directory (hostPath) and writes into it: the generated
+# node inventory and its run log. With SELinux enforcing, files extracted here are labelled
+# usr_t, which a container may read but never write, so every scheduled run failed with
+# "Permission denied" even as root. container_file_t is the label containers may write.
+# restorecon alone would put the usr_t label back, so the rule is recorded first when
+# semanage exists; chcon is the fallback that works without it.
+if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+  if command -v semanage >/dev/null 2>&1; then
+    semanage fcontext -a -t container_file_t '/opt/ansible-runner(/.*)?' >/dev/null 2>&1 \
+      || semanage fcontext -m -t container_file_t '/opt/ansible-runner(/.*)?' >/dev/null 2>&1 || true
+    restorecon -R /opt/ansible-runner >/dev/null 2>&1 || true
+  fi
+  chcon -R -t container_file_t /opt/ansible-runner >/dev/null 2>&1 || true
+fi
+
+# The ansible-runner pod manages ITS OWN node over SSH to loopback. The pod shares the node's
+# network, but an "ansible_connection: local" inventory entry would run inside the container, not
+# on the node, and Tailscale SSH does not intercept a connection a node makes to itself. So each
+# node holds a key that works only from the node itself: the private half is mounted into the
+# pod (hostPath), the public half is authorized for the ansible user with from="127.0.0.1,::1".
+# It is made once and kept; nothing is shared between nodes, so a node that is rebuilt or added
+# needs no distribution step and a stolen copy is useless from anywhere else.
+runner_ssh_dir=/var/lib/adaetum/runner-ssh
+if id -u ansible >/dev/null 2>&1 && command -v ssh-keygen >/dev/null 2>&1; then
+  install -d -m 0700 "${runner_ssh_dir}"
+  if [ ! -s "${runner_ssh_dir}/id_ed25519" ]; then
+    rm -f "${runner_ssh_dir}/id_ed25519" "${runner_ssh_dir}/id_ed25519.pub"
+    ssh-keygen -q -t ed25519 -N '' -C "adaetum-runner@$(hostname -s)" -f "${runner_ssh_dir}/id_ed25519"
+  fi
+  ansible_home="$(getent passwd ansible | cut -d: -f6)"
+  runner_pub="$(cut -d' ' -f1,2 "${runner_ssh_dir}/id_ed25519.pub")"
+  if [ -n "${ansible_home}" ] && [ -n "${runner_pub}" ]; then
+    install -d -m 0700 -o ansible -g ansible "${ansible_home}/.ssh"
+    touch "${ansible_home}/.ssh/authorized_keys"
+    if ! grep -qF "${runner_pub}" "${ansible_home}/.ssh/authorized_keys"; then
+      printf 'from="127.0.0.1,::1" %s adaetum-runner\n' "${runner_pub}" >>"${ansible_home}/.ssh/authorized_keys"
+    fi
+    chown ansible:ansible "${ansible_home}/.ssh/authorized_keys"
+    chmod 0600 "${ansible_home}/.ssh/authorized_keys"
+    restorecon -R "${ansible_home}/.ssh" >/dev/null 2>&1 || true
+  fi
+  # The pod reads the private key through a hostPath mount, which needs the container label.
+  if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+    chcon -R -t container_file_t "${runner_ssh_dir}" >/dev/null 2>&1 || true
+  fi
+else
+  echo "[BOOTSTRAP] No ansible user or ssh-keygen; the runner cannot manage this node until both exist"
+fi
+
 if [ ! -d /opt/ansible-runner/ansible ]; then
   echo "[BOOTSTRAP] ansible-runner content missing after bundle extract"
   exit 1

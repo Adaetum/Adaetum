@@ -37,7 +37,10 @@ func fileExists(path string) bool {
 // built node never joins and the cluster reports its agent as "not installed". Once it
 // succeeds it exits so the service restarts with the link.
 func startAutoAdopt(ctx context.Context, dataDir, hostID string) {
-	if _, joined, err := membership.LoadLink(dataDir); err != nil || joined {
+	if link, joined, err := membership.LoadLink(dataDir); err != nil || joined {
+		if err == nil {
+			startLinkRefresh(ctx, dataDir, hostID, link)
+		}
 		return
 	}
 
@@ -106,4 +109,58 @@ func waitForFile(ctx context.Context, paths []string, every time.Duration) (path
 		case <-time.After(every):
 		}
 	}
+}
+
+// linkRefreshEvery is how often a joined cluster node checks that its pin is still current.
+// A missed refresh only delays reconnecting, so this does not need to be quick.
+var linkRefreshEvery = 2 * time.Minute
+
+// startLinkRefresh keeps a joined cluster node's link current. If the cluster agent's published
+// address or certificate no longer matches what this host pinned (it was rebuilt, or its
+// certificate was remade), the host re-adopts: it takes the new values from the same Kubernetes
+// ConfigMap adoption uses, enrols again (a no-op for a known key) and restarts, exactly as the
+// first adoption does. A host that is not a cluster node has no Kubernetes credentials, so
+// there is nothing to refresh from and it does nothing: its operator rejoins it by hand.
+func startLinkRefresh(ctx context.Context, dataDir, hostID string, link membership.Link) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(linkRefreshEvery):
+			}
+			kubeconfigPath := membership.FirstExisting(adoptKubeconfigs, fileExists)
+			if kubeconfigPath == "" {
+				continue
+			}
+			kube, err := kubeconfig.Load(kubeconfigPath)
+			if err != nil {
+				continue
+			}
+			adopter := membership.Adopter{Kube: kube, Enroll: membership.Enroll}
+			attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
+			_, moved, err := adopter.Moved(attempt, link)
+			if err != nil || !moved {
+				cancel()
+				continue
+			}
+			key, err := identity.LoadOrCreateHostKey(dataDir)
+			hostname, _ := os.Hostname()
+			if err != nil {
+				cancel()
+				continue
+			}
+			next, result, err := adopter.Adopt(attempt, hostID, hostname, key.PublicKey())
+			cancel()
+			if err != nil || (result.Status != string(identity.Approved) && result.Status != string(identity.Pending)) {
+				continue
+			}
+			if err := membership.SaveLink(dataDir, next); err != nil {
+				fmt.Fprintln(os.Stderr, "host adoption: the cluster agent moved, but the new link could not be saved:", err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "host adoption: the cluster agent's certificate or address changed; re-pinned to %s and restarting\n", next.URL)
+			os.Exit(exitAdopted)
+		}
+	}()
 }

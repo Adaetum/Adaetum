@@ -197,7 +197,8 @@ def main() -> int:
         "pods/ingress/external-dns/deployment.yaml": ("name: external-dns-metrics", "containerPort: 7979"),
         "pods/cloudflared/cloudflared/deployment.yaml": (
             "name: cloudflared-metrics",
-            'args: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]',
+            # The metrics flag is the contract; other flags (such as --protocol) may vary.
+            '"--metrics", "0.0.0.0:2000"',
         ),
         "pods/ingress/kube-vip/daemonset.yaml": ("name: metrics", "containerPort: 2112"),
     }

@@ -41,6 +41,10 @@ type CheckInPayload struct {
 	Hostname string `json:"hostname"`
 	// Version is the agent build, so the dashboard can flag hosts running an old one.
 	Version string `json:"version"`
+	// Endpoint is where this host's agent can be reached, so the cluster agent can read
+	// the host's runs on demand. Absent from older agents and from hosts not listening
+	// beyond themselves.
+	Endpoint *Endpoint `json:"endpoint,omitempty"`
 }
 
 // CheckIn is the latest check-in the cluster agent holds for one host. It is

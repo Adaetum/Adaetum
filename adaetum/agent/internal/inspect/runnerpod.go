@@ -7,8 +7,8 @@ import (
 )
 
 // The Ansible runner keeps its only record of what each run did in a file inside
-// its container, and bakes the repository (playbooks and platform.yaml) into its
-// image. To show either, the agent has to read inside the pod, which means
+// its container, and sees the repository (playbooks and platform.yaml) through the
+// host's /opt/ansible-runner directory, mounted at /ansible. To show either, the agent has to read inside the pod, which means
 // `kubectl exec`. That is a more powerful verb than the `get` calls everything
 // else here uses, so it is not offered generally: only the fixed reads below
 // exist, each maps to one fixed command, and the only values that vary are
@@ -16,8 +16,10 @@ import (
 
 const (
 	runnerNamespace = "ansible"
-	runnerCodeRoot  = "/opt/adaetum"
-	runnerLogPath   = "/var/log/ansible-cron.log"
+	// runnerCodeRoot is where the pod sees the repository: the host directory the install
+	// extracts it to (/opt/ansible-runner) is mounted at /ansible.
+	runnerCodeRoot = "/ansible"
+	runnerLogPath  = "/var/log/ansible-cron.log"
 	// runnerLogTail bounds how much of the log is read. The log grows without
 	// limit, and the newest runs are at the end.
 	runnerLogTail = "400000"
