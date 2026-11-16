@@ -145,3 +145,84 @@ func (s *KeyStore) do(ctx context.Context, method, path, token string, payload [
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	return response.StatusCode, body, nil
 }
+
+// Status is what OpenBao says about itself without any credential.
+type Status struct {
+	Initialized bool `json:"initialized"`
+	// Sealed means OpenBao is locked: it answers, but serves no secret until it is unsealed.
+	Sealed bool `json:"sealed"`
+}
+
+// SealStatus asks OpenBao whether it is sealed. The answer needs no sign-in (it is the
+// same one OpenBao's own health check gives), so this works exactly when signing in cannot:
+// a sealed OpenBao refuses every login, which is why every secret consumer fails around it.
+func SealStatus(ctx context.Context, addr string, client *http.Client) (Status, error) {
+	store := &KeyStore{Addr: addr, HTTP: client}
+	code, body, err := store.do(ctx, http.MethodGet, "/v1/sys/seal-status", "", nil)
+	if err != nil {
+		return Status{}, err
+	}
+	var status Status
+	if code != http.StatusOK || json.Unmarshal(body, &status) != nil {
+		return Status{}, errors.New("OpenBao gave an answer that could not be read")
+	}
+	return status, nil
+}
+
+// ReadFields returns every field of one KV v2 secret under the "secret" mount (path is
+// like "apps/observability/apprise") and its version. found is false when OpenBao is
+// reachable and the secret does not exist. The agent's policy decides which paths work;
+// asking for any other is refused by OpenBao.
+func (s *KeyStore) ReadFields(ctx context.Context, path string) (fields map[string]any, version int, found bool, err error) {
+	token, err := s.login(ctx)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	status, body, err := s.do(ctx, http.MethodGet, "/v1/secret/data/"+path, token, nil)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	switch status {
+	case http.StatusOK:
+		var reply struct {
+			Data struct {
+				Data     map[string]any `json:"data"`
+				Metadata struct {
+					Version int `json:"version"`
+				} `json:"metadata"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &reply) != nil || reply.Data.Data == nil {
+			return nil, 0, false, errors.New("OpenBao's answer could not be read")
+		}
+		return reply.Data.Data, reply.Data.Metadata.Version, true, nil
+	case http.StatusNotFound:
+		return nil, 0, false, nil
+	default:
+		return nil, 0, false, fmt.Errorf("OpenBao refused to read it (HTTP %d)", status)
+	}
+}
+
+// WriteFields replaces a KV v2 secret's fields, but only if its version is still
+// expectedVersion (0 means "only if it does not exist yet"). The check stops two writers
+// from silently overwriting each other, and means a caller must send back every field it
+// read, not just the one it changed.
+func (s *KeyStore) WriteFields(ctx context.Context, path string, fields map[string]any, expectedVersion int) error {
+	token, err := s.login(ctx)
+	if err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]any{"options": map[string]int{"cas": expectedVersion}, "data": fields})
+	status, _, err := s.do(ctx, http.MethodPost, "/v1/secret/data/"+path, token, payload)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusOK, http.StatusNoContent:
+		return nil
+	case http.StatusBadRequest:
+		return errors.New("it changed while you were editing; reload and try again")
+	default:
+		return fmt.Errorf("OpenBao refused to store it (HTTP %d)", status)
+	}
+}

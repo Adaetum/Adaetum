@@ -43,7 +43,10 @@ spec:
             - -c
             - |
               set -eu
-              cp /seed/apprise.yml /config/apprise.yml
+              # A link, not a copy: the mounted file is rotated in place when the destinations are
+              # edited (Settings > Notifications), and a copy would keep serving the old list
+              # until the pod restarted. The same volume is mounted at /seed in the main container.
+              ln -sf /seed/apprise.yml /config/apprise.yml
           volumeMounts:
             - name: apprise-openbao
               mountPath: /seed
@@ -88,6 +91,9 @@ spec:
           volumeMounts:
             - name: apprise-config
               mountPath: /config
+            - name: apprise-openbao
+              mountPath: /seed
+              readOnly: true
             - name: apprise-attach
               mountPath: /attach
             - name: apprise-plugin

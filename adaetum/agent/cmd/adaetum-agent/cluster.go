@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Adaetum/Adaetum/agent/internal/about"
 	"github.com/Adaetum/Adaetum/agent/internal/accounts"
 	"github.com/Adaetum/Adaetum/agent/internal/agentapi"
 	"github.com/Adaetum/Adaetum/agent/internal/assistant"
@@ -24,6 +25,7 @@ import (
 	"github.com/Adaetum/Adaetum/agent/internal/identity"
 	"github.com/Adaetum/Adaetum/agent/internal/membership"
 	"github.com/Adaetum/Adaetum/agent/internal/memory"
+	"github.com/Adaetum/Adaetum/agent/internal/notify"
 	"github.com/Adaetum/Adaetum/agent/internal/openbao"
 	"github.com/Adaetum/Adaetum/agent/internal/policy"
 	"github.com/Adaetum/Adaetum/agent/internal/releases"
@@ -218,6 +220,29 @@ func runCluster(args []string) {
 	// The app explorer: read-only searches of public chart and image sources, and
 	// previews of the files that would add an app. It installs nothing.
 	(&catalog.API{RequireUser: guard, DB: registry.DB()}).Register(mux)
+	// "About this app" cards: text written into the cluster repository (and reviewed there),
+	// read back here. Without the repository credential there are simply no cards.
+	aboutAPI := &about.API{RequireUser: guard}
+	if tokenFile := os.Getenv("ADAETUM_GITOPS_TOKEN_FILE"); tokenFile != "" {
+		aboutAPI.Source = about.NewGitea(os.Getenv("GITEA_REPO_OWNER"), os.Getenv("GITEA_REPO_NAME"), os.Getenv("GITOPS_REPO_BRANCH"), tokenFile)
+	}
+	aboutAPI.Register(mux)
+	// Settings > Notifications: where alerts go. It edits Apprise's configuration in OpenBao, so
+	// it exists only when this agent is set up to reach OpenBao, and it records every change.
+	if *openbaoURL != "" {
+		if audit, err := auditlog.Open(filepath.Join(*dataDir, "notifications.log")); err != nil {
+			fmt.Fprintln(os.Stderr, "notifications: cannot open the change record, so destinations can be listed but not changed:", err)
+		} else {
+			defer audit.Close()
+			(&notify.API{
+				Secret:      &openbao.KeyStore{Addr: *openbaoURL, Role: *openbaoRole},
+				AppriseURL:  "http://apprise.observability.svc.cluster.local:8000",
+				Audit:       audit.Record,
+				RequireUser: guard,
+				Who:         personName,
+			}).Register(mux)
+		}
+	}
 	(&memory.API{Service: memoryService, RequireUser: guard}).Register(mux)
 	(&memory.EmbeddingAPI{Manager: embedManager, Service: memoryService, RequireUser: guard, KeyAvailable: embedKey != ""}).Register(mux)
 	if embedManager.Config().Kind == memory.KindBuiltin {
@@ -237,7 +262,7 @@ func runCluster(args []string) {
 			},
 		}).Register(mux)
 	}
-	registerClusterReport(mux, *sshTarget, guard)
+	registerClusterReport(mux, *sshTarget, *openbaoURL, guard)
 	// The cluster agent's own calls to its servers' agents (the Runs and Automation pages reach
 	// out when they load). Requests are signed with this agent's TLS certificate key, the one
 	// every joined host pinned (membership/callback.go); the certificate is made further down.

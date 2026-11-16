@@ -1,6 +1,7 @@
 package openbao
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -97,5 +98,35 @@ func TestFailuresAreErrorsThatNeverRevealTheKeyOrTheToken(t *testing.T) {
 	missing := &KeyStore{Addr: "http://127.0.0.1:1", Role: "r", JWTFile: filepath.Join(t.TempDir(), "none")}
 	if _, _, err := missing.Get(t.Context()); err == nil {
 		t.Error("no service-account token must be an error")
+	}
+}
+
+func TestSealStatusReadsWithoutASignIn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body   string
+		code   int
+		sealed bool
+		fails  bool
+	}{
+		"sealed":      {`{"initialized":true,"sealed":true}`, 200, true, false},
+		"open":        {`{"initialized":true,"sealed":false}`, 200, false, false},
+		"unreadable":  {`nope`, 200, false, true},
+		"server fail": {`{}`, 500, false, true},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/sys/seal-status" || r.Header.Get("X-Vault-Token") != "" {
+				t.Errorf("%s: wrong request %s with token %q", name, r.URL.Path, r.Header.Get("X-Vault-Token"))
+			}
+			w.WriteHeader(tc.code)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		status, err := SealStatus(context.Background(), server.URL, server.Client())
+		server.Close()
+		if (err != nil) != tc.fails || status.Sealed != tc.sealed {
+			t.Errorf("%s: got %+v, %v", name, status, err)
+		}
+	}
+	if _, err := SealStatus(context.Background(), "http://127.0.0.1:1", nil); err == nil {
+		t.Error("an unreachable OpenBao must be an error, not an answer")
 	}
 }

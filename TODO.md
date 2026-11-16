@@ -143,7 +143,10 @@ reference. The scope is the existing setup window and its UI-only preview.
 
 ### Backup and restore
 
-Not started. **Current (2026-11-09 audit):** no Longhorn backup jobs, Velero, or
+Not started, and the largest gap between what the explainer film promises and what
+exists (see "Claims made by the explainer film" below). The film's own line is that a
+backup you have never restored is only a hope, and it can only say "planned" until the
+drill below passes. **Current (2026-11-09 audit):** no Longhorn backup jobs, Velero, or
 etcd snapshot export is configured in `pods/`, `ansible/`, or `platform.yaml`.
 The setup already provisions an R2 bucket, so an off-site target exists. The
 default should be opinionated and on without configuration.
@@ -155,6 +158,16 @@ default should be opinionated and on without configuration.
   retention are public, non-secret profile values.
 - [ ] Prove restore, not just backup. **Acceptance:** a documented drill
   rebuilds a cluster from the off-site copy and shows the data returned.
+- [ ] Rebuild after losing the whole cluster, from the plan and the recovery kit
+  (the film's "A server is lost" scenario). Today this is claimed, not rehearsed.
+  **Acceptance:** on a disposable machine, a clean install from the recovery
+  repository plus the recovery kit returns the same applications and, with the
+  backup above, their data; the steps and the time it took are written down, and
+  the drill is repeated after any change to bootstrap.
+- [ ] Say plainly, until backups pass the drill, that Longhorn replicas protect
+  against a lost disk or machine and are not a backup. **Acceptance:** README,
+  `docs/comparison.md` and the web app's storage wording agree, and the wording
+  changes when the drill passes.
 - [ ] Prove the OpenBao static seal key survives a rebuild: a new installation
   unseals itself (done, `openbao-static-seal`, copied into the emergency kit by
   Phase 99); the restore drill must reopen restored data with the kit's key.
@@ -168,7 +181,10 @@ default should be opinionated and on without configuration.
   cluster agent should check the seal status (unauthenticated `bao status`) and
   put "OpenBao is sealed: unseal it" at the top of the attention list, with the
   command. **Acceptance:** a restarted, sealed OpenBao appears in the attention
-  list within a minute and clears when unsealed.
+  list within a minute and clears when unsealed. **Built 2026-11-16** (the cluster
+  agent asks OpenBao's unauthenticated seal status and `lib/attention.ts` lists it
+  first); the dev cluster reports it open. Still to do: restart a Shamir-sealed
+  OpenBao and watch the item appear and clear.
 - [ ] Show protection in the agent web app: a backups card on Overview with
   last success, age and size, a warning when stale, and a restore test.
   **Acceptance:** a missing or failing backup appears in the attention list
@@ -206,7 +222,13 @@ Ansible path, never by the agent running commands itself.
   in the agent web app, with the preview's health shown; with it off, behavior
   is unchanged; closing the PR removes the preview. Separately, any self-edit
   gets a diff preview, a validator pass and a one-click revert.
-- [ ] Notifications page. Operators add the identities that should receive
+- [ ] Notifications page. **Built 2026-11-16** as Settings > Notifications: how to
+  subscribe a phone to the cluster's ntfy, a test button, and add or remove Apprise
+  destinations (test-sent before saving, recorded before the change, stored in OpenBao).
+  Verified on the dev cluster, including Apprise picking up a change without a restart.
+  **Still to do:** a stale or failing route in the attention list, a per-alert-severity
+  choice, and a fresh-cluster check that the default ntfy reaches a real phone.
+  Original brief: operators add the identities that should receive
   alerts (phone, email, chat); the agent configures Alertmanager, Apprise and
   ntfy behind the scenes so alerts reach a person by default. **Acceptance:** a
   fresh cluster has no alert that points at nobody, a test notification can be
@@ -278,6 +300,128 @@ Ansible path, never by the agent running commands itself.
   forgotten password, a node that will not join, a stuck update). Each is
   tested on a real or rehearsed host so the in-app assistant can link to it
   instead of improvising.
+
+### Claims made by the explainer film (added 2026-11-16)
+
+Source: `videos/narration.json`, `videos/storyboard.md` and `videos/storyboard_part2.md`.
+Each item below is something the film says Adaetum does, with no evidence in the repository
+yet. The film's own "open items" list is folded in. Backup and restore is the biggest
+one and is tracked above. Until an item passes, the film (and the README) must keep the
+hedged wording the storyboard already uses ("planned", "partly built", "today"). When one
+passes, update the matching shot.
+
+- [ ] Rehearse failover on purpose: "A machine dies. Adaetum moves apps." The dev
+  cluster is one node, so nothing here has been shown. **Acceptance:** on at least two
+  server nodes, power one off; its applications are running again on the other, the floating
+  address moves, and the time to recover is recorded. The single-node caveat (downtime on
+  reboot) stays in the film and README.
+- [ ] Add and remove a machine. "Boot the installer and it joins" and "pull the plug
+  and the apps relocate" are both claimed; the removal procedure is not written down
+  and the second option is only the maintainer's statement. **Acceptance:** a documented,
+  tested join (server and worker) and removal (drain first, and unplanned loss), including
+  what happens to volumes and to the node's Tailscale and Argo CD records.
+- [ ] Prove automatic updates: "updates daily, reboots one machine at a time in a 3-6
+  a.m. window, blocked while an alert fires." Host maintenance has never run for real
+  here. **Acceptance:** on a disposable multi-node cluster, one full cycle (patch,
+  drain, reboot, uncordon) runs in the window, a second node waits for the first, and a
+  firing alert blocks the next reboot, with logs kept as evidence. Pairs with the Day-2
+  updates item for RKE2 and applications.
+- [ ] Prove drift correction: "anything that strays is called back." **Acceptance:** a
+  hand edit to a host file under Ansible's control and to a live manifest under Argo CD
+  are both reverted within a stated time, and each is visible in the web app's
+  attention list or runs.
+- [ ] Prove a crash reaches a person: "an app fails, it restarts and alerts you."
+  **Acceptance:** kill a pod and a node; a message arrives on a real phone through the
+  Notifications page work above, with no hand configuration.
+- [ ] Prove the vault unseals itself on every reboot, and say what happens to
+  installs made before the static seal. README says only new installations unseal
+  themselves. **Acceptance:** reboot a clean install and show it unsealed with no
+  input; for an older install, a documented migration or a clear statement in the web
+  app (the sealed-OpenBao item above).
+- [ ] Prove the provider-outage claim: "keeps running locally with no cloud
+  dependency." **Acceptance:** with Cloudflare, GitHub and Tailscale control planes
+  blocked from a running cluster, existing apps keep serving on the LAN and the agent and
+  Argo CD keep working. Name what does stop (public tunnel, new joins, private remote
+  access), since the film's generic "a provider" hides that.
+- [ ] Prove the security claims: "no open ports, one sign-in, all logged."
+  **Acceptance:** a port scan of a clean install from outside the tailnet and the LAN
+  finds none open beyond what is documented; a list shows which applications are behind
+  the single sign-in and which keep their own login (the agent's own sign-in is one);
+  and each recorded-access claim names the log that holds it.
+- [ ] Prove autoscaling matches the wording. "Adds copies when busy, removes them
+  after" is built for an allowlist only (Cloudflared, Apprise), and in-place memory resize
+  needs a Kubernetes version that supports it. **Acceptance:** a load test scales an
+  allowlisted app up at once and down after 15 minutes, a resize shows no eviction on
+  the shipped RKE2 version, and the film says "some apps" until the allowlist grows.
+- [ ] Decide what Adaetum says about regional and global failover. The film shows a
+  friend's house and AWS, Google and Azure as levels you can build; the docs do not say
+  Adaetum manages them, and the README's hardware note already assumes some nodes are
+  remote. **Acceptance:** a short statement, in the README and `docs/comparison.md`,
+  of what multi-site is supported (for example remote nodes over Tailscale and the limits
+  on Longhorn replicas across a slow link), tested once; anything not tested stays
+  described as "what you could build".
+- [ ] Settle the documents that disagree. Tailscale's join key is "one hour" in
+  `docs/diagrams/first-boot.md` and "one day, non-reusable" in `docs/integrations.md`;
+  the film's phase list (10 to 99) should match `ansible/ansible-scripts/bootstrap/`.
+  **Acceptance:** one number and one list, each stated where the code sets it, and the
+  film's narration matches.
+- [ ] Keep the film honest as items pass. **Acceptance:** each shot that makes a claim
+  above is checked against this list before the film is rebuilt, and a claim that is
+  still unproven stays hedged; secret scanning in CI is not claimed until it exists
+  (older roadmap, "Add ShellCheck, actionlint, ... Gitleaks").
+
+### The assistant and the operator do the same things (added 2026-11-16)
+
+The film and the README make two promises that depend on each other. Some of the
+claims above are meant to be met by feeding signals to the assistant, which then explains
+and proposes. And the assistant "does what a person does, through the same path." For the
+second to be true, anything the assistant can suggest or do needs a way for a person to
+do it without the assistant. Today the assistant tools and the web app both call the
+agent's own API (`internal/clustertools`), so most actions match by construction. The
+gaps are in suggestions and in a few tools with no screen.
+
+**Found in a first look (2026-11-16, not yet verified one by one):** the Sizing and
+Storage tabs show "now, then suggested" values and offer "Fix with assistant", but a
+person has no button that turns the same suggestion into a change; `run_host_command` and
+the storage "grow a volume" proposal have assistant tools and no clear screen; the
+Cluster page does have join tokens and approving a machine; Security, Embedding, Memory,
+Automation and Find apps match their tools.
+
+- [ ] Write the parity table and close its gaps. One row per assistant tool and per
+  MCP tool: what it does, which web screen does the same, and whether both go through
+  the same API route and the same record. **Acceptance:** the table lives in
+  `adaetum/agent/docs/` beside `auth.md`; every tool that changes something has a screen
+  with the same confirmation step, or a written reason it is assistant-only; and a test
+  fails when a tool is added that calls an agent route the web app never uses.
+- [ ] One path from a suggestion to a change, for people and for the assistant.
+  Sizing, storage growth and update suggestions all end in the same step: a preview of the
+  exact file change, then a pull request that only a person merges (the pod-change previews
+  item above and the self-edit diff and revert item are the same mechanism). **Acceptance:** the
+  "Fix with assistant" button on the Sizing and Storage tabs has a sibling, "Prepare
+  change", that opens the same pull request without the assistant; the assistant proposes
+  through the same route; the result is recorded the same way.
+- [ ] Say who did it. Every change records whether it came from a person, the
+  assistant or an MCP client (the security log already has a "via" field for levers).
+  **Acceptance:** Runs, the Security record and pull requests opened by the agent all show
+  it, and the web app can filter by it.
+- [ ] One feed of signals, seen by both. The attention list (`lib/attention.ts`) is
+  what a person sees; the assistant should be handed the same items, not a second
+  list. Signals the film relies on: Alertmanager alerts, an out-of-sync Argo CD app, a
+  sealed OpenBao, a certificate near expiry, disk or memory pressure, failed runs, a host
+  that stopped checking in. **Acceptance:** each signal appears in the attention list with
+  a plain explanation and a next step a person can take, the assistant's context includes
+  the same list, and a test adds a signal and finds it in both.
+- [ ] Check the film's "where the oracle helps" column, row by row. It claims: launch
+  catalogued playbooks, inspect Kubernetes, propose growing a volume, explain why an app is
+  out of sync, read dashboards through a Grafana connection, read and propose in Gitea,
+  and mint and rotate credentials for AI tools. **Acceptance:** each claim has a working tool
+  or connection, a screen for the same thing, and a sentence in the film or README no
+  stronger than what passed.
+- [ ] Keep the approval rule symmetrical. The assistant asks before it changes
+  anything, and a person using the screen sees the same confirmation. **Acceptance:** no
+  tool marked as changing something runs without an approval, no screen changes the same
+  thing without its confirmation, and turning on a powerful capability stays a person-only
+  step with a typed confirmation (as the Security page does today).
 
 ## Version 3 — roadmap idea (not scheduled)
 

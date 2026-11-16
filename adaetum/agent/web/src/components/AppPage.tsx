@@ -11,6 +11,7 @@ import { argoLink, longhornLink, rancherLink, toolHosts } from "../lib/toolLinks
 import { instanceState } from "../lib/vocabulary";
 import { DeliveryPanel, PiecesPanel, ResourcesPanel, ScorePanel, StoragePanel, fixAsk } from "./AppDetail";
 import { DeploymentsAdvanced, DetailsAdvanced, OverviewAdvanced, SizingAdvanced, StorageAdvanced, TraceAdvanced } from "./AppAdvanced";
+import { AboutCard } from "./AboutCard";
 import { AppLogo } from "./AppLogo";
 import { StatusBadge } from "./StatusBadge";
 import { useAssistant, useAssistantPage } from "./assistant/AssistantProvider";
@@ -74,6 +75,7 @@ export function AppPage({ card, cards, report, sizing, tab, onTab }: { card: App
         <Flex direction="column" gap="4" pt="4">
           {tab === "overview" && (
             <>
+              <AboutCard card={card} />
               {sizing ? <ScorePanel sizing={sizing} /> : <Text size="2" color="gray">Nothing is running and nothing is stored, so there is nothing to grade.</Text>}
               <OverviewAdvanced card={card} />
             </>

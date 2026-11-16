@@ -2,10 +2,11 @@ import { Callout, Card, Flex, SegmentedControl, Switch, Tabs, Text } from "@radi
 import { Info } from "lucide-react";
 import { AppLocation, hrefFor } from "../app/routes";
 import { PageHeader, SettingsSection } from "../components/PageHeader";
-import { AssistantMode, setAdvancedUser, setAssistantMode, useAdvancedUser, useAssistantMode } from "../lib/preferences";
+import { AssistantMode, setAdvancedUser, setAssistantMode, setShowAbout, useAdvancedUser, useAssistantMode, useShowAbout } from "../lib/preferences";
 import { AiModel } from "./AiModel";
 import { Embedding } from "./Embedding";
 import { Memory } from "./Memory";
+import { Notifications } from "./Notifications";
 import { People } from "./People";
 import { Profile } from "./Profile";
 import { Security } from "./Security";
@@ -18,6 +19,7 @@ const TABS = [
   { id: "ai-model", label: "AI model" },
   { id: "memory", label: "Memory" },
   { id: "embedding", label: "Embedding" },
+  { id: "notifications", label: "Notifications" },
   { id: "tailnet", label: "Tailnet" },
   { id: "security", label: "Security" },
 ] as const;
@@ -43,6 +45,7 @@ export function Settings({ location }: { location: AppLocation }) {
           {tab === "ai-model" && <AiModel />}
           {tab === "memory" && <Memory />}
           {tab === "embedding" && <Embedding />}
+          {tab === "notifications" && <Notifications />}
           {tab === "tailnet" && <Tailnet />}
           {tab === "security" && <Security />}
         </SettingsSection.Provider>
@@ -54,6 +57,7 @@ export function Settings({ location }: { location: AppLocation }) {
 function General() {
   const advanced = useAdvancedUser();
   const mode = useAssistantMode();
+  const showAbout = useShowAbout();
   return (
     <Flex direction="column" gap="4" style={{ maxWidth: 640 }}>
       <Card size="3">
@@ -67,6 +71,19 @@ function General() {
             </Text>
           </Flex>
           <Switch id="advanced-user" checked={advanced} onCheckedChange={setAdvancedUser} aria-label="Advanced user mode" />
+        </Flex>
+      </Card>
+      <Card size="3">
+        <Flex justify="between" align="start" gap="4">
+          <Flex direction="column" gap="1">
+            <Text size="3" weight="medium" as="label" htmlFor="show-about">Show “About this app” cards</Text>
+            <Text size="2" color="gray">
+              Adds a short description to each app’s Overview: what it is for, where its data lives and what to watch. The text
+              is written into your cluster repository, by you or by an AI assistant, and reviewed there like any other change.
+              Turning this off only hides the card in this browser.
+            </Text>
+          </Flex>
+          <Switch id="show-about" checked={showAbout} onCheckedChange={setShowAbout} aria-label="Show About this app cards" />
         </Flex>
       </Card>
       <Card size="3">

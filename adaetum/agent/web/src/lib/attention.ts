@@ -30,6 +30,18 @@ export function summarizeAttention(report: Report): AttentionItem[] {
   const now = new Date(report.collectedAt);
   const { host, rke2 } = report;
 
+  // First, because a sealed OpenBao makes every app that needs a secret fail in its own
+  // confusing way (crash loops, missing files); this is the one cause behind them.
+  if (rke2.vault?.reachable && rke2.vault.sealed) {
+    items.push({
+      id: "vault-sealed",
+      severity: "critical",
+      title: "OpenBao is sealed: unseal it",
+      detail: "Apps that need a secret fail until it is unsealed. Run: kubectl -n openbao exec -it openbao-0 -- bao operator unseal (once per unseal key).",
+      to: { path: "overview" },
+    });
+  }
+
   if (host.failedUnits?.length) {
     items.push({
       id: "failed-services",

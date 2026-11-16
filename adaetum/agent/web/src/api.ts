@@ -23,6 +23,8 @@ export interface Report {
     pods?: Pod[];
     argoApps?: ArgoApp[];
     autoscalers?: Autoscaler[];
+    // Whether OpenBao is open. Only the cluster agent reports it.
+    vault?: { reachable: boolean; sealed?: boolean };
     kubeServices?: KubeService[];
     events?: ClusterEvent[];
     volumes?: Volume[];

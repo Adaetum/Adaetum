@@ -168,6 +168,13 @@ repos:
         language: python
         pass_filenames: false
         files: ^(ansible/ansible-scripts/(build-inventory|cron-entrypoint)|pods/ansible/ansible/ansible-runner-deployment\.yaml(\.tmpl)?|\.validator/validate-runner-inventory\.py)
+      - id: validate-pod-about
+        name: Validate app about files
+        entry: python3 .validator/validate-pod-about.py
+        language: python
+        additional_dependencies: [pyyaml]
+        pass_filenames: false
+        files: ^(pods/.+\.about\.yaml|adaetum/agent/internal/about/about\.go|\.validator/validate-pod-about\.py)
       - id: validate-setup-pods-roundtrip
         name: Validate setup pods roundtrip
         entry: python3 .validator/validate-setup-pods-roundtrip.py

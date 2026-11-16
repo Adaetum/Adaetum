@@ -11,6 +11,7 @@ import (
 	"github.com/Adaetum/Adaetum/agent/internal/automation"
 	"github.com/Adaetum/Adaetum/agent/internal/cluster"
 	"github.com/Adaetum/Adaetum/agent/internal/inspect"
+	"github.com/Adaetum/Adaetum/agent/internal/openbao"
 	"github.com/Adaetum/Adaetum/agent/internal/tlscert"
 )
 
@@ -21,12 +22,18 @@ import (
 // left empty. Details of one machine come from that machine's own agent.
 //
 // With -ssh (development) the report is read from that remote cluster instead.
-func registerClusterReport(mux *http.ServeMux, sshTarget string, guard func(http.Handler) http.Handler) {
+func registerClusterReport(mux *http.ServeMux, sshTarget, openbaoURL string, guard func(http.Handler) http.Handler) {
 	var inspector *inspect.Inspector
 	if sshTarget != "" {
 		inspector = newInspector(sshTarget)
 	} else if reader := cluster.InClusterReader(); reader != nil {
 		inspector = inspect.NewClusterInspector(reader.Get, reader.Raw)
+		if openbaoURL != "" {
+			inspector.Vault = func(ctx context.Context) *inspect.Vault {
+				status, err := openbao.SealStatus(ctx, openbaoURL, &http.Client{Timeout: 5 * time.Second})
+				return &inspect.Vault{Reachable: err == nil, Sealed: err == nil && status.Sealed}
+			}
+		}
 	} else {
 		return // not in a cluster: the page keeps saying there is no report here
 	}

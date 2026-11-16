@@ -47,6 +47,12 @@ export function useAdvancedUser(): boolean {
   return advanced.use() === "1";
 }
 
+// Whether an app's page shows its "About this app" card (text from the cluster repository).
+// On by default: it is reviewed text, and the card only asks the agent to read it.
+const showAbout = preference("adaetum.showAppAbout", "1", ["0", "1"] as const);
+export const useShowAbout = () => showAbout.use() === "1";
+export const setShowAbout = (show: boolean) => showAbout.set(show ? "1" : "0");
+
 // How the assistant panel sits with the page. "split" makes room beside it, so the page
 // stays usable while the assistant works; "over" lays it on top of the page.
 export type AssistantMode = "split" | "over";

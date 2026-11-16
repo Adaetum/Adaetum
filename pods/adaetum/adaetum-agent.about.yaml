@@ -1,0 +1,14 @@
+summary: "The Adaetum cluster agent. It is the web app you are using: it shows the whole cluster, collects what each server reports, and hosts the sign-in service."
+facts:
+  - label: Where its data lives
+    value: "One volume, adaetum-agent-data, holding its databases, access token and sign-in state."
+  - label: How you reach it
+    value: "A private Tailscale address on the tailnet; there is no public address."
+  - label: What to back up
+    value: "The adaetum-agent-data volume. The key hosts pin is also kept in OpenBao, so it can be recovered."
+watch:
+  - "It runs as a single copy, so while it restarts the web app is briefly unavailable."
+  - "If OpenBao is sealed, the agent cannot sync its certificate key and says so."
+written:
+  by: person
+  date: 2026-11-16

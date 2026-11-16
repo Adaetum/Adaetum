@@ -85,6 +85,16 @@ type RKE2 struct {
 	Autoscalers []Autoscaler `json:"autoscalers,omitempty"`
 	// Services, with the pods behind each, show how an app is reached (additive field).
 	KubeServices []Service `json:"kubeServices,omitempty"`
+	// Vault is whether OpenBao is open. Only the cluster agent fills it (additive field).
+	Vault *Vault `json:"vault,omitempty"`
+}
+
+// Vault is OpenBao's lock state. A sealed OpenBao is a cluster-wide fault that shows up
+// elsewhere as unrelated crash loops, so it is reported on its own.
+type Vault struct {
+	// Reachable is false when OpenBao could not be asked, which is not the same as sealed.
+	Reachable bool `json:"reachable"`
+	Sealed    bool `json:"sealed,omitempty"`
 }
 
 type Node struct {
@@ -132,6 +142,9 @@ type Inspector struct {
 	// local RKE2 kubectl. Both are read-only.
 	Get func(ctx context.Context, resources string, extra ...string) ([]byte, error)
 	Raw func(ctx context.Context, path string) ([]byte, error)
+	// Vault asks whether OpenBao is open. Only the cluster agent sets it; it never fails,
+	// so an OpenBao that cannot be reached comes back as Reachable false.
+	Vault func(ctx context.Context) *Vault
 
 	// The last directory measurement, so repeated reports do not re-walk it.
 	measureMutex  sync.Mutex

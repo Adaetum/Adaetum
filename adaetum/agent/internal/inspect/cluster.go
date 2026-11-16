@@ -83,6 +83,9 @@ func (i *Inspector) collectCluster(ctx context.Context, rke2 *RKE2, fail func(st
 		func() { rke2.Volumes = i.collectVolumes(ctx, fail) },
 		func() { rke2.StorageCapacity = i.collectCapacity(ctx, fail) },
 	)
+	if i.Vault != nil {
+		rke2.Vault = i.Vault(ctx)
+	}
 	// Usage is merged into the pods, so it waits for the pod query to finish.
 	i.collectUsage(ctx, rke2, fail)
 	i.collectNodeUsage(ctx, rke2, fail)
