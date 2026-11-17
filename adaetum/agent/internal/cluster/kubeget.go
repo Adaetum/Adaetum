@@ -49,22 +49,25 @@ type kind struct {
 // kinds is every resource the report reads. Adding one here must be matched by a read-only
 // rule in pods/adaetum/agent/serviceaccount.yaml, or the page shows a permission error.
 var kinds = map[string]kind{
-	"nodes":                        {"/api/v1", "nodes", "Node", false},
-	"pods":                         {"/api/v1", "pods", "Pod", true},
-	"services":                     {"/api/v1", "services", "Service", true},
-	"events":                       {"/api/v1", "events", "Event", true},
-	"persistentvolumeclaims":       {"/api/v1", "persistentvolumeclaims", "PersistentVolumeClaim", true},
-	"deployments":                  {"/apis/apps/v1", "deployments", "Deployment", true},
-	"statefulsets":                 {"/apis/apps/v1", "statefulsets", "StatefulSet", true},
-	"daemonsets":                   {"/apis/apps/v1", "daemonsets", "DaemonSet", true},
-	"ingresses":                    {"/apis/networking.k8s.io/v1", "ingresses", "Ingress", true},
-	"storageclasses":               {"/apis/storage.k8s.io/v1", "storageclasses", "StorageClass", false},
-	"horizontalpodautoscalers":     {"/apis/autoscaling/v2", "horizontalpodautoscalers", "HorizontalPodAutoscaler", true},
-	"applications.argoproj.io":     {"/apis/argoproj.io/v1alpha1", "applications", "Application", true},
-	"certificates.cert-manager.io": {"/apis/cert-manager.io/v1", "certificates", "Certificate", true},
-	"volumes.longhorn.io":          {"/apis/longhorn.io/v1beta2", "volumes", "Volume", true},
-	"nodes.longhorn.io":            {"/apis/longhorn.io/v1beta2", "nodes", "Node", true},
-	"settings.longhorn.io":         {"/apis/longhorn.io/v1beta2", "settings", "Setting", true},
+	"nodes":                              {"/api/v1", "nodes", "Node", false},
+	"pods":                               {"/api/v1", "pods", "Pod", true},
+	"services":                           {"/api/v1", "services", "Service", true},
+	"events":                             {"/api/v1", "events", "Event", true},
+	"persistentvolumeclaims":             {"/api/v1", "persistentvolumeclaims", "PersistentVolumeClaim", true},
+	"deployments":                        {"/apis/apps/v1", "deployments", "Deployment", true},
+	"statefulsets":                       {"/apis/apps/v1", "statefulsets", "StatefulSet", true},
+	"daemonsets":                         {"/apis/apps/v1", "daemonsets", "DaemonSet", true},
+	"ingresses":                          {"/apis/networking.k8s.io/v1", "ingresses", "Ingress", true},
+	"storageclasses":                     {"/apis/storage.k8s.io/v1", "storageclasses", "StorageClass", false},
+	"horizontalpodautoscalers":           {"/apis/autoscaling/v2", "horizontalpodautoscalers", "HorizontalPodAutoscaler", true},
+	"applications.argoproj.io":           {"/apis/argoproj.io/v1alpha1", "applications", "Application", true},
+	"certificates.cert-manager.io":       {"/apis/cert-manager.io/v1", "certificates", "Certificate", true},
+	"volumes.longhorn.io":                {"/apis/longhorn.io/v1beta2", "volumes", "Volume", true},
+	"backuptargets.longhorn.io":          {"/apis/longhorn.io/v1beta2", "backuptargets", "BackupTarget", true},
+	"recurringjobs.longhorn.io":          {"/apis/longhorn.io/v1beta2", "recurringjobs", "RecurringJob", true},
+	"replicationsources.volsync.backube": {"/apis/volsync.backube/v1alpha1", "replicationsources", "ReplicationSource", true},
+	"nodes.longhorn.io":                  {"/apis/longhorn.io/v1beta2", "nodes", "Node", true},
+	"settings.longhorn.io":               {"/apis/longhorn.io/v1beta2", "settings", "Setting", true},
 }
 
 // Get answers what `kubectl get <resources> [-A | -n ns] [--field-selector s] [name] -o json`
@@ -184,4 +187,39 @@ func (k *KubeReader) fetch(ctx context.Context, client *http.Client, bearer, pat
 		return nil, fmt.Errorf("API returned HTTP %d", resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, maxKubeBody))
+}
+
+// SetVolumeLabels sets (value non-nil) or removes (nil) labels on one Longhorn volume. It is
+// the only write this reader makes, and it is deliberately narrow: one kind, labels only,
+// through a merge patch, so a caller cannot change a volume's spec through it. The service
+// account is allowed "patch" on volumes.longhorn.io and nothing else.
+func (k *KubeReader) SetVolumeLabels(ctx context.Context, name string, labels map[string]*string) error {
+	client, bearer, closeIdle, err := kubeClient(k.tokenFile, k.caFile)
+	if err != nil {
+		return err
+	}
+	defer closeIdle()
+	body, err := json.Marshal(map[string]any{"metadata": map[string]any{"labels": labels}})
+	if err != nil {
+		return err
+	}
+	path := "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/" + url.PathEscape(name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, k.endpoint+path, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("Content-Type", "application/merge-patch+json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("there is no volume called %s", name)
+	case resp.StatusCode < 200 || resp.StatusCode >= 300:
+		return fmt.Errorf("the API returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }

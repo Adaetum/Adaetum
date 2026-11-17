@@ -151,6 +151,46 @@ etcd snapshot export is configured in `pods/`, `ansible/`, or `platform.yaml`.
 The setup already provisions an R2 bucket, so an off-site target exists. The
 default should be opinionated and on without configuration.
 
+**Design decided 2026-11-16.** Longhorn is the backup software for volumes: snapshots on
+the cluster, and backups to the R2 bucket that setup already provisions. VolSync is an
+optional second stack for more frequent, asynchronous, client-side-encrypted copies. Backups
+are opt-in. The Backups page in the side nav is the only interface, and its logic lives in the
+agent's API (`adaetum/agent/internal/backups`), not in the installer or in shell. The
+agent never changes the cluster directly: it signs in to Cloudflare once with a pasted token
+(used once, never stored, as the Tailnet switch does), creates a bucket and a key limited
+to it, stores the key in OpenBao, and proposes the Longhorn target and jobs as a pull request.
+The agent's etcd and OpenBao snapshots go to the same target.
+
+**Three tiers (2026-11-16), each one an explicit step up:**
+1. **Off, the default.** Nothing is backed up and the page says so plainly.
+2. **Scheduled to R2.** Opt-in. Longhorn snapshots on the cluster plus scheduled backups to
+   the R2 bucket. Nothing extra runs in the cluster.
+3. **Asynchronous (VolSync).** The next tier up. Turning it on deploys a pod (the VolSync
+   operator) that copies volumes continuously, so it costs memory the smaller nodes may
+   not have; the page must show that cost before it is enabled.
+
+Phases:
+
+1. **Done (2026-11-16):** read-only Backups tab: is a target set and reachable, which jobs
+   exist, and which volumes a backup job actually reaches and how old the last backup is.
+   On the dev cluster all 11 volumes show "not backed up", which is the honest state today.
+2. **Built (2026-11-16), not yet run against real Cloudflare or Longhorn 1.12:** turn on
+   from the page (`internal/backups/enable.go`). A pasted Cloudflare token (used once) makes
+   a bucket and a key limited to it; the key goes to OpenBao (`apps/longhorn-system/backup`,
+   policy added to `adaetum-agent-tls.hcl`, which the dev cluster needs re-applied); a pull
+   request adds `pods/longhorn-system/` (External Secret, `BackupTarget`, daily snapshot and
+   backup jobs in the `adaetum-backup` group, so nothing is backed up until chosen).
+   **Choosing volumes (built, live on dev):** each volume row has a mode; picking "Scheduled to R2"
+   labels the Longhorn volume directly (audit log first, labels only, `patch` on volumes added
+   to the agent's role). **Decided: the mode is per volume** (not backed up, scheduled, or sync; one at a time per volume, mixing allowed). The R2 step is "Connect R2", shared by both tiers; the VolSync pod is deployed when the first volume uses sync and removed when none do. **New volumes (built, live on dev, not yet tried with a real new volume):** a "new volumes added from now on" rule (off or scheduled; sync when it exists), checked every minute; it never touches existing volumes or ones already chosen. **Sync mode (built 2026-11-16, live on dev, never run against real R2/VolSync):** picking it opens a pull request that
+   deploys the VolSync pod and a `ReplicationSource` per volume (needs a snapshot class, a
+   restic repository on the same R2 bucket, and a secret per namespace). Still to do: test against R2 and Longhorn 1.12 (unverified), and an "undo" for a bucket left unused.
+3. Restore from the tab, and the restore drill below.
+4. Tier 3: VolSync as an optional stack that deploys a pod, with its own section on the page.
+5. Attention list: a failing target or a stale volume, through the shared signal feed.
+6. Decide client-side encryption for Longhorn backups (Longhorn does not add it; volume
+   encryption or VolSync does).
+
 - [ ] Take nightly off-site backups of cluster state and application volumes
   (Gitea, Authentik, OpenBao, app data) to R2, declared in `platform.yaml` and
   enforced by the existing Ansible/GitOps path. **Acceptance:** a clean install
@@ -463,3 +503,22 @@ concrete first use.
 Use `area/bootstrap`, `area/config`, `area/integrations`, `area/docs`,
 `area/community`, `kind/bug`, `kind/feature`, `good first issue`, and
 `help wanted` for public work tracking.
+
+- [ ] Sync mode follow-ups: confirm VolSync's `Clone` copy method works with Longhorn on a real
+  volume; pin and test the VolSync chart version (0.12.1 was chosen, not run); the restic
+  password lives only in OpenBao, so back OpenBao up or synced copies cannot be read; two
+  open "sync" pull requests would both add the VolSync app (merge one, close the other);
+  default rule for new volumes cannot choose sync yet.
+
+- [x] Backups page restructured (2026-11-16): three tabs. **Scheduled backups** holds its own
+  storage and an editable list of named schedules (cron time, backups kept; saved as a pull
+  request replacing `recurring-jobs.yaml`); each schedule is a choice in a volume's mode.
+  **Sync** holds the VolSync state card (not deployed / starting / running), its own storage,
+  and the synced volumes. Each tier picks its own provider: Cloudflare R2 (bucket and key made
+  for you), S3-compatible (AWS, Google through interoperability keys, others, typed in) or
+  Azure. Not verified against any real provider; Azure for Longhorn (`azblob://`) and for
+  restic is the least certain. Credentials are write-once from the page.
+- [ ] Sync interval and retention are still fixed in the generated files (15 minutes; hourly 6,
+  daily 7, weekly 4): give the Sync tab the same editable settings as schedules.
+- [ ] Changing a tier's storage after it is set needs a "remove" path (today: delete the OpenBao
+  secret by hand).

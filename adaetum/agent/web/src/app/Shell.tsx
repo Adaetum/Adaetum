@@ -11,6 +11,7 @@ import {
   Bot,
   Settings,
   Compass,
+  DatabaseBackup,
   LogOut,
   Network,
   PanelLeftClose,
@@ -52,6 +53,7 @@ const ICONS: Record<RouteId, ReactNode> = {
   workloads: <LayoutGrid size={18} />,
   automation: <Workflow size={18} />,
   cluster: <Network size={18} />,
+  backups: <DatabaseBackup size={18} />,
   explore: <Compass size={18} />,
   settings: <Settings size={18} />,
 };

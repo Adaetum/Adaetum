@@ -266,3 +266,66 @@ func (g GitOps) CreateProposal(ctx context.Context, m Manifest) (Proposal, error
 func NewGitOps(owner, repo, branch, publicHost, tokenFile string) GitOps {
 	return GitOps{BaseURL: "http://gitea-http.gitea.svc.cluster.local:3000", PublicHost: publicHost, Owner: owner, Repository: repo, Branch: branch, TokenFile: tokenFile, HTTP: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
+
+// ProposeFiles creates new files on a new branch and opens a pull request for them. See
+// ProposeChanges; this is the create-only case.
+func (g GitOps) ProposeFiles(ctx context.Context, branchPrefix, title, body string, files map[string]string) (Proposal, error) {
+	return g.ProposeChanges(ctx, branchPrefix, title, body, files, nil, nil)
+}
+
+// ProposeChanges creates new files, replaces existing ones (update) and deletes others on a new branch and opens a pull
+// request. Like CreateProposal it never merges and never touches the base branch. Every created
+// path must be new (Gitea refuses the whole change otherwise), so it cannot overwrite something
+// an operator has edited, and every removed path must exist. branchPrefix names the change
+// ("adaetum/backups").
+func (g GitOps) ProposeChanges(ctx context.Context, branchPrefix, title, body string, create, update map[string]string, remove []string) (Proposal, error) {
+	if err := g.configured(); err != nil {
+		return Proposal{}, err
+	}
+	if !branchName.MatchString(branchPrefix) || strings.Contains(branchPrefix, "..") || len(create)+len(update)+len(remove) == 0 {
+		return Proposal{}, errors.New("the proposal needs a valid branch name and at least one change")
+	}
+	prefix := "/api/v1/repos/" + url.PathEscape(g.Owner) + "/" + url.PathEscape(g.Repository)
+	changes := make([]any, 0, len(create)+len(remove))
+	for path, content := range create {
+		changes = append(changes, map[string]any{"operation": "create", "path": path, "content": base64.StdEncoding.EncodeToString([]byte(content))})
+	}
+	// An update replaces a file that must already exist; Gitea needs its current sha to do so.
+	for path, content := range update {
+		var current struct {
+			SHA string `json:"sha"`
+		}
+		if err := g.call(ctx, "GET", prefix+"/contents/"+path+"?ref="+url.QueryEscape(g.Branch), nil, &current); err != nil {
+			return Proposal{}, fmt.Errorf("reading %s to change it: %w", path, err)
+		}
+		changes = append(changes, map[string]any{"operation": "update", "path": path, "sha": current.SHA, "content": base64.StdEncoding.EncodeToString([]byte(content))})
+	}
+	for _, path := range remove {
+		var current struct {
+			SHA string `json:"sha"`
+		}
+		if err := g.call(ctx, "GET", prefix+"/contents/"+path+"?ref="+url.QueryEscape(g.Branch), nil, &current); err != nil {
+			return Proposal{}, fmt.Errorf("reading %s to remove it: %w", path, err)
+		}
+		changes = append(changes, map[string]any{"operation": "delete", "path": path, "sha": current.SHA})
+	}
+	var random [6]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return Proposal{}, err
+	}
+	branch := branchPrefix + "-" + hex.EncodeToString(random[:])
+	if err := g.call(ctx, "POST", prefix+"/contents", map[string]any{"branch": g.Branch, "new_branch": branch, "message": title, "files": changes}, nil); err != nil {
+		return Proposal{}, err
+	}
+	var pull struct {
+		Number int `json:"number"`
+	}
+	if err := g.call(ctx, "POST", prefix+"/pulls", map[string]any{"base": g.Branch, "head": branch, "title": title, "body": body}, &pull); err != nil {
+		return Proposal{Branch: branch}, fmt.Errorf("the branch %s was created, but the pull request failed: %w", branch, err)
+	}
+	base := strings.TrimRight(g.BaseURL, "/")
+	if g.PublicHost != "" {
+		base = "https://" + g.PublicHost
+	}
+	return Proposal{URL: fmt.Sprintf("%s/%s/%s/pulls/%d", base, url.PathEscape(g.Owner), url.PathEscape(g.Repository), pull.Number), Branch: branch}, nil
+}

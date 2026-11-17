@@ -19,6 +19,7 @@ import (
 	"github.com/Adaetum/Adaetum/agent/internal/agentapi"
 	"github.com/Adaetum/Adaetum/agent/internal/assistant"
 	"github.com/Adaetum/Adaetum/agent/internal/auditlog"
+	"github.com/Adaetum/Adaetum/agent/internal/backups"
 	"github.com/Adaetum/Adaetum/agent/internal/catalog"
 	"github.com/Adaetum/Adaetum/agent/internal/cluster"
 	"github.com/Adaetum/Adaetum/agent/internal/clustertools"
@@ -227,6 +228,49 @@ func runCluster(args []string) {
 		aboutAPI.Source = about.NewGitea(os.Getenv("GITEA_REPO_OWNER"), os.Getenv("GITEA_REPO_NAME"), os.Getenv("GITOPS_REPO_BRANCH"), tokenFile)
 	}
 	aboutAPI.Register(mux)
+	// Settings > Backups: what Longhorn backs up and what it does not, read-only.
+	if reader := cluster.InClusterReader(); reader != nil {
+		backupsAPI := &backups.API{Get: reader.Get, RequireUser: guard}
+		if *openbaoURL != "" {
+			backupsAPI.Vault = &openbao.KeyStore{Addr: *openbaoURL, Role: *openbaoRole}
+		}
+		backupsAPI.Register(mux)
+		// Choosing which volumes are backed up labels the Longhorn volume directly (backup label
+		// only), recorded first in backup-volumes.log.
+		if audit, err := auditlog.Open(filepath.Join(*dataDir, "backup-volumes.log")); err != nil {
+			fmt.Fprintln(os.Stderr, "backups: cannot open the change record, so volumes cannot be chosen from the page:", err)
+		} else {
+			defer audit.Close()
+			volumes := &backups.VolumeAPI{SetLabels: reader.SetVolumeLabels, Audit: audit.Record, RequireUser: guard, Who: personName, Get: reader.Get}
+			if *openbaoURL != "" && os.Getenv("ADAETUM_GITOPS_TOKEN_FILE") != "" {
+				gitops := releases.NewGitOps(os.Getenv("GITEA_REPO_OWNER"), os.Getenv("GITEA_REPO_NAME"), os.Getenv("GITOPS_REPO_BRANCH"), os.Getenv("GITEA_PUBLIC_HOST"), os.Getenv("ADAETUM_GITOPS_TOKEN_FILE"))
+				volumes.Sync = &backups.SyncChanger{
+					Vault: &openbao.KeyStore{Addr: *openbaoURL, Role: *openbaoRole},
+					Propose: func(ctx context.Context, changes backups.Changes) (string, string, error) {
+						proposal, err := gitops.ProposeChanges(ctx, changes.Prefix, changes.Title, changes.Body, changes.Create, changes.Update, changes.Remove)
+						return proposal.URL, proposal.Branch, err
+					},
+				}
+			}
+			volumes.Register(mux)
+			// The default rule for volumes created later is checked every minute, and each volume
+			// it labels is recorded like any other change.
+			rule := &backups.DefaultStore{Path: filepath.Join(*dataDir, "backup-default.json")}
+			(&backups.DefaultAPI{Store: rule, Audit: audit.Record, RequireUser: guard, Who: personName}).Register(mux)
+			go func() {
+				for range time.Tick(time.Minute) {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					if _, err := backups.Reconcile(ctx, reader.Get, reader.SetVolumeLabels, audit.Record, rule.Get()); err != nil {
+						fmt.Fprintln(os.Stderr, "backups: default rule:", err)
+					}
+					if err := backups.EnforceOneMode(ctx, reader.Get, reader.SetVolumeLabels, audit.Record); err != nil {
+						fmt.Fprintln(os.Stderr, "backups: one mode at a time:", err)
+					}
+					cancel()
+				}
+			}()
+		}
+	}
 	// Settings > Notifications: where alerts go. It edits Apprise's configuration in OpenBao, so
 	// it exists only when this agent is set up to reach OpenBao, and it records every change.
 	if *openbaoURL != "" {
@@ -241,6 +285,31 @@ func runCluster(args []string) {
 				RequireUser: guard,
 				Who:         personName,
 			}).Register(mux)
+		}
+	}
+	// Backups page > storage and schedules: choosing where each tier copies to (R2 is created for
+	// you; S3-compatible and Azure are typed in), keeping the credentials in OpenBao, and
+	// proposing the Longhorn target and schedules as pull requests. Needs OpenBao and the
+	// repository credential, and records each attempt before making anything.
+	if tokenFile := os.Getenv("ADAETUM_GITOPS_TOKEN_FILE"); *openbaoURL != "" && tokenFile != "" {
+		if audit, err := auditlog.Open(filepath.Join(*dataDir, "backups.log")); err != nil {
+			fmt.Fprintln(os.Stderr, "backups: cannot open the change record, so storage and schedules cannot be changed from the page:", err)
+		} else {
+			defer audit.Close()
+			gitops := releases.NewGitOps(os.Getenv("GITEA_REPO_OWNER"), os.Getenv("GITEA_REPO_NAME"), os.Getenv("GITOPS_REPO_BRANCH"), os.Getenv("GITEA_PUBLIC_HOST"), tokenFile)
+			propose := func(ctx context.Context, changes backups.Changes) (string, string, error) {
+				proposal, err := gitops.ProposeChanges(ctx, changes.Prefix, changes.Title, changes.Body, changes.Create, changes.Update, changes.Remove)
+				return proposal.URL, proposal.Branch, err
+			}
+			(&backups.StorageAPI{
+				Enabler:     &backups.Enabler{Vault: &openbao.KeyStore{Addr: *openbaoURL, Role: *openbaoRole}, Propose: propose},
+				Audit:       audit.Record,
+				RequireUser: guard,
+				Who:         personName,
+			}).Register(mux)
+			if reader := cluster.InClusterReader(); reader != nil {
+				(&backups.SchedulesAPI{Get: reader.Get, Propose: propose, Audit: audit.Record, RequireUser: guard, Who: personName}).Register(mux)
+			}
 		}
 	}
 	(&memory.API{Service: memoryService, RequireUser: guard}).Register(mux)

@@ -6,6 +6,7 @@ export const ROUTES = [
   { id: "explore", label: "Find apps" },
   { id: "automation", label: "Automation" },
   { id: "cluster", label: "Cluster" },
+  { id: "backups", label: "Backups" },
   { id: "settings", label: "Settings" },
 ] as const;
 
